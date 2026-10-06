@@ -1,0 +1,25 @@
+packages:
+  - web
+  - packages/*
+  - apps/*
+
+# React Native and Expo resolve native module paths by walking node_modules on
+# disk, so the tree has to stay flat for autolinking, the generated Podfile and
+# Metro to find their native modules.
+nodeLinker: hoisted
+
+overrides:
+  react-native: 0.81.5
+
+# pnpm refuses to run a dependency's install scripts until it is listed here.
+# Both of these link a platform binary on install.
+allowBuilds:
+  '@bufbuild/buf': true
+  esbuild: true
+
+patchedDependencies:
+  '@xterm/addon-webgl@0.19.0': patches/@xterm__addon-webgl@0.19.0.patch
+
+supportedArchitectures:
+  os: [current, darwin, linux]
+  cpu: [current, arm64, x64]

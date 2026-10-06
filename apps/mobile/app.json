@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Puppet Master",
+    "slug": "puppet-master",
+    "version": "1.0.0",
+    "scheme": "puppet-master",
+    "icon": "./assets/icon.png",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.tech9.puppetmaster",
+      "buildNumber": "701",
+      "supportsTablet": false,
+      "entitlements": {
+        "aps-environment": "production"
+      },
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        },
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
+      }
+    },
+    "android": {
+      "package": "com.tech9.puppetmaster"
+    },
+    "plugins": [
+      "expo-dev-client",
+      "expo-notifications",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "./plugins/swift-term",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ],
+      "./plugins/push-crypto",
+      "./plugins/ui-tests"
+    ]
+  }
+}

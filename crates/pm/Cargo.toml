@@ -1,0 +1,38 @@
+[package]
+name = "pm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+socket2 = "0.6"
+libc.workspace = true
+pm-protocol = { workspace = true }
+pm-client = { workspace = true }
+pm-daemon = { workspace = true }
+pm-adapters = { workspace = true }
+pm-pushgw = { workspace = true }
+pm-tui = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true }
+crossterm = { workspace = true }
+directories = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+toml = "0.8"
+pm-tls = { workspace = true }
+axum = { workspace = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging"] }
+tokio-tungstenite = { version = "0.26", features = ["handshake"] }
+tempfile = "3"
+sha2 = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

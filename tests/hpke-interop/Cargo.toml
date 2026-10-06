@@ -1,0 +1,11 @@
+[package]
+name = "hpke-interop-test"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+hpke = { version = "0.12", features = ["x25519", "std"] }
+rand = "0.8"
+hex = "0.4"

@@ -1,0 +1,813 @@
+/* The Settings page: its shell, its nav, and the page-specific layouts.
+   Shared controls come from controls.css (ui-*) and the app's .btn classes. */
+
+/* Settings hides the sidebar, so it must also drop the stacked-sidebar row the
+   narrow breakpoint adds or it would be confined to that row's height. */
+.shell.is-settings-route .workspace {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.shell.is-settings-route .sidebar-shell,
+.shell.is-settings-route .sidebar-resizer {
+  display: none;
+}
+
+.shell.is-settings-route .main-pane {
+  grid-column: 1;
+}
+
+.settings-link[aria-current="page"] {
+  color: var(--amber);
+}
+
+.set-shell {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  background: var(--bg);
+  font-family: var(--font-ui);
+}
+
+/* ---- nav ---- */
+
+.set-nav {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: var(--nav-pad, 14px 10px);
+  border-right: 1px solid var(--chrome-line, var(--line));
+  background: var(--nav-bg, var(--panel-3));
+}
+
+.set-nav h1 {
+  margin: 0;
+  padding: 2px 10px 0;
+  color: var(--bright);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.set-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.set-back:hover {
+  color: var(--bright);
+}
+
+.set-nav-group {
+  padding: 0 10px 4px;
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.set-nav-item {
+  height: var(--nav-item-h, 30px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-input, 4px);
+  color: var(--muted);
+}
+
+.set-nav-item:hover {
+  color: var(--bright);
+  background: var(--hover-tint);
+  text-decoration: none;
+}
+
+.set-nav-item:focus-visible,
+.set-back:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+
+.set-nav-item[aria-current="page"] {
+  color: var(--bright);
+  border-left-color: var(--nav-bar, var(--amber));
+  background: var(--panel-2);
+}
+
+.set-nav-item .count {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.set-nav-foot {
+  margin-top: auto;
+  padding: 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--dim);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.set-nav-mobile {
+  display: none;
+}
+
+/* ---- page ---- */
+
+.set-main {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow-y: auto;
+  padding: var(--page-pad, 30px 44px 60px);
+}
+
+.set-main:focus {
+  outline: none;
+}
+
+.set-page button,
+.set-page input,
+.set-page select,
+.set-page textarea {
+  font-family: inherit;
+}
+
+.set-page {
+  max-width: 860px;
+}
+
+.set-page.wide {
+  max-width: 1120px;
+}
+
+.set-page-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+
+.set-page-head h2 {
+  margin: 0;
+  color: var(--bright);
+  font-size: var(--page-title-size, 18px);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.set-page-head h2:focus {
+  outline: none;
+}
+
+.set-page-head p {
+  max-width: 80ch;
+  margin: 3px 0 0;
+  color: var(--muted);
+}
+
+.set-page-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.set-page h3,
+.set-page .ui-empty p,
+.set-page .ui-hint {
+  margin: 0;
+}
+
+.set-flash {
+  margin-bottom: 16px;
+}
+
+.set-page .set-below {
+  margin-top: 10px;
+}
+
+.set-page .form-error,
+.set-status,
+.set-diagnostics {
+  margin-top: 10px;
+}
+
+.set-status,
+.set-diagnostics {
+  padding: 8px 11px;
+  border: 1px solid var(--ok-line);
+  border-radius: var(--radius-input, 4px);
+  background: var(--ok-bg);
+  color: var(--ok-text);
+  font-size: 12px;
+}
+
+.set-diagnostics {
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.set-diagnostics ul {
+  margin: 5px 0 0 18px;
+  padding: 0;
+}
+
+.set-hint-warn {
+  color: var(--amber);
+}
+
+.set-narrow-card {
+  max-width: 560px;
+}
+
+.set-table-wrap {
+  overflow-x: auto;
+}
+
+.set-page table.ui-grid b {
+  color: var(--bright);
+  font-weight: 600;
+}
+
+/* A large button for the page head, and the danger hover for a quiet
+   table action. */
+.btn-lg {
+  height: var(--control-h);
+  padding: 0 14px;
+}
+
+.btn-quiet-danger:hover:not(:disabled) {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.set-page .btn {
+  border-radius: var(--radius-btn, 3px);
+  white-space: nowrap;
+}
+
+/* ---- appearance ---- */
+
+.set-page .ui-theme-picker {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.set-page .ui-theme-picker .theme-card {
+  padding: 10px;
+  border-radius: var(--radius-card, 6px);
+  background: var(--panel);
+}
+
+.set-page .ui-theme-picker .ui-theme-swatch {
+  height: 96px;
+  padding: 12px 14px;
+  border-radius: var(--radius-input, 4px);
+}
+
+/* ---- terminal theme ---- */
+
+.set-term-themes {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.set-theme-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.set-theme-list li + li {
+  border-top: 1px solid var(--line-soft);
+}
+
+.set-theme-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.set-theme-row:hover:not(:disabled) {
+  background: var(--hover-tint);
+}
+
+.set-theme-row:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.set-theme-row:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+
+.set-theme-row[aria-pressed="true"] {
+  background: var(--panel-2);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.set-theme-row .chip {
+  width: 44px;
+  height: 28px;
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-btn, 3px);
+}
+
+.set-theme-row .chip i {
+  flex: 1;
+  height: 5px;
+}
+
+.set-theme-row .name {
+  min-width: 0;
+  flex: 1;
+}
+
+.set-theme-row b {
+  display: block;
+  overflow: hidden;
+  color: var(--bright);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-theme-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Keeps the preview beside the list while the list scrolls with the page. */
+.set-term-side {
+  position: sticky;
+  top: 0;
+}
+
+.set-term-preview {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-card, 6px);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.set-term-preview .screen {
+  min-height: 248px;
+  padding: 16px 18px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.set-term-preview-path {
+  opacity: 0.6;
+}
+
+.set-term-preview-cursor {
+  display: inline-block;
+  width: 0.62em;
+  height: 1.05em;
+  vertical-align: -0.16em;
+}
+
+.set-term-preview .ansi {
+  height: 14px;
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+}
+
+.set-preview-bar {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 6px);
+  background: var(--panel);
+}
+
+.set-preview-bar .msg {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.set-preview-bar.previewing {
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+}
+
+.set-preview-bar.previewing .msg {
+  color: var(--warn-text);
+}
+
+.set-term-side > .ui-hint {
+  margin-top: 10px;
+}
+
+/* ---- workers ---- */
+
+.set-list-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.set-workers-empty .btn {
+  margin-top: 8px;
+}
+
+.set-workers .worker-status {
+  white-space: nowrap;
+}
+
+.set-workers .worker-connect-mode code {
+  display: block;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.set-workers .worker-version.drift {
+  color: var(--amber);
+}
+
+.set-add-worker .ui-cmd + .ui-cmd,
+.set-reenroll .ui-cmd + .ui-cmd {
+  margin-top: 1px;
+}
+
+.set-add-worker .form-error,
+.set-reenroll .form-error {
+  margin: 0 0 14px;
+}
+
+/* ---- form dialog ---- */
+
+.set-modal-backdrop {
+  z-index: 80;
+}
+
+.modal.set-modal {
+  width: min(940px, 100%);
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+
+.modal.set-modal:focus {
+  outline: none;
+}
+
+/* The dialog is the card, so the form inside gives up its own frame and
+   scrolls its body between a header and footer that stay in view. */
+.set-modal > .ui-form-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.set-modal > .ui-form-card > .body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.set-modal > .ui-form-card > footer {
+  border-radius: 0;
+}
+
+.set-cmd-placeholder {
+  height: 100%;
+  align-content: center;
+}
+
+.set-footer-note {
+  margin-left: auto;
+}
+
+/* ---- mobile devices ---- */
+
+.set-devices .device-install-id {
+  font-family: var(--mono);
+}
+
+/* ---- model profiles ---- */
+
+.set-profiles .model-profile {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.set-profiles .model-profile + .model-profile {
+  border-top: 1px solid var(--line-soft);
+}
+
+/* ---- instructions ---- */
+
+.set-layer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.set-layer-bar .lbl {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.set-layer-bar .lbl.applies {
+  margin-left: auto;
+}
+
+.set-layer-bar .ui-select {
+  width: auto;
+  min-width: 150px;
+}
+
+.set-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.set-tabs button {
+  height: 34px;
+  margin-bottom: -1px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.set-tabs button:hover {
+  color: var(--bright);
+}
+
+.set-tabs button[aria-selected="true"] {
+  color: var(--bright);
+  border-bottom-color: var(--amber);
+}
+
+.set-tabs .meta {
+  margin-left: auto;
+  padding-right: 4px;
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.set-editor .ui-textarea,
+.set-editor .instruction-preview {
+  width: 100%;
+  min-height: 300px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: var(--panel-3);
+  font-family: var(--mono);
+}
+
+.set-editor .ui-textarea:focus {
+  box-shadow: none;
+}
+
+.set-editor .instruction-preview {
+  max-height: 60vh;
+  overflow: auto;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.set-editor > footer .ui-input {
+  flex: 1;
+}
+
+.instruction-revision .ui-key {
+  font-family: var(--mono);
+}
+
+/* ---- projects ---- */
+
+.set-main .catalogs .set-page-head {
+  margin-bottom: 14px;
+}
+
+/* ---- focus mode ---- */
+
+.shell.is-focus-mode .set-nav,
+.shell.is-focus-mode .set-nav-mobile {
+  display: none;
+}
+
+.shell.is-focus-mode .set-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ---- narrow ---- */
+
+@media (max-width: 900px) {
+  .set-term-themes,
+  .set-page .ui-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .set-term-side {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .set-shell {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .set-nav {
+    display: none;
+  }
+
+  .set-nav-mobile {
+    flex: none;
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-3);
+  }
+
+  .set-nav-mobile .ui-select,
+  .set-back-mobile {
+    min-height: 40px;
+  }
+
+  .set-back-mobile {
+    flex: none;
+  }
+
+  .set-main {
+    flex: 1;
+    padding: 20px 16px 40px;
+  }
+
+  .set-page-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .set-page-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .set-page .ui-theme-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .set-page .ui-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .set-page .ui-row:not(.instruction-revision) .main {
+    flex-basis: 100%;
+  }
+
+  .set-page .ui-form-card > header {
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+
+  .set-tabs {
+    overflow-x: auto;
+  }
+
+  .set-tabs button {
+    flex: none;
+  }
+
+  .set-tabs .meta {
+    flex: none;
+    padding-left: 10px;
+  }
+
+  .set-page .ui-w-sm,
+  .set-page .ui-w-md,
+  .set-page .ui-w-lg {
+    width: 100%;
+  }
+
+  .set-layer-bar .lbl.applies {
+    margin-left: 0;
+  }
+
+  .set-page .ui-sect-head {
+    flex-wrap: wrap;
+    gap: 2px 12px;
+  }
+
+  .set-footer-note {
+    margin-left: 0;
+  }
+
+  .set-page .ui-form-card > footer {
+    flex-wrap: wrap;
+  }
+
+  /* A table has no room at phone width, so each row becomes a labeled card. */
+  .set-page table.ui-grid,
+  .set-page table.ui-grid tbody,
+  .set-page table.ui-grid tr,
+  .set-page table.ui-grid td {
+    display: block;
+  }
+
+  .set-page table.ui-grid thead {
+    display: none;
+  }
+
+  .set-page table.ui-grid tr {
+    padding: 10px 14px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .set-page table.ui-grid tbody:first-of-type tr:first-child {
+    border-top: 0;
+  }
+
+  .set-page table.ui-grid td {
+    padding: 2px 0;
+    border: 0;
+  }
+
+  .set-page table.ui-grid td[data-label] {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+  }
+
+  .set-page table.ui-grid td[data-label]::before {
+    content: attr(data-label);
+    color: var(--dim);
+    font-size: 11px;
+  }
+
+  .set-page table.ui-grid td[data-label] > * {
+    grid-column: 2;
+  }
+
+  .set-page table.ui-grid td.right {
+    padding-top: 8px;
+    text-align: left;
+  }
+
+  .set-list-tools {
+    flex-wrap: wrap;
+  }
+}

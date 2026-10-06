@@ -1,0 +1,17 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "@puppet-master/client-core/*": ["../../packages/client-core/src/*"]
+    }
+  },
+  "include": ["index.ts", "App.tsx", "src"],
+  "exclude": ["src/**/*.test.ts"]
+}

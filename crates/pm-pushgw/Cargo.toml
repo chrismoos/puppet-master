@@ -1,0 +1,22 @@
+[package]
+name = "pm-pushgw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pm-protocol = { workspace = true }
+pm-push = { path = "../pm-push" }
+axum = { workspace = true }
+async-trait = { workspace = true }
+
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

@@ -1,0 +1,7 @@
+{
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["PushCryptoModule"],
+    "podspecDir": "./ios"
+  }
+}

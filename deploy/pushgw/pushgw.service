@@ -1,0 +1,48 @@
+[Unit]
+Description=Puppet Master push gateway relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=pushgw
+Group=pushgw
+
+# Every flag has a PUSHGW_* equivalent, so the unit carries no
+# configuration of its own. `pm pushgw --help` lists the full set.
+EnvironmentFile=/etc/puppet-master/pushgw.env
+ExecStart=/usr/local/bin/pm pushgw
+
+Restart=always
+RestartSec=2s
+
+# The relay keeps nothing on disk and needs no privilege: it reads the
+# APNs key at startup, binds a loopback port, and speaks to Apple.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# AF_UNIX is required: glibc name resolution talks to nscd over a
+# unix socket, and the relay resolves the APNs host.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

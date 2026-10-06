@@ -1,0 +1,28 @@
+# The release image embeds the web bundle, so unlike the repository-wide
+# ignore file this one keeps web/dist in the build context.
+.git
+.worktrees
+target
+**/target
+node_modules
+**/node_modules
+test-results
+playwright-report
+*.log
+.DS_Store
+.env
+.env.*
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.keystore
+*.mobileprovision
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm

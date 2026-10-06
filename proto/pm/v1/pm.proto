@@ -1,0 +1,2116 @@
+syntax = "proto3";
+
+package pm.v1;
+
+// Puppet Master client/server contract. One ClientMessage or
+// ServerMessage per transport frame (length-prefixed on unix sockets,
+// one binary message per WebSocket frame).
+
+enum AgentKind {
+  AGENT_KIND_UNSPECIFIED = 0;
+  AGENT_KIND_CLAUDE_CODE = 1;
+  AGENT_KIND_CODEX = 2;
+  // Scripted agent used by the test suite.
+  AGENT_KIND_TEST = 3;
+  AGENT_KIND_GEMINI = 4;
+  AGENT_KIND_OPENCODE = 5;
+  AGENT_KIND_ANTIGRAVITY = 6;
+}
+
+enum AgentSelectionSource {
+  AGENT_SELECTION_SOURCE_UNSPECIFIED = 0;
+  AGENT_SELECTION_SOURCE_EXPLICIT = 1;
+  AGENT_SELECTION_SOURCE_PROJECT = 2;
+  AGENT_SELECTION_SOURCE_BUCKET = 3;
+  AGENT_SELECTION_SOURCE_FALLBACK = 4;
+}
+
+// The API wire format an endpoint speaks. An agent adapter declares
+// the dialects its CLI supports, so a profile serves whichever agent a
+// session happens to run without naming agents in its own schema. Only
+// dialects an adapter actually speaks are modelled: one no agent can
+// select would let a user build an entry that fails at spawn.
+enum ModelDialect {
+  MODEL_DIALECT_UNSPECIFIED = 0;
+  MODEL_DIALECT_ANTHROPIC_MESSAGES = 1;
+  MODEL_DIALECT_OPENAI_RESPONSES = 3;
+  MODEL_DIALECT_GOOGLE_GENAI = 4;
+}
+
+// Which configuration layer supplied a session's model profile.
+// UNSPECIFIED means the session runs on the agent CLI's own account.
+enum ModelProfileSource {
+  MODEL_PROFILE_SOURCE_UNSPECIFIED = 0;
+  MODEL_PROFILE_SOURCE_EXPLICIT = 1;
+  MODEL_PROFILE_SOURCE_PROJECT = 2;
+  MODEL_PROFILE_SOURCE_BUCKET = 3;
+}
+
+// A provider account: one credential plus one endpoint entry per
+// dialect. Controller-global, like Worker; buckets and projects
+// reference it by id.
+message ModelProfile {
+  uint64 id = 1;
+  string name = 2;
+  // Whether a credential is stored. The value itself is write-only and
+  // is never returned by any API.
+  bool key_set = 3;
+  repeated ModelProfileEndpoint endpoints = 4;
+  int64 created_at_unix_ms = 5;
+  int64 updated_at_unix_ms = 6;
+}
+
+// One dialect's endpoint on a profile, unique per (profile, dialect).
+message ModelProfileEndpoint {
+  uint64 profile_id = 1;
+  ModelDialect dialect = 2;
+  // The model the agent's main reasoning loop uses.
+  string model = 3;
+  // Empty uses the agent CLI's own default endpoint and account.
+  string base_url = 4;
+  // Cheaper model for auxiliary work off the main loop. Adapters whose
+  // CLI has no such setting ignore it.
+  string background_model = 5;
+}
+
+// The dialects one agent adapter speaks, most preferred first, plus
+// the endpoint fields its CLI can actually apply. The daemon publishes
+// this so clients derive coverage and applicability from the daemon's
+// answer instead of duplicating the matrix.
+message AgentDialects {
+  AgentKind agent = 1;
+  repeated ModelDialect dialects = 2;
+  // Whether this agent's CLI has a small/fast model setting. False
+  // means it ignores an entry's background_model, and the UI says so
+  // rather than accepting a value that is silently dropped.
+  bool supports_background_model = 3;
+}
+
+// The single endpoint entry selected for one spawn, carrying the
+// profile's credential. Only this entry crosses to a worker, never the
+// profile's other entries.
+message ResolvedModelEndpoint {
+  ModelDialect dialect = 1;
+  string model = 2;
+  string base_url = 3;
+  string background_model = 4;
+  string api_key = 5;
+  // The profile's name, used where an agent CLI displays its provider.
+  string provider_name = 6;
+}
+
+// How much the agent is allowed to do without asking. Cascades:
+// a bucket sets a default, a project may override it, and a spawn may
+// override the project. UNSPECIFIED means inherit the level above.
+enum PermissionMode {
+  PERMISSION_MODE_UNSPECIFIED = 0;
+  // The agent's normal interactive approval flow.
+  PERMISSION_MODE_DEFAULT = 1;
+  // Auto-accept edits and low-risk actions, sandboxed.
+  PERMISSION_MODE_AUTO = 2;
+  // Skip all permission checks (dangerous).
+  PERMISSION_MODE_BYPASS = 3;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_STARTING = 1;
+  SESSION_STATE_WORKING = 2;
+  SESSION_STATE_NEEDS_INPUT = 3;
+  SESSION_STATE_IDLE = 4;
+  SESSION_STATE_EXITED = 5;
+  SESSION_STATE_FAILED = 6;
+  // Persisted work is eligible to resume but its remote worker is offline.
+  SESSION_STATE_AWAITING_WORKER = 7;
+}
+
+// A machine that runs and manages sessions. The controller hosts an
+// embedded local worker with id 0; remote workers enroll over the wire.
+message Worker {
+  uint64 id = 1;
+  string name = 2;
+  string hostname = 3;
+  string platform = 4;
+  // True while the worker is reachable. The local worker is always
+  // online; a remote worker is online while its connection is live.
+  bool online = 5;
+  // Directory on the worker under which its projects live, used to seed
+  // new-project path autocomplete. Empty when unset.
+  string default_project_root = 6;
+  optional int64 last_seen_at_unix_ms = 7;
+  // The pm build the worker reported at its last registration. The
+  // local worker always carries the controller's own build. Empty when
+  // the worker has never reported one.
+  string pm_version = 8;
+  // Which end opens the connection.
+  ConnectMode connect_mode = 9;
+  // host:port the controller dials in CONNECT_MODE_ACCEPT. Empty
+  // otherwise.
+  string endpoint = 10;
+  // The container runtime the worker runs under, empty for one running
+  // on the host itself and for a worker too old to report it.
+  string runtime = 11;
+  // The runtime's name for that container, which is what an operator
+  // passes to the runtime to read its log or restart it. Empty off a
+  // container.
+  string container = 12;
+}
+
+// Which end of the worker plane opens the socket. The protocol roles do
+// not change with it: the worker still registers and the controller still
+// dispatches work.
+enum ConnectMode {
+  // Zero means dial for existing peers that omit this field.
+  // buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+  CONNECT_MODE_DIAL = 0;
+  // The controller dials the worker. Suits a host that can be routed to
+  // but cannot open outbound connections to the controller.
+  CONNECT_MODE_ACCEPT = 1;
+}
+
+message Bucket {
+  uint64 id = 1;
+  string name = 2;
+  uint32 position = 3;
+  // The bucket's default permission mode; never UNSPECIFIED.
+  PermissionMode permission_mode = 4;
+  // The bucket's default worker; 0 means the local worker.
+  uint64 default_worker_id = 5;
+  repeated uint64 allowed_worker_ids = 6;
+  bool is_default = 7;
+  // Preferred spawn agent; absent uses the system fallback.
+  optional AgentKind default_agent = 8;
+  // Model profile for this bucket's sessions; absent runs them on the
+  // agent CLI's own account.
+  optional uint64 model_profile_id = 9;
+}
+
+message Project {
+  uint64 id = 1;
+  uint64 bucket_id = 2;
+  string name = 3;
+  // Working directory for sessions. May contain several git repos.
+  string path = 4;
+  // Override for this project; UNSPECIFIED inherits the bucket.
+  PermissionMode permission_mode = 5;
+  // Worker override; absent inherits the bucket's default worker.
+  optional uint64 worker_id = 6;
+  repeated uint64 allowed_worker_ids = 7;
+  // Persisted worker-local paths for this project. The selected worker's
+  // entry is the effective spawn default; absent entries fall back to path.
+  repeated ProjectPath worker_paths = 8;
+  // Spawn-agent override; absent inherits the bucket.
+  optional AgentKind default_agent = 9;
+  // Model-profile override; absent inherits the bucket.
+  optional uint64 model_profile_id = 10;
+}
+
+enum PlanState {
+  PLAN_STATE_UNSPECIFIED = 0;
+  PLAN_STATE_ACTIVE = 1;
+  PLAN_STATE_ACCEPTED = 2;
+  PLAN_STATE_ARCHIVED = 3;
+}
+
+message Plan {
+  uint64 id = 1;
+  uint64 project_id = 2;
+  uint64 bucket_id = 3;
+  uint64 owning_session_id = 4;
+  uint64 creating_session_id = 5;
+  string name = 6;
+  string summary = 7;
+  PlanState state = 8;
+  string markdown_path = 9;
+  uint64 revision = 10;
+  optional uint64 active_decision_id = 11;
+  repeated uint64 linked_item_ids = 12;
+  int64 created_at_unix_ms = 13;
+  int64 updated_at_unix_ms = 14;
+}
+
+message ProjectPath {
+  uint64 worker_id = 1;
+  string path = 2;
+}
+
+message Session {
+  uint64 id = 1;
+  uint64 project_id = 2;
+  AgentKind agent = 3;
+  SessionState state = 4;
+  string task_title = 5;
+  string task_prompt = 6;
+  // The agent's own session identifier, used for native resume.
+  string agent_session_id = 7;
+  int64 created_at_unix_ms = 8;
+  optional int64 ended_at_unix_ms = 9;
+  optional int32 exit_code = 10;
+  // Human-readable elaboration of the state: failure reason, or the
+  // question the agent is blocked on.
+  string state_detail = 11;
+  // Agent-reported description of what it is doing right now.
+  string activity = 12;
+  // Agent-reported progress toward the task, 0-100.
+  optional uint32 progress_percent = 13;
+  // True when the session can be resumed: it recorded an agent session
+  // id and its transcript still exists on disk.
+  bool resumable = 14;
+  // Effective permission mode used for this session. This is resolved
+  // at spawn time so resume does not drift when defaults change.
+  PermissionMode permission_mode = 15;
+  // The worker this session runs on; 0 is the local worker.
+  uint64 worker_id = 16;
+  // Effective worker-local working directory, fixed for the session.
+  string cwd = 17;
+  // Agent-authored current step while working, or the outcome once
+  // the turn ends. Shown under the goal in the session list.
+  string headline = 18;
+  // Agent-authored fuller summary for the detail view.
+  string summary = 19;
+  // Newest of created, ended, agent output/report, and user input, so
+  // the UI can show how long since the session last did something.
+  // Derived, not stored.
+  int64 last_activity_at_unix_ms = 20;
+  // Whether this session's MCP server offers the item tools; set at
+  // spawn time.
+  bool items_api = 21;
+  // Last observed output or explicit report from the agent terminal.
+  int64 last_agent_activity_at_unix_ms = 22;
+  // Last successfully delivered user input to the agent terminal.
+  int64 last_user_interaction_at_unix_ms = 23;
+  // Whether this session's MCP server offers the supervisor tools
+  // (spawning and steering sessions for board items); set at spawn
+  // time.
+  bool supervisor_api = 24;
+  // The supervisor session this one was spawned by, when it was
+  // spawned through the supervisor tools.
+  optional uint64 spawned_by_session_id = 25;
+  // First-class identity. Capability booleans remain effective-grant
+  // compatibility fields for older clients.
+  SessionRole role = 26;
+  // Configuration layer that selected agent when this session spawned.
+  AgentSelectionSource agent_source = 27;
+  // True while the current NeedsInput transition has not been viewed.
+  // Backed by the notifications read model; false outside NeedsInput.
+  bool needs_input_unseen = 28;
+  // Model profile resolved at spawn. The id is stored rather than a
+  // copy of its values, so a resume reselects the entry and picks up
+  // edits made since.
+  optional uint64 model_profile_id = 29;
+  // Configuration layer that supplied model_profile_id.
+  ModelProfileSource model_profile_source = 30;
+  // True while the turn that made this session idle has not been
+  // viewed. Backed by the notifications read model; false outside Idle.
+  bool idle_unseen = 31;
+  // Where this session sits in git, as the agent reports it. Absent
+  // until an agent reports, and when the working directory is not a
+  // repository.
+  optional SessionGit git = 32;
+  // What the session is about, as a short noun phrase. Seeded at spawn
+  // from the task title or prompt, replaced when the agent reports one.
+  // Clients name the session by it.
+  string goal = 33;
+}
+
+// The agent-reported git location of a session. Every field is
+// optional: an agent reports what it knows, and a report that omits a
+// field leaves the stored value alone.
+message SessionGit {
+  // Current branch, or a short SHA when HEAD is detached.
+  string branch = 1;
+  // Working tree this session operates in. Differs from repo_root when
+  // the session runs in a linked worktree.
+  string worktree = 2;
+  // Root of the main checkout the worktree belongs to.
+  string repo_root = 3;
+  // Short SHA of HEAD.
+  string commit = 4;
+  // Tracking ref, e.g. "origin/master".
+  string upstream = 5;
+  // Whether the working tree has uncommitted changes. Absent when the
+  // agent did not report it, which is not the same as clean.
+  optional bool dirty = 6;
+}
+
+enum SessionRole {
+  SESSION_ROLE_UNSPECIFIED = 0;
+  SESSION_ROLE_WORKER = 1;
+  SESSION_ROLE_SUPERVISOR = 2;
+}
+
+enum InstructionTarget {
+  INSTRUCTION_TARGET_UNSPECIFIED = 0;
+  INSTRUCTION_TARGET_ALL = 1;
+  INSTRUCTION_TARGET_WORKER = 2;
+  INSTRUCTION_TARGET_SUPERVISOR = 3;
+}
+
+message InstructionLayer {
+  uint64 id = 1;
+  uint64 bucket_id = 2;
+  optional uint64 project_id = 3;
+  InstructionTarget target = 4;
+  string markdown = 5;
+  uint64 revision = 6;
+  int64 updated_at_unix_ms = 7;
+  optional uint64 updated_by_session_id = 8;
+}
+
+// Where a work item stands. BLOCKED and BLOCKED_EXTERNAL are one
+// concept split by who must act: BLOCKED needs the user (or another
+// item) to move, BLOCKED_EXTERNAL waits on someone outside.
+enum ItemStatus {
+  ITEM_STATUS_UNSPECIFIED = 0;
+  // Captured work that needs user triage, clarification,
+  // prioritization, or a decision before it is ready.
+  ITEM_STATUS_INBOX = 1;
+  // Queued/ready work that needs no additional user information,
+  // prioritization, or decision before it can start. This does not
+  // imply worker dispatch.
+  ITEM_STATUS_PLANNED = 2;
+  // Actively worked, by the user or a linked session.
+  ITEM_STATUS_IN_PROGRESS = 3;
+  ITEM_STATUS_BLOCKED = 4;
+  ITEM_STATUS_BLOCKED_EXTERNAL = 5;
+  ITEM_STATUS_DONE = 6;
+  // Deliberately not doing; kept so re-sweeps don't re-file it.
+  ITEM_STATUS_DROPPED = 7;
+}
+
+enum ItemPriority {
+  ITEM_PRIORITY_UNSPECIFIED = 0;
+  ITEM_PRIORITY_URGENT = 1;
+  ITEM_PRIORITY_HIGH = 2;
+  ITEM_PRIORITY_NORMAL = 3;
+  ITEM_PRIORITY_LOW = 4;
+}
+
+// The channel an item came from; drives the source badge and filters.
+// The freeform detail (mailbox, repo, channel) rides source_detail.
+enum ItemSourceKind {
+  ITEM_SOURCE_KIND_UNSPECIFIED = 0;
+  ITEM_SOURCE_KIND_EMAIL = 1;
+  ITEM_SOURCE_KIND_SLACK = 2;
+  ITEM_SOURCE_KIND_GITHUB = 3;
+  ITEM_SOURCE_KIND_JIRA = 4;
+  ITEM_SOURCE_KIND_TEAMS = 5;
+  ITEM_SOURCE_KIND_TELEGRAM = 6;
+  ITEM_SOURCE_KIND_HUMAN = 7;
+  ITEM_SOURCE_KIND_AGENT = 8;
+  ITEM_SOURCE_KIND_OTHER = 9;
+}
+
+// A unit of work the user (or an agent on their behalf) may need to
+// act on, scoped to a bucket and optionally narrowed to a project.
+message Item {
+  // Public bucket-local number; always pair with bucket_id.
+  uint64 id = 1;
+  uint64 bucket_id = 2;
+  optional uint64 project_id = 3;
+  // Stable dedup identity for agent re-sweeps, unique per bucket and
+  // opaque to the daemon. Absent for human-created items.
+  optional string external_key = 4;
+  string title = 5;
+  string body = 6;
+  ItemStatus status = 7;
+  ItemPriority priority = 8;
+  ItemSourceKind source_kind = 9;
+  string source_detail = 10;
+  // Link to the item's external source; empty when there is none.
+  string url = 11;
+  optional int64 due_at_unix_ms = 12;
+  // Human-only; agents can neither set nor clear it.
+  optional int64 snoozed_until_unix_ms = 13;
+  optional uint64 created_by_session_id = 14;
+  int64 created_at_unix_ms = 15;
+  int64 updated_at_unix_ms = 16;
+  optional int64 done_at_unix_ms = 17;
+  // Items this one waits on ("blocked by").
+  repeated uint64 blocked_by = 18;
+  // Sessions that have worked this item.
+  repeated uint64 session_ids = 19;
+  // The current question awaiting a user response; empty when none.
+  string question = 20;
+}
+
+// Unambiguous public work-item identity.
+message ItemRef {
+  uint64 bucket_id = 1;
+  uint64 item_id = 2;
+}
+
+// A markdown digest an agent posted for a bucket.
+message BucketBriefing {
+  uint64 id = 1;
+  uint64 bucket_id = 2;
+  optional uint64 session_id = 3;
+  int64 ts_unix_ms = 4;
+  string markdown = 5;
+}
+
+// How a context field renders in the dashboard, so no schema is needed.
+enum ContextKind {
+  CONTEXT_KIND_UNSPECIFIED = 0;
+  CONTEXT_KIND_TEXT = 1;
+  CONTEXT_KIND_CODE = 2;
+  CONTEXT_KIND_URL = 3;
+  CONTEXT_KIND_BADGE = 4;
+  CONTEXT_KIND_METRIC = 5;
+  CONTEXT_KIND_PROGRESS = 6;
+  CONTEXT_KIND_TIMESTAMP = 7;
+}
+
+// Colors a badge or metric. UNSPECIFIED renders neutral.
+enum ContextSeverity {
+  CONTEXT_SEVERITY_UNSPECIFIED = 0;
+  CONTEXT_SEVERITY_NEUTRAL = 1;
+  CONTEXT_SEVERITY_INFO = 2;
+  CONTEXT_SEVERITY_GOOD = 3;
+  CONTEXT_SEVERITY_WARN = 4;
+  CONTEXT_SEVERITY_BAD = 5;
+}
+
+// One agent-authored status field, rendered as a chip or a grid cell.
+message ContextField {
+  // Stable identifier for upsert and cross-session comparison.
+  string key = 1;
+  // Human-facing name shown beside the value.
+  string label = 2;
+  string value = 3;
+  ContextKind kind = 4;
+  ContextSeverity severity = 5;
+}
+
+// A session's two agent-authored context bags, carried apart from
+// Session so frequent field updates don't resend the whole session.
+message SessionContext {
+  uint64 session_id = 1;
+  // The 1-3 terse chips on the session's list row (replace-all).
+  repeated ContextField glance = 2;
+  // The fuller upsert-by-key context for the detail panel.
+  repeated ContextField detail = 3;
+}
+
+enum TerminalKind {
+  TERMINAL_KIND_UNSPECIFIED = 0;
+  TERMINAL_KIND_AGENT = 1;
+  TERMINAL_KIND_SHELL = 2;
+}
+
+enum TerminalRunState {
+  TERMINAL_RUN_STATE_UNSPECIFIED = 0;
+  TERMINAL_RUN_STATE_STARTING = 1;
+  TERMINAL_RUN_STATE_RUNNING = 2;
+  TERMINAL_RUN_STATE_EXITED = 3;
+  TERMINAL_RUN_STATE_FAILED = 4;
+}
+
+message Terminal {
+  uint64 id = 1;
+  uint64 session_id = 2;
+  TerminalKind kind = 3;
+  string title = 4;
+  string cwd = 5;
+  int64 created_at_unix_ms = 6;
+  uint64 generation = 7;
+  TerminalRunState state = 8;
+  optional int64 started_at_unix_ms = 9;
+  optional int64 ended_at_unix_ms = 10;
+  optional int32 exit_code = 11;
+  bool scrollback_available = 12;
+}
+
+// What a Subscribe covers.
+message Scope {
+  oneof scope {
+    bool all = 1;
+    uint64 bucket_id = 2;
+    uint64 project_id = 3;
+    uint64 session_id = 4;
+  }
+}
+
+message ClientMessage {
+  // Client-chosen id echoed back in CommandResult.
+  uint64 seq = 1;
+  oneof msg {
+    Subscribe subscribe = 2;
+    SpawnSession spawn_session = 3;
+    AttachPty attach_pty = 4;
+    DetachPty detach_pty = 5;
+    PtyInput pty_input = 6;
+    PtyResize pty_resize = 7;
+    InterruptSession interrupt_session = 8;
+    KillSession kill_session = 9;
+    CreateBucket create_bucket = 10;
+    DeleteBucket delete_bucket = 11;
+    CreateProject create_project = 12;
+    DeleteProject delete_project = 13;
+    HookEvent hook_event = 14;
+    ResumeSession resume_session = 15;
+    SetBucketPermissionMode set_bucket_permission_mode = 16;
+    SetProjectPermissionMode set_project_permission_mode = 17;
+    CreateShell create_shell = 18;
+    RestartTerminal restart_terminal = 19;
+    CloseTerminal close_terminal = 20;
+    AttachTerminal attach_terminal = 21;
+    DetachTerminal detach_terminal = 22;
+    TerminalInput terminal_input = 23;
+    TerminalResize terminal_resize = 24;
+    TerminalTranscript terminal_transcript = 25;
+    ListWorkspaces list_workspaces = 26;
+    CloseForward close_forward = 27;
+    UpsertItem upsert_item = 28;
+    DeleteItem delete_item = 29;
+    SnoozeItem snooze_item = 30;
+    ListItems list_items = 31;
+    ItemNotes item_notes = 32;
+    SetSetting set_setting = 33;
+    ListSettings list_settings = 34;
+    UpdateSessionApis update_session_apis = 35;
+    UpdateProject update_project = 36;
+    RespondToItem respond_to_item = 37;
+    ListInstructions list_instructions = 38;
+    GetEffectiveInstructions get_effective_instructions = 39;
+    SetInstructions set_instructions = 40;
+    RevertInstructions revert_instructions = 41;
+    GetSession get_session = 42;
+    ListEndedSessions list_ended_sessions = 43;
+    SearchSessions search_sessions = 44;
+    SetBucketDefaultAgent set_bucket_default_agent = 45;
+    SetProjectDefaultAgent set_project_default_agent = 46;
+    MarkSessionSeen mark_session_seen = 47;
+    CreateModelProfile create_model_profile = 48;
+    UpdateModelProfile update_model_profile = 49;
+    DeleteModelProfile delete_model_profile = 50;
+    SetModelProfileEndpoint set_model_profile_endpoint = 51;
+    DeleteModelProfileEndpoint delete_model_profile_endpoint = 52;
+    SetBucketModelProfile set_bucket_model_profile = 53;
+    SetProjectModelProfile set_project_model_profile = 54;
+    SetProjectWorkerPath set_project_worker_path = 55;
+    OpenReview open_review = 56;
+    AddReviewComment add_review_comment = 57;
+    EditReviewComment edit_review_comment = 58;
+    DeleteReviewThread delete_review_thread = 59;
+    SendReviewThreads send_review_threads = 60;
+    ResolveReviewThread resolve_review_thread = 61;
+    PostReviewReply post_review_reply = 62;
+    AdvanceReview advance_review = 63;
+    FinishReview finish_review = 64;
+    SetReviewViewerState set_review_viewer_state = 65;
+    ListReviews list_reviews = 66;
+    ResolveRev resolve_rev = 67;
+    ReplyReviewThread reply_review_thread = 68;
+    SessionForwardInventory session_forward_inventory = 69;
+  }
+}
+
+enum ReviewMode {
+  REVIEW_MODE_UNSPECIFIED = 0;
+  // A git range in a working tree.
+  REVIEW_MODE_RANGE = 1;
+  // One file, diffed against an empty baseline. No repository needed.
+  REVIEW_MODE_FILE = 2;
+}
+
+enum ReviewState {
+  REVIEW_STATE_UNSPECIFIED = 0;
+  REVIEW_STATE_OPEN = 1;
+  REVIEW_STATE_FINISHED = 2;
+}
+
+enum ReviewThreadState {
+  REVIEW_THREAD_STATE_UNSPECIFIED = 0;
+  // Written but not handed to the agent yet.
+  REVIEW_THREAD_STATE_DRAFT = 1;
+  REVIEW_THREAD_STATE_SENT = 2;
+  REVIEW_THREAD_STATE_ANSWERED = 3;
+  REVIEW_THREAD_STATE_RESOLVED = 4;
+}
+
+enum ReviewSide {
+  REVIEW_SIDE_UNSPECIFIED = 0;
+  // Anchored to the working tree, so it moves as the agent edits.
+  REVIEW_SIDE_RIGHT = 1;
+  // Anchored to the immutable base, so it never moves.
+  REVIEW_SIDE_LEFT = 2;
+}
+
+enum ReviewAnchorStatus {
+  REVIEW_ANCHOR_STATUS_UNSPECIFIED = 0;
+  REVIEW_ANCHOR_STATUS_SAME = 1;
+  REVIEW_ANCHOR_STATUS_MOVED = 2;
+  // The commented line itself was edited.
+  REVIEW_ANCHOR_STATUS_CHANGED = 3;
+  REVIEW_ANCHOR_STATUS_UNKNOWN = 4;
+}
+
+enum ReviewChoiceSelect {
+  REVIEW_CHOICE_SELECT_UNSPECIFIED = 0;
+  REVIEW_CHOICE_SELECT_ONE = 1;
+  REVIEW_CHOICE_SELECT_MANY = 2;
+}
+
+enum ReviewAuthor {
+  REVIEW_AUTHOR_UNSPECIFIED = 0;
+  REVIEW_AUTHOR_USER = 1;
+  REVIEW_AUTHOR_SESSION = 2;
+}
+
+enum ReviewSnapshotKind {
+  REVIEW_SNAPSHOT_KIND_UNSPECIFIED = 0;
+  // The tree the reviewer handed over at the start of a round.
+  REVIEW_SNAPSHOT_KIND_SENT = 1;
+  // The tree after the agent finished the round.
+  REVIEW_SNAPSHOT_KIND_RECEIVED = 2;
+}
+
+// A PR-style review of a range or a file. Keyed by worktree plus
+// normalized range, so it outlives the session that opened it.
+message Review {
+  uint64 id = 1;
+  // The session that opened it. It may since have ended.
+  uint64 session_id = 2;
+  uint64 project_id = 3;
+  uint64 worker_id = 4;
+  // Absolute path of the working tree the review reads.
+  string worktree = 5;
+  ReviewMode mode = 6;
+  // Resolved base SHA. Empty in file mode.
+  string base = 7;
+  // Resolved head SHA; empty means the diff tracks the working tree.
+  string head = 8;
+  repeated string pathspec = 9;
+  // File mode only: absolute path of the reviewed file.
+  string source_file = 10;
+  // Human label, e.g. "master..pm/reviews".
+  string label = 11;
+  // Normalized identity: resolved SHAs plus pathspec.
+  string range_key = 12;
+  ReviewState state = 13;
+  // Highest round number that has been started.
+  uint32 revision = 14;
+  int64 created_at_unix_ms = 15;
+  int64 updated_at_unix_ms = 16;
+  // Counts for the row and the tab badge.
+  uint32 draft_count = 17;
+  uint32 open_count = 18;
+  uint32 answered_count = 19;
+  uint32 resolved_count = 20;
+  // When non-empty, exactly these paths are the review's scope and no
+  // enumeration runs.
+  repeated string explicit_files = 21;
+  // Newest message on each thread, so a client can tell what a reader
+  // has not seen without fetching the whole review. Broadcast-safe:
+  // it says what exists, never who has read it.
+  map<uint64, uint64> thread_latest_message = 22;
+}
+
+// One comment location and the conversation on it.
+message ReviewThread {
+  uint64 id = 1;
+  uint64 review_id = 2;
+  string path = 3;
+  uint32 line = 4;
+  ReviewSide side = 5;
+  // The hunk the comment was written against.
+  string excerpt = 6;
+  // Snapshot the line was anchored to when written.
+  uint64 anchor_snapshot_id = 7;
+  // Where the line lives now, recomputed on every read.
+  uint32 current_line = 8;
+  ReviewAnchorStatus anchor_status = 9;
+  // Numbered excerpt of today's file around current_line.
+  string current_excerpt = 10;
+  ReviewThreadState state = 11;
+  uint32 created_rev = 12;
+  int64 created_at_unix_ms = 13;
+  repeated ReviewMessage messages = 14;
+  // True when the anchored line changed in a revision the reader has
+  // not advanced to yet.
+  bool changed_ahead = 15;
+}
+
+// A reader's answer to a marked option list in a rendered markdown
+// document. Carried as fields rather than folded into the comment body
+// so the agent reads the decision instead of parsing a sentence back
+// into one.
+message ReviewChoiceAnswer {
+  // The id the document's marker gave the question.
+  string choice_id = 1;
+  ReviewChoiceSelect select = 2;
+  // The options chosen, by the ids the document gave them.
+  repeated string option_ids = 3;
+  // Their labels as the reader saw them, so the reply is readable even
+  // after the document is reworded.
+  repeated string option_labels = 4;
+  // What the reader typed into the free-text option, when they chose it.
+  string other_text = 5;
+  string notes = 6;
+}
+
+message ReviewMessage {
+  uint64 id = 1;
+  uint64 thread_id = 2;
+  ReviewAuthor author = 3;
+  // Set when author is a session.
+  uint64 session_id = 4;
+  string body = 5;
+  // An agent reply that declined to make the change reports false.
+  bool addressed = 6;
+  uint32 revision = 7;
+  int64 created_at_unix_ms = 8;
+  // Revision whose changes this reply produced; 0 when none.
+  uint32 changes_rev = 9;
+  // Files in changes_rev this reply touched, for the thread's link.
+  repeated string changed_files = 10;
+  // Set when this message is an answer to a marked option list.
+  optional ReviewChoiceAnswer choice = 11;
+}
+
+message ReviewRevision {
+  uint64 id = 1;
+  uint64 review_id = 2;
+  uint32 rev = 3;
+  ReviewSnapshotKind kind = 4;
+  uint64 snapshot_id = 5;
+  int64 created_at_unix_ms = 6;
+  // Paths that differ from the previous snapshot of the same review.
+  repeated string files = 7;
+}
+
+// Per user per review. What makes leaving and returning resume.
+message ReviewViewerState {
+  uint64 review_id = 1;
+  uint64 user_id = 2;
+  // Revision being read; 0 means the live working tree.
+  uint32 pinned_rev = 3;
+  // View selector, e.g. "", "round:2", "delta:3".
+  string view = 4;
+  // "unified" or "side-by-side".
+  string layout = 5;
+  uint32 context = 6;
+  repeated string viewed_files = 7;
+  // Files whose markdown preview the reader turned off.
+  repeated string preview_off_files = 8;
+  uint64 last_thread_id = 9;
+  // Scroll offset keyed by "<view>:<layout>:<context>".
+  map<string, int32> scroll = 10;
+  bool file_list_collapsed = 11;
+  // Text typed but not yet submitted, keyed by where it was typed.
+  // Losing a half-written comment to a tab switch is the cheapest
+  // possible way to make someone distrust the page.
+  map<string, string> drafts = 12;
+  // Newest message this reader has actually had in front of them, per
+  // thread. A reply at the bottom of a long diff stays unseen until
+  // they reach it.
+  map<uint64, uint64> seen = 13;
+}
+
+// Starts a review, or attaches to the one already covering this
+// target. `target` is a ref, a range, or a path to a file.
+// Opens a review over context the caller states outright. Nothing is
+// derived from the session: its working directory is fixed at spawn and
+// the agent moves, so an inferred worktree is a guess that renders
+// convincingly when wrong.
+message OpenReview {
+  uint64 session_id = 1;
+  // Absolute path of the tree to read.
+  string worktree = 2;
+  // Resolved SHA of the base side.
+  string base = 3;
+  // Resolved SHA of the head side; empty tracks the working tree.
+  string head = 4;
+  repeated string pathspec = 5;
+  // When non-empty, exactly these paths are the scope.
+  repeated string files = 6;
+  // A document outside any repository, diffed against an empty baseline.
+  string source_file = 7;
+  string label = 8;
+  // Wipes threads and snapshots for this target before opening.
+  bool reset = 9;
+}
+
+message AddReviewComment {
+  uint64 review_id = 1;
+  string path = 2;
+  uint32 line = 3;
+  ReviewSide side = 4;
+  string excerpt = 5;
+  string body = 6;
+  // Sends it immediately instead of leaving it a draft.
+  bool send = 7;
+  // The snapshot the reviewer's page was rendering when they wrote
+  // this, which is what the line number counts against. Omitted by an
+  // agent or an older client, and then the tree is captured fresh.
+  optional uint64 anchor_snapshot_id = 8;
+  // Set when the comment is an answer to a marked option list.
+  optional ReviewChoiceAnswer choice = 9;
+}
+
+message EditReviewComment {
+  uint64 message_id = 1;
+  string body = 2;
+  // Replaces the answer on this message. A reader changing their mind
+  // edits the answer they already have rather than leaving a second
+  // one behind for the agent to reconcile.
+  optional ReviewChoiceAnswer choice = 3;
+}
+
+message DeleteReviewThread { uint64 thread_id = 1; }
+
+// Sends the named threads, or every draft when none are named.
+message SendReviewThreads {
+  uint64 review_id = 1;
+  repeated uint64 thread_ids = 2;
+}
+
+message ResolveReviewThread {
+  uint64 thread_id = 1;
+  bool resolved = 2;
+}
+
+// The reviewer's own reply inside a thread, which goes back to the
+// agent the way a first comment does.
+message ReplyReviewThread {
+  uint64 thread_id = 1;
+  string body = 2;
+}
+
+message PostReviewReply {
+  uint64 thread_id = 1;
+  string body = 2;
+  bool addressed = 3;
+}
+
+// Moves the reader onto the newest revision.
+message AdvanceReview {
+  uint64 review_id = 1;
+  // 0 advances to the newest.
+  uint32 rev = 2;
+}
+
+message FinishReview { uint64 review_id = 1; }
+
+// Absent fields keep their stored value.
+message SetReviewViewerState {
+  uint64 review_id = 1;
+  optional uint32 pinned_rev = 2;
+  optional string view = 3;
+  optional string layout = 4;
+  optional uint32 context = 5;
+  // Replaces the set when present.
+  repeated string viewed_files = 6;
+  bool set_viewed_files = 7;
+  repeated string preview_off_files = 8;
+  bool set_preview_off_files = 9;
+  optional uint64 last_thread_id = 10;
+  optional string scroll_key = 11;
+  optional int32 scroll_top = 12;
+  optional bool file_list_collapsed = 13;
+  // Sets one draft slot; an empty body clears it.
+  optional string draft_key = 14;
+  optional string draft_body = 15;
+  // Marks one thread read up to a message.
+  optional uint64 seen_thread = 16;
+  optional uint64 seen_message = 17;
+}
+
+message ListReviews {
+  // 0 lists every open review the caller can see.
+  uint64 session_id = 1;
+  bool include_finished = 2;
+}
+
+message ReviewList { repeated Review reviews = 1; }
+
+// Resolves a revision on the host that holds the tree, so a client can
+// keep ref convenience without being able to reach that filesystem.
+message ResolveRev {
+  uint64 session_id = 1;
+  string worktree = 2;
+  string rev = 3;
+}
+
+// Creates a provider account. The credential is write-only from here
+// on: it can be replaced but never read back.
+message CreateModelProfile {
+  string name = 1;
+  optional string api_key = 2;
+}
+
+// Absent fields leave the stored value untouched, so renaming a
+// profile or editing its entries keeps the credential intact.
+message UpdateModelProfile {
+  uint64 id = 1;
+  optional string name = 2;
+  // Replaces the credential; absent keeps the stored one.
+  optional string api_key = 3;
+  // Drops the stored credential.
+  bool clear_api_key = 4;
+}
+
+// Rejected while a bucket, project, or resumable session references
+// the profile; the error names the referents.
+message DeleteModelProfile { uint64 id = 1; }
+
+// Creates or replaces the profile's entry for one dialect.
+message SetModelProfileEndpoint {
+  uint64 profile_id = 1;
+  ModelDialect dialect = 2;
+  string model = 3;
+  string base_url = 4;
+  string background_model = 5;
+}
+
+// Rejected while a resumable session was spawned through this entry.
+message DeleteModelProfileEndpoint {
+  uint64 profile_id = 1;
+  ModelDialect dialect = 2;
+}
+
+// An absent id clears the bucket's profile so its sessions run on the
+// agent CLI's own account.
+message SetBucketModelProfile {
+  uint64 bucket_id = 1;
+  optional uint64 model_profile_id = 2;
+}
+
+// An absent id clears the override so the project inherits its bucket.
+message SetProjectModelProfile {
+  uint64 project_id = 1;
+  optional uint64 model_profile_id = 2;
+}
+
+// Sets or clears the project's launch path on one worker. The worker
+// is referenced by id or name and must be in the project's allowed
+// workers. An absent or empty path clears the entry so spawns on that
+// worker fall back to the project's configured path.
+message SetProjectWorkerPath {
+  uint64 project_id = 1;
+  string worker = 2;
+  optional string path = 3;
+}
+
+// Marks the current NeedsInput transition viewed without changing lifecycle.
+message MarkSessionSeen { uint64 session_id = 1; }
+
+message GetSession { uint64 session_id = 1; }
+
+message ListEndedSessions {
+  string cursor = 1;
+  uint32 limit = 2;
+}
+
+message SearchSessions {
+  string query = 1;
+  string cursor = 2;
+  uint32 limit = 3;
+}
+
+// Bounded response encoded in CommandResult.data. Cursors are opaque,
+// deterministic keyset positions; clients must return them unchanged.
+message SessionPage {
+  repeated Session sessions = 1;
+  string next_cursor = 2;
+  uint64 total = 3;
+}
+
+// Enables or disables a session's MCP tool grants at runtime; absent
+// fields leave the stored value untouched. The daemon honors the new
+// grants on the session's next tool call, but an already-connected
+// agent CLI may cache its tool list and need an MCP reconnect or a
+// resume to notice newly granted tools.
+message UpdateSessionApis {
+  uint64 session_id = 1;
+  optional bool items_api = 2;
+  optional bool supervisor_api = 3;
+  optional SessionRole role = 4;
+}
+
+message ListInstructions {
+  uint64 bucket_id = 1;
+  optional uint64 project_id = 2;
+}
+
+message GetEffectiveInstructions {
+  uint64 bucket_id = 1;
+  optional uint64 project_id = 2;
+  SessionRole role = 3;
+}
+
+message SetInstructions {
+  uint64 bucket_id = 1;
+  optional uint64 project_id = 2;
+  InstructionTarget target = 3;
+  string markdown = 4;
+  uint64 expected_revision = 5;
+  string note = 6;
+}
+
+message RevertInstructions {
+  uint64 layer_id = 1;
+  uint64 revision = 2;
+  uint64 expected_revision = 3;
+  string note = 4;
+}
+
+// Writes one daemon setting. The daemon validates the key against its
+// known settings and the value against that setting's type; an absent
+// value clears the row so the built-in default applies again.
+message SetSetting {
+  string key = 1;
+  optional string value = 2;
+}
+
+// Every known setting with its current and default values; the reply
+// rides CommandResult.data as JSON.
+message ListSettings {}
+
+// Human-side item write from a UI or the CLI. Absent optional fields
+// leave the stored value untouched; on create they take defaults.
+// Unlike the MCP path, this is not subject to the agent sticky rules.
+message UpsertItem {
+  uint64 bucket_id = 1;
+  // Update by id, else by (bucket_id, external_key), else create.
+  optional uint64 id = 2;
+  optional string external_key = 3;
+  optional string title = 4;
+  optional string body = 5;
+  // UNSPECIFIED leaves the stored status (inbox on create).
+  ItemStatus status = 6;
+  // UNSPECIFIED leaves the stored priority (normal on create).
+  ItemPriority priority = 7;
+  // UNSPECIFIED leaves the stored kind (human on create).
+  ItemSourceKind source_kind = 8;
+  optional string source_detail = 9;
+  optional string url = 10;
+  optional uint64 project_id = 11;
+  optional int64 due_at_unix_ms = 12;
+  // Applied only when set_blocked_by is true; replaces all edges.
+  repeated uint64 blocked_by = 13;
+  bool set_blocked_by = 14;
+  // Appends a timeline note.
+  optional string note = 15;
+  // Records that a session works this item (spawn-from-item).
+  optional uint64 link_session_id = 16;
+  // Sets the current question; an empty string clears it.
+  optional string question = 17;
+  bool clear_project = 18;
+  bool clear_due = 19;
+}
+
+// Records a user's reply to an item's current question and optionally
+// routes the item back to a supervisor session.
+message RespondToItem {
+  uint64 item_id = 1;
+  string text = 2;
+  oneof target {
+    uint64 session_id = 3;
+    NewSupervisorTarget new_supervisor = 4;
+    bool reply_only = 5;
+  }
+  uint64 bucket_id = 6;
+}
+
+message NewSupervisorTarget {
+  uint64 project_id = 1;
+}
+
+message DeleteItem { uint64 id = 1; uint64 bucket_id = 2; }
+
+// Parks an item until a time; absent until_unix_ms clears the snooze.
+// Deliberately not reachable over MCP: snooze is a human decision.
+message SnoozeItem {
+  uint64 id = 1;
+  optional int64 until_unix_ms = 2;
+  uint64 bucket_id = 3;
+}
+
+// Item query beyond what snapshots carry (closed history, snoozed).
+// The reply rides CommandResult.data as JSON.
+message ListItems {
+  uint64 bucket_id = 1;
+  // Empty means every status except done/dropped unless include_closed.
+  repeated ItemStatus statuses = 2;
+  optional uint64 project_id = 3;
+  optional int64 updated_since_unix_ms = 4;
+  bool include_closed = 5;
+  bool include_snoozed = 6;
+  optional string search = 7;
+  repeated ItemPriority priorities = 8;
+  repeated ItemSourceKind source_kinds = 9;
+  optional uint32 limit = 10;
+  uint32 offset = 11;
+  ItemSummaryFilter summary_filter = 12;
+}
+
+enum ItemSummaryFilter {
+  ITEM_SUMMARY_FILTER_UNSPECIFIED = 0;
+  ITEM_SUMMARY_FILTER_NEEDS_YOU = 1;
+  ITEM_SUMMARY_FILTER_IN_PROGRESS = 2;
+  ITEM_SUMMARY_FILTER_PLANNED = 3;
+  ITEM_SUMMARY_FILTER_BLOCKED_EXTERNAL = 4;
+  ITEM_SUMMARY_FILTER_DONE_RECENTLY = 5;
+  ITEM_SUMMARY_FILTER_LIVE_LINKED = 6;
+}
+
+// An item's append-only timeline; the reply rides CommandResult.data
+// as JSON.
+message ItemNotes { uint64 item_id = 1; uint64 bucket_id = 2; }
+
+// Read-only workspace listing for terminal clients. The unix socket is
+// owner-trusted and carries no user identity, so this returns every
+// user's workspaces; the reply rides CommandResult.data as JSON.
+message ListWorkspaces {}
+
+// Asks for the calling session's own forward inventory, the text a
+// resumed session is told about the servers it published. Scoped by the
+// session token so a session can read no other session's forwards.
+message SessionForwardInventory {
+  string session_token = 1;
+}
+
+// Closes a published forward: unbinds the controller listener and
+// deletes the forward. The agent republishes if it wants it back.
+message CloseForward { uint64 forward_id = 1; }
+
+// A published TCP forward: a controller-side listener spliced to a
+// port on the session's worker loopback.
+message SessionForward {
+  uint64 id = 1;
+  uint64 session_id = 2;
+  uint32 worker_port = 3;
+  uint32 listener_port = 4;
+  string label = 5;
+  string scheme = 6;
+  int64 created_at_unix_ms = 7;
+  // The address a user can open. Empty while the listener is not bound,
+  // and also when the controller has no configured public URL and binds
+  // an address no other device can reach.
+  string url = 8;
+  // Whether the worker could reach the forwarded port on its own
+  // loopback, from the most recent stream open: unset until one
+  // happens, false when that port refused. It says nothing about
+  // whether a client can reach the controller's listener.
+  optional bool target_reachable = 9;
+  // The name the publisher chose, and the subdomain the forward is
+  // hosted at under a share domain. Empty on rows created before
+  // publishing required one.
+  string slug = 10;
+  // The shared directory, relative to the session working directory,
+  // when this forward serves one. Empty for a published port, which is
+  // the agent's own server rather than a directory the worker serves.
+  string source_path = 11;
+}
+
+message CreateShell { uint64 session_id = 1; string title = 2; }
+message RestartTerminal { uint64 terminal_id = 1; }
+message CloseTerminal { uint64 terminal_id = 1; }
+message AttachTerminal { uint64 terminal_id = 1; }
+message DetachTerminal { uint64 terminal_id = 1; }
+message TerminalInput { uint64 terminal_id = 1; bytes data = 2; }
+message TerminalResize { uint64 terminal_id = 1; uint32 cols = 2; uint32 rows = 3; }
+message TerminalTranscript { uint64 terminal_id = 1; optional uint64 generation = 2; }
+
+message SetBucketPermissionMode {
+  uint64 bucket_id = 1;
+  PermissionMode mode = 2;
+}
+
+// UNSPECIFIED clears the override so the project inherits its bucket.
+message SetProjectPermissionMode {
+  uint64 project_id = 1;
+  PermissionMode mode = 2;
+}
+
+// UNSPECIFIED clears the bucket preference and uses the system fallback.
+message SetBucketDefaultAgent {
+  uint64 bucket_id = 1;
+  AgentKind agent = 2;
+}
+
+// UNSPECIFIED clears the override so the project inherits its bucket.
+message SetProjectDefaultAgent {
+  uint64 project_id = 1;
+  AgentKind agent = 2;
+}
+
+// Spawns a successor session that resumes an ended session's agent
+// conversation (agent-native resume). CommandResult carries the new
+// session id.
+message ResumeSession {
+  uint64 session_id = 1;
+}
+
+// Lifecycle signal delivered by an agent harness hook (`pm _hook`),
+// authenticated by the per-session token injected at spawn.
+message HookEvent {
+  string session_token = 1;
+  HookKind kind = 2;
+  // Human-readable elaboration, e.g. the question the agent asked.
+  string detail = 3;
+  // The agent's own session id, learned from the hook payload, used
+  // for agent-native resume. Empty when the hook did not carry one.
+  string agent_session_id = 4;
+  // On-disk path of the agent's conversation transcript, used to
+  // verify a session is resumable before attempting it.
+  string transcript_path = 5;
+  // Whether the agent still has work in flight after this hook: a
+  // backgrounded subagent, shell command, monitor or workflow. A turn
+  // that ends with any of it outstanding has not left the session idle,
+  // and the agent will report again when the last of it finishes.
+  bool background_work = 6;
+}
+
+enum HookKind {
+  HOOK_KIND_UNSPECIFIED = 0;
+  // The agent is waiting on the user (permission prompt or question).
+  HOOK_KIND_NEEDS_INPUT = 1;
+  // The agent finished its turn and is idle awaiting a prompt.
+  HOOK_KIND_TURN_ENDED = 2;
+  // The user submitted a prompt; the agent is working again.
+  HOOK_KIND_PROMPT_SUBMITTED = 3;
+  // The session just started; carries the agent's session id and
+  // transcript path for resume, and does not change the state.
+  HOOK_KIND_STARTED = 4;
+  // The turn ended because the agent API failed; the process is still live.
+  HOOK_KIND_TURN_FAILED = 5;
+}
+
+// Requests the current Snapshot for the scope followed by a live
+// Event stream. The snapshot and the stream registration are atomic:
+// no event is lost or duplicated between them.
+message Subscribe {
+  Scope scope = 1;
+}
+
+message SpawnSession {
+  uint64 project_id = 1;
+  // Explicit override; UNSPECIFIED resolves project, bucket, fallback.
+  AgentKind agent = 2;
+  string task_title = 3;
+  string task_prompt = 4;
+  // Working directory override; empty means the project's own path.
+  string cwd = 5;
+  // Override for this session; UNSPECIFIED inherits the project.
+  PermissionMode permission_mode = 6;
+  // Worker to run on; absent uses the project or bucket default.
+  optional uint64 worker_id = 7;
+  // Whether the session's MCP server offers the item tools; absent
+  // means enabled.
+  optional bool items_api = 8;
+  // Whether the session's MCP server offers the supervisor tools;
+  // absent means disabled.
+  optional bool supervisor_api = 9;
+  // New clients set role. When absent, the server derives it from the
+  // legacy supervisor_api field.
+  optional SessionRole role = 10;
+  // Model-profile override; absent resolves project then bucket.
+  optional uint64 model_profile_id = 11;
+  // Explicit host to run on, as a worker id or name. Empty keeps the
+  // worker_id field's semantics. Only hosts the project is configured
+  // for are accepted; anything else is rejected with the valid list.
+  string host = 12;
+  optional uint32 initial_cols = 13;
+  optional uint32 initial_rows = 14;
+}
+
+// Requests the session's scrollback replay followed by live PtyOutput.
+message AttachPty {
+  uint64 session_id = 1;
+}
+
+message DetachPty {
+  uint64 session_id = 1;
+}
+
+message PtyInput {
+  uint64 session_id = 1;
+  bytes data = 2;
+}
+
+message PtyResize {
+  uint64 session_id = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+message InterruptSession {
+  uint64 session_id = 1;
+}
+
+message KillSession {
+  uint64 session_id = 1;
+}
+
+message CreateBucket {
+  string name = 1;
+  repeated uint64 allowed_worker_ids = 2;
+  uint64 default_worker_id = 3;
+  bool is_default = 4;
+}
+
+message DeleteBucket {
+  uint64 id = 1;
+}
+
+message CreateProject {
+  uint64 bucket_id = 1;
+  string name = 2;
+  string path = 3;
+  optional uint64 worker_id = 4;
+  repeated uint64 allowed_worker_ids = 5;
+}
+
+message UpdateProject {
+  uint64 project_id = 1;
+  optional string path = 2;
+  optional PermissionMode permission_mode = 3;
+  oneof worker_update {
+    uint64 worker_id = 4;
+    bool clear_worker = 5;
+  }
+}
+
+message DeleteProject {
+  uint64 id = 1;
+}
+
+message ServerMessage {
+  oneof msg {
+    Snapshot snapshot = 1;
+    Event event = 2;
+    PtyOutput pty_output = 3;
+    CommandResult command_result = 4;
+  }
+}
+
+message Snapshot {
+  repeated Bucket buckets = 1;
+  repeated Project projects = 2;
+  repeated Session sessions = 3;
+  repeated Worker workers = 4;
+  repeated Terminal terminals = 5;
+  repeated SessionContext contexts = 6;
+  repeated SessionForward forwards = 7;
+  // Open items plus recently closed ones; older history via ListItems.
+  repeated Item items = 8;
+  // The latest briefing per bucket; history is served over HTTP.
+  repeated BucketBriefing briefings = 9;
+  // Authenticated-user preferences. Empty on owner-trusted transports
+  // that have no user identity (for example the local Unix socket).
+  repeated UserSetting user_settings = 10;
+  repeated InstructionLayer instruction_layers = 11;
+  repeated ModelProfile model_profiles = 12;
+  // Which dialects each registered adapter speaks, so clients derive
+  // per-profile agent coverage from the daemon's answer.
+  repeated AgentDialects agent_dialects = 13;
+  // Open reviews. Threads and diffs are served over HTTP, not here.
+  repeated Review reviews = 14;
+  // This subscriber's own place in each open review. Per-user, like
+  // user_settings, so the unseen mark is theirs and not everyone's.
+  repeated ReviewViewerState review_viewer_states = 15;
+  repeated Plan plans = 16;
+}
+
+message UserSetting {
+  string key = 1;
+  string value_json = 2;
+}
+
+message UserSettingChanged {
+  string key = 1;
+  // Missing means the preference row was reset/deleted.
+  optional string value_json = 2;
+}
+
+// Why the daemon raised an alert. Mirrors the classes the push pipeline
+// sends, so a connected browser and a phone are told the same thing.
+enum SessionAlertKind {
+  SESSION_ALERT_KIND_UNSPECIFIED = 0;
+  SESSION_ALERT_KIND_NEEDS_INPUT = 1;
+  SESSION_ALERT_KIND_FAILED = 2;
+  SESSION_ALERT_KIND_COMPLETED = 3;
+}
+
+// An alert the daemon decided is worth raising, so a connected client
+// renders exactly what the push pipeline judged worth sending rather
+// than deciding for itself. Carries no copy: the client already holds
+// the session and renders its own. Not persisted, so a client that was
+// not connected when it was raised never sees it.
+message SessionAlert {
+  uint64 session_id = 1;
+  SessionAlertKind kind = 2;
+}
+
+// What happened, for the notices the user is told about rather than asked
+// about. Each one grants or moves a durable credential, which is the class
+// the mint-only API cannot make visible any other way.
+enum SecurityNoticeKind {
+  SECURITY_NOTICE_KIND_UNSPECIFIED = 0;
+  // A phone or tablet can now read sessions and drive terminals.
+  SECURITY_NOTICE_KIND_DEVICE_ENROLLED = 1;
+  // A machine joined as a host and can be dispatched work.
+  SECURITY_NOTICE_KIND_HOST_ENROLLED = 2;
+  // An existing host's pinned key was replaced, so work dispatched to that
+  // host now runs on whichever machine redeemed the re-enrollment.
+  SECURITY_NOTICE_KIND_HOST_KEY_REPLACED = 3;
+  // A session rewrote the standing instructions every session in a bucket is
+  // launched with.
+  SECURITY_NOTICE_KIND_INSTRUCTIONS_REWRITTEN = 4;
+}
+
+// A notice about something that granted or moved a credential. The HTTP API
+// never reads a secret back, so an attacker with a session mints rather than
+// steals, and what it mints outlives the password and the cookie it was
+// minted with. Only revocation undoes that, and revocation needs the user to
+// know. Not persisted: this tells a connected client, and the point is that
+// something is said at the time rather than found in a list later.
+message SecurityNotice {
+  SecurityNoticeKind kind = 1;
+  // What it happened to, as the user would recognise it: a device name, a
+  // host name, a bucket name.
+  string subject = 2;
+  // One sentence naming what it now allows.
+  string detail = 3;
+}
+
+message Event {
+  oneof event {
+    Session session_changed = 1;
+    uint64 session_removed = 2;
+    Bucket bucket_changed = 3;
+    uint64 bucket_removed = 4;
+    Project project_changed = 5;
+    uint64 project_removed = 6;
+    Worker worker_changed = 7;
+    uint64 worker_removed = 8;
+    Terminal terminal_changed = 9;
+    uint64 terminal_removed = 10;
+    // Full replacement of a session's context bags; empty bags = cleared.
+    SessionContext context_changed = 11;
+    SessionForward forward_changed = 12;
+    uint64 forward_removed = 13;
+    Item item_changed = 14;
+    ItemRef item_removed = 15;
+    BucketBriefing briefing_changed = 16;
+    // Delivered only to authenticated sockets for the owning user.
+    UserSettingChanged user_setting_changed = 17;
+    InstructionLayer instruction_layer_changed = 18;
+    // An entry edit publishes a change for its parent profile.
+    ModelProfile model_profile_changed = 19;
+    uint64 model_profile_removed = 20;
+    // Counts and lifecycle only; threads and diffs are fetched over HTTP.
+    Review review_changed = 21;
+    uint64 review_removed = 22;
+    Plan plan_changed = 23;
+    uint64 plan_removed = 24;
+    SessionAlert session_alert = 25;
+    SecurityNotice security_notice = 26;
+  }
+}
+
+message PtyOutput {
+  uint64 session_id = 1;
+  bytes data = 2;
+  // Set on scrollback replay chunks sent right after AttachPty.
+  bool replay = 3;
+  uint64 terminal_id = 4;
+  uint64 generation = 5;
+}
+
+message CommandResult {
+  uint64 seq = 1;
+  bool ok = 2;
+  string error = 3;
+  // Id of the entity a successful create/spawn produced.
+  optional uint64 created_id = 4;
+  bytes data = 5;
+}
+
+// ── Worker plane ──────────────────────────────────────────────────
+// A remote worker host and the controller exchange these on the
+// control WebSocket. Terminal bytes use per-terminal WebSockets.
+
+message WorkerMessage {
+  oneof msg {
+    WorkerRegister register = 1;
+    WorkerHeartbeat heartbeat = 2;
+    WorkerSessionState session_state = 3;
+    WorkerSessionExit session_exit = 4;
+    WorkerNeedsInput needs_input = 5;
+    WorkerHookReport hook_report = 6;
+    WorkerFsListing fs_listing = 7;
+    WorkerTerminalExit terminal_exit = 8;
+    WorkerForwardOpened forward_opened = 9;
+    WorkerTerminalActivity terminal_activity = 10;
+    WorkerFileRead file_read = 11;
+    WorkerMcpRequest mcp_request = 12;
+    WorkerRepoResponse repo_response = 13;
+    WorkerPathChecked path_checked = 14;
+    WorkerHarnessStatus harness_status = 15;
+    WorkerDirShareBound dir_share_bound = 16;
+    WorkerAgentInboxResult agent_inbox_result = 17;
+  }
+}
+
+// A repository read, run on whichever host holds the tree. The
+// controller sends the identical encoded request for its own worker and
+// for a remote one, so the two paths cannot diverge.
+message ControllerRepoRequest {
+  uint64 req_id = 1;
+  // An encoded RepoOp. Opaque here so the controller sends the very
+  // same bytes to its own worker and to a remote one.
+  bytes op = 2;
+}
+
+message RepoOp {
+  oneof op {
+    RepoCapture capture = 1;
+    RepoReadFile read_file = 2;
+    RepoResolve resolve = 3;
+  }
+}
+
+// Everything a snapshot needs in one round trip.
+message RepoCapture {
+  string worktree = 1;
+  // Resolved SHA of the base side.
+  string base = 2;
+  // Resolved SHA of the head side; empty captures the working tree.
+  string head = 3;
+  repeated string pathspec = 4;
+  // When files_given is set, these paths are the scope exactly and no
+  // enumeration runs.
+  repeated string files = 5;
+  bool files_given = 6;
+  // Blob SHAs the controller already stores. Their bytes are omitted
+  // from the answer, so a later round sends only what changed.
+  repeated string known = 7;
+  // Reads the base side instead of the head side.
+  bool at_base = 8;
+  // Paths that must be in the answer even when enumeration would not
+  // list them, so a file a review holds a comment on stays readable
+  // after the edit it asked for stops the file differing.
+  repeated string extra = 9;
+}
+
+message RepoReadFile {
+  string worktree = 1;
+  // Empty reads the working tree.
+  string rev = 2;
+  string path = 3;
+}
+
+message RepoResolve {
+  string worktree = 1;
+  string rev = 2;
+}
+
+message WorkerRepoResponse {
+  uint64 req_id = 1;
+  bool ok = 2;
+  string error = 3;
+  // An encoded RepoAnswer.
+  bytes answer = 4;
+}
+
+message RepoAnswer {
+  oneof answer {
+    RepoCaptureAnswer capture = 1;
+    RepoReadFileAnswer read_file = 2;
+    RepoResolveAnswer resolve = 3;
+  }
+}
+
+// `content` is absent when the caller said it already had this SHA.
+message RepoBlob {
+  string path = 1;
+  string sha = 2;
+  bytes content = 3;
+  bool has_content = 4;
+}
+
+message RepoSkipped {
+  string path = 1;
+  string reason = 2;
+}
+
+message RepoCaptureAnswer {
+  repeated RepoBlob files = 1;
+  repeated string untracked = 2;
+  repeated RepoSkipped skipped = 3;
+}
+
+message RepoReadFileAnswer {
+  bytes content = 1;
+  bool found = 2;
+}
+
+message RepoResolveAnswer {
+  string sha = 1;
+  bool found = 2;
+}
+
+// An agent's report, relayed because this host cannot reach the
+// controller's browser plane directly. Correlated by req_id.
+message WorkerMcpRequest {
+  uint64 req_id = 1;
+  // The per-session token the agent presented.
+  string bearer = 2;
+  // The JSON-RPC request body verbatim.
+  string body = 3;
+}
+
+// Outcome of a ControllerForwardOpen's local dial, correlated by
+// req_id. ok=false means the target port refused or the dial failed,
+// and no stream connection will follow.
+message WorkerForwardOpened {
+  uint64 req_id = 1;
+  bool ok = 2;
+  string error = 3;
+}
+
+message FsEntry {
+  string name = 1;
+  string path = 2;
+}
+
+// Reply to a ControllerFsList, correlated by req_id.
+message WorkerFsListing {
+  uint64 req_id = 1;
+  bool ok = 2;
+  string error = 3;
+  string dir = 4;
+  optional string parent = 5;
+  repeated FsEntry entries = 6;
+}
+
+// Why a configured project path cannot be a session's working
+// directory on the host that holds it.
+enum PathCheck {
+  PATH_CHECK_UNSPECIFIED = 0;
+  // The path is a directory this host can read.
+  PATH_CHECK_OK = 1;
+  // Nothing exists at the path.
+  PATH_CHECK_MISSING = 2;
+  // Something exists there, but it is not a directory.
+  PATH_CHECK_NOT_A_DIRECTORY = 3;
+  // It is a directory, but this host cannot read it.
+  PATH_CHECK_UNREADABLE = 4;
+}
+
+// Reply to a ControllerPathCheck, correlated by req_id. `detail` carries
+// the operating system's error behind an unreadable path and is empty
+// otherwise.
+message WorkerPathChecked {
+  uint64 req_id = 1;
+  PathCheck status = 2;
+  string detail = 3;
+}
+
+// Reply to a ControllerDirShareServe, correlated by share_id. `port` is
+// the loopback port the worker bound for this share, meaningful only
+// when ok.
+message WorkerDirShareBound {
+  uint64 share_id = 1;
+  bool ok = 2;
+  string error = 3;
+  uint32 port = 4;
+}
+
+message WorkerFileRead {
+  uint64 req_id = 1;
+  bool ok = 2;
+  string error = 3;
+  bytes content = 4;
+  string filename = 5;
+}
+
+message WorkerRegister {
+  // Set only on first join, from a one-time enrollment token.
+  string enrollment_token = 1;
+  // Set on reconnect: the credential issued at enrollment.
+  string credential = 2;
+  string hostname = 3;
+  string platform = 4;
+  string default_project_root = 5;
+  // Sessions the worker is still running, re-announced on reconnect so
+  // the controller re-adopts survivors and fails only what was lost.
+  repeated uint64 live_sessions = 6;
+  repeated WorkerTerminal live_terminals = 7;
+  uint32 protocol_version = 8;
+  repeated WorkerTranscript pending_transcripts = 9;
+  // The pm build the worker runs, for drift visibility on the Hosts
+  // page. Empty from builds that predate version reporting.
+  string pm_version = 10;
+  // Directory shares this worker still serves, re-announced on reconnect
+  // so the controller adopts the survivors on their current ports and
+  // stops any it no longer wants.
+  repeated WorkerDirShare live_dir_shares = 11;
+  // The container runtime this worker runs under, empty when it runs on
+  // the host itself. The controller cannot see the runtime, so the
+  // worker is the only thing that can say.
+  string runtime = 12;
+  // The runtime's name for the container holding this worker, which is
+  // what an operator passes to that runtime to read its log or restart
+  // it. Empty off a container.
+  string container = 13;
+}
+
+// One directory share a worker currently serves, and the loopback port
+// it answers on. The port is ephemeral and changes whenever the worker
+// rebinds, which is why the share id identifies it and the port does not.
+message WorkerDirShare {
+  uint64 share_id = 1;
+  uint32 port = 2;
+}
+
+message WorkerTranscript {
+  uint64 terminal_id = 1;
+  uint64 generation = 2;
+  uint64 size = 3;
+}
+
+message WorkerTerminal {
+  uint64 terminal_id = 1;
+  uint64 generation = 2;
+  TerminalKind kind = 3;
+  TerminalRunState state = 4;
+  bool agent_resumable = 5;
+  bool transcript_available = 6;
+}
+
+message WorkerHeartbeat {}
+
+message WorkerSessionState {
+  uint64 session_id = 1;
+  SessionState state = 2;
+  string detail = 3;
+}
+
+message WorkerSessionExit {
+  uint64 session_id = 1;
+  optional int32 exit_code = 2;
+}
+
+message WorkerTerminalExit {
+  uint64 terminal_id = 1;
+  uint64 generation = 2;
+  optional int32 exit_code = 3;
+  reserved 4;
+  TerminalRunState state = 5;
+  bool transcript_available = 6;
+  uint64 transcript_size = 7;
+  // Why the worker itself ended a run it reports as failed, shown on the
+  // session. Empty for a plain exit.
+  string detail = 8;
+}
+
+message WorkerNeedsInput {
+  uint64 session_id = 1;
+}
+
+// Coalesced live-output signal from a worker terminal. Terminal bytes
+// remain on the per-terminal stream; this keeps session recency current
+// even when no viewer is attached.
+message WorkerTerminalActivity {
+  uint64 terminal_id = 1;
+  uint64 generation = 2;
+}
+
+// A lifecycle hook the worker received locally and relays up, verbatim,
+// so the controller applies it exactly as a local hook.
+message WorkerHookReport {
+  string session_token = 1;
+  HookKind kind = 2;
+  string detail = 3;
+  string agent_session_id = 4;
+  string transcript_path = 5;
+  // Correlates the controller's ControllerHookResult. Zero from a worker
+  // that predates the reply, which the controller answers by staying
+  // silent and the worker handles as an empty result.
+  uint64 req_id = 6;
+  // Whether the agent still has work in flight after this hook: a
+  // backgrounded subagent, shell command, monitor or workflow. Absent
+  // from workers older than the first protocol that reports it, which
+  // decodes to false and leaves their turn-end behaviour unchanged.
+  bool background_work = 7;
+}
+
+message ControllerMessage {
+  reserved 3, 4;
+  oneof msg {
+    ControllerRegistered registered = 1;
+    ControllerSpawn spawn = 2;
+    ControllerInterrupt interrupt = 5;
+    ControllerKill kill = 6;
+    ControllerFsList fs_list = 7;
+    ControllerAttach attach = 8;
+    ControllerDetach detach = 9;
+    ControllerSpawnShell spawn_shell = 10;
+    ControllerTranscript transcript = 11;
+    ControllerForwardOpen forward_open = 12;
+    ControllerTranscriptAck transcript_ack = 13;
+    ControllerFileRead file_read = 14;
+    ControllerMcpResponse mcp_response = 15;
+    ControllerRepoRequest repo_request = 18;
+    ControllerUpdateNow update_now = 16;
+    ControllerHookResult hook_result = 17;
+    ControllerPathCheck path_check = 19;
+    ControllerHarnessRequest harness_request = 20;
+    ControllerDirShareServe dir_share_serve = 21;
+    ControllerDirShareStop dir_share_stop = 22;
+    ControllerAgentInbox agent_inbox = 23;
+  }
+}
+
+// The controller's answer to a WorkerHookReport. `nudge` carries the
+// Stop-hook block reason when a turn ended without a dashboard headline,
+// and is empty when the stop should proceed.
+message ControllerHookResult {
+  uint64 req_id = 1;
+  string nudge = 2;
+}
+
+// Drops the idle requirement on a worker's pending self-update. The
+// operator has been told the agents running on that host will not
+// survive it.
+message ControllerUpdateNow {}
+
+message ControllerMcpResponse {
+  uint64 req_id = 1;
+  uint32 status = 2;
+  string body = 3;
+}
+
+// Asks the worker to open one forwarded TCP stream: dial the local
+// port, report the outcome via WorkerForwardOpened, and on success
+// dial the controller's stream endpoint presenting the one-time token,
+// then splice raw bytes until either side closes.
+message ControllerForwardOpen {
+  uint64 req_id = 1;
+  uint32 port = 2;
+  string token = 3;
+}
+
+// Asks the worker to dial a single-use per-terminal stream endpoint.
+// cols and rows set the PTY size before the worker snapshots it, because
+// the controller parses that snapshot into a model of exactly this size.
+// Zero leaves the size alone, which is what a worker that predates the
+// fields does too.
+message ControllerAttach {
+  reserved 1;
+  uint64 terminal_id = 2;
+  uint64 generation = 3;
+  string token = 4;
+  uint64 replay_bytes = 5;
+  uint32 cols = 6;
+  uint32 rows = 7;
+}
+
+// Asks the worker to stop relaying a session's PTY (no viewer is
+// watching). The session keeps running; only the stream pauses.
+message ControllerDetach {
+  reserved 1;
+  uint64 terminal_id = 2;
+  uint64 generation = 3;
+}
+
+// How urgently a message should reach the agent, where the agent's
+// channel distinguishes the two.
+enum AgentInboxMode {
+  AGENT_INBOX_MODE_UNSPECIFIED = 0;
+  // Take the agent's next natural break.
+  AGENT_INBOX_MODE_QUEUE = 1;
+  // Reach the model without waiting for the current turn to end.
+  AGENT_INBOX_MODE_STEER = 2;
+}
+
+// Asks the worker to hand a message to a session's agent over the
+// agent's own inbound channel rather than by typing at its terminal.
+// Only the worker can address that channel: the PTY child's pid and
+// the directory the agent binds its socket in are facts about the
+// worker's host. `agent_session_id`, `agent_port` and the agent
+// terminal travel the other way, because the controller is what
+// records them.
+message ControllerAgentInbox {
+  uint64 req_id = 1;
+  uint64 session_id = 2;
+  AgentKind agent = 3;
+  string agent_session_id = 4;
+  uint32 agent_port = 5;
+  string text = 6;
+  AgentInboxMode mode = 7;
+  // The session's agent terminal, whose PTY child is the process the
+  // inbox belongs to. The worker's mux is keyed by terminal, so a
+  // session id would find an unrelated terminal's child there.
+  uint64 agent_terminal_id = 8;
+}
+
+// What a ControllerAgentInbox did. Only DELIVERED means the message
+// arrived: for the other two the controller still owes the session a
+// terminal write.
+enum AgentInboxOutcome {
+  AGENT_INBOX_OUTCOME_UNSPECIFIED = 0;
+  AGENT_INBOX_OUTCOME_DELIVERED = 1;
+  // The agent has no inbound channel, or not one this worker can
+  // address yet.
+  AGENT_INBOX_OUTCOME_NO_CHANNEL = 2;
+  // The channel exists and declined the message.
+  AGENT_INBOX_OUTCOME_FAILED = 3;
+}
+
+// Reply to a ControllerAgentInbox, correlated by req_id. `transport`
+// and `mode` describe the channel that carried a delivered message;
+// `detail` carries why one was not delivered and never the message.
+message WorkerAgentInboxResult {
+  uint64 req_id = 1;
+  AgentInboxOutcome outcome = 2;
+  string transport = 3;
+  AgentInboxMode mode = 4;
+  string detail = 5;
+}
+
+// Asks the worker whether a configured project path is usable there.
+// The controller cannot stat a remote host's filesystem, so without
+// this it can only report that the host is reachable.
+message ControllerPathCheck {
+  uint64 req_id = 1;
+  string path = 2;
+}
+
+// Asks the worker to list a directory (for the project path picker).
+message ControllerFsList {
+  uint64 req_id = 1;
+  string path = 2;
+}
+
+message ControllerFileRead {
+  uint64 req_id = 1;
+  string root = 2;
+  string path = 3;
+  uint64 max_bytes = 4;
+}
+
+// Asks the worker to serve `path`, resolved below the session working
+// directory `root`, over a loopback HTTP server it owns. The worker
+// binds an ephemeral port and keeps the share alive across its own
+// restarts until the controller stops it.
+message ControllerDirShareServe {
+  uint64 share_id = 1;
+  string root = 2;
+  string path = 3;
+}
+
+// Stops a directory share's server. Sent when the share is unpublished,
+// when its session stops, and when a worker announces a share the
+// controller does not want, so no server outlives the record of it.
+message ControllerDirShareStop {
+  uint64 share_id = 1;
+}
+
+message ControllerRegistered {
+  uint64 worker_id = 1;
+  // Issued on first enrollment, to persist and reconnect with; empty on
+  // a credential reconnect.
+  string credential = 2;
+  // Non-empty means registration was refused.
+  string error = 3;
+  // Set only for a worker whose announced protocol predates the local MCP
+  // relay. Such a worker posts its agents' reports straight to the
+  // controller's browser plane: to this base URL when the operator
+  // configured one, else to the address it dialed paired with http_port.
+  // A worker that binds its own relay ignores both fields.
+  string mcp_base_url = 4;
+  uint32 http_port = 5;
+  // The controller's own build. A worker updates itself to this exact
+  // version rather than to whatever is newest, so a rolled-back controller
+  // is followed too.
+  string pm_version = 6;
+}
+
+message ControllerSpawn {
+  uint64 session_id = 1;
+  AgentKind agent = 2;
+  string task_prompt = 3;
+  PermissionMode permission_mode = 4;
+  string cwd = 5;
+  // The controller-issued per-session hook/report token, injected into
+  // the agent so its hooks authenticate against the controller session.
+  string session_token = 6;
+  // Set to resume an existing agent conversation instead of spawning a
+  // fresh one.
+  string resume_agent_session_id = 7;
+  uint64 terminal_id = 8;
+  uint64 generation = 9;
+  // Whether the PTY advertises 24-bit color (COLORTERM=truecolor) to
+  // the agent; absent means yes.
+  optional bool truecolor = 10;
+  // Private, controller-compiled Markdown. The Host writes this to a
+  // per-session file and injects it through the agent's system/developer
+  // instruction surface; it is never appended to the task prompt.
+  string compiled_instructions = 11;
+  // The endpoint entry the controller selected for this session's
+  // agent, with the profile's credential. Absent runs the agent on its
+  // own account. A remote worker builds its own spawn context, so the
+  // resolved entry has to travel with the spawn.
+  optional ResolvedModelEndpoint model_endpoint = 12;
+  // Whether the agent may take over the alternate screen rather than
+  // rendering into the scrollback; absent means yes, which is what a
+  // controller that predates the setting meant.
+  optional bool fullscreen = 13;
+  optional uint32 initial_cols = 14;
+  optional uint32 initial_rows = 15;
+}
+
+message ControllerSpawnShell {
+  uint64 terminal_id = 1;
+  uint64 generation = 2;
+  string cwd = 3;
+  // Whether the PTY advertises 24-bit color to the shell; absent means
+  // yes.
+  optional bool truecolor = 4;
+  optional uint32 initial_cols = 5;
+  optional uint32 initial_rows = 6;
+}
+
+message ControllerTranscript {
+  uint64 terminal_id = 1;
+  uint64 generation = 2;
+  string token = 3;
+}
+
+message ControllerTranscriptAck { uint64 terminal_id = 1; uint64 generation = 2; }
+
+message ControllerInterrupt {
+  uint64 session_id = 1;
+  uint64 terminal_id = 2;
+  uint64 generation = 3;
+}
+
+message ControllerKill {
+  uint64 session_id = 1;
+  uint64 terminal_id = 2;
+  uint64 generation = 3;
+}
+
+message ControllerHarnessRequest {
+  uint64 req_id = 1;
+  AgentKind agent = 2;
+  bool install = 3;
+}
+
+message HarnessStatus {
+  string state = 1;
+  string command = 2;
+  string output = 3;
+  string error = 4;
+}
+
+message WorkerHarnessStatus {
+  uint64 req_id = 1;
+  HarnessStatus status = 2;
+}

@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Read-only by default. A job that needs more asks for it, so a compromised
+# action or a dependency's build script cannot push, tag or open a release with
+# the workflow token.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: sh scripts/ci-rust.sh
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --features pm-daemon/testagent -- -D warnings
+      - run: cargo nextest run --workspace --features pm-daemon/testagent --profile ci
+
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      # The breaking-change check resolves the base branch out of the local
+      # clone, which a shallow checkout does not carry.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+      - run: buf lint proto
+      - name: breaking-change check against master
+        if: github.event_name == 'pull_request'
+        # Through the environment rather than interpolated into the script: a
+        # ${{ }} expansion is substituted before the shell sees the line, so a
+        # ref name carrying shell syntax would run as part of the command.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: buf breaking proto --against ".git#branch=${BASE_REF},subdir=proto"
+
+  # The license inventory is generated, so a dependency change that does not
+  # regenerate it would leave the NOTICE describing a build that no longer
+  # exists. This makes the obligations a floor rather than a snapshot taken once.
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: sh scripts/ci-rust.sh
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - run: make licenses-check
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -F @puppet-master/client-core run check
+      - run: pnpm -F @puppet-master/client-core run test
+      - run: pnpm run check
+        working-directory: web
+      - run: pnpm run test
+        working-directory: web
+      - run: pnpm -F puppet-master-mobile run check
+      - run: pnpm -F puppet-master-mobile run test
+      - run: make ios-testflight-test
+      - run: make controller-fixture-test
+      - run: make e2e-source-check
+      - run: make e2e-contract-test
+      - run: make publish-test
+      - run: make install-test
+      - run: node --test scripts/ci-rust.test.mjs

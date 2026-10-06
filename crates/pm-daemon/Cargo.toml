@@ -1,0 +1,71 @@
+[package]
+name = "pm-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+socket2 = "0.6"
+url = "2.5"
+pm-push = { path = "../pm-push" }
+pm-protocol = { workspace = true }
+prost = { workspace = true }
+pm-adapters = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+tracing = { workspace = true }
+rusqlite = { workspace = true }
+portable-pty = { workspace = true }
+futures = { workspace = true }
+libc = { workspace = true }
+axum = { workspace = true }
+rust-embed = { workspace = true }
+argon2 = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+mime_guess = { workspace = true }
+similar = { workspace = true }
+gix = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+jsonwebtoken = { workspace = true }
+chacha20poly1305 = { workspace = true }
+async-trait = { workspace = true }
+pm-tls = { workspace = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging"] }
+tokio-tungstenite = { version = "0.26", features = ["handshake"] }
+tokio-util = { version = "0.7", features = ["io"] }
+alacritty_terminal = "0.26.0"
+ring = "0.17"
+
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "service"] }
+
+rmcp = { version = "3.5", default-features = false, features = ["client", "reqwest-tls-no-provider", "transport-streamable-http-client-reqwest"] }
+reqwest-mcp = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+jsonschema = { version = "0.46", default-features = false }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3"
+pm-client = { workspace = true }
+tokio-tungstenite = "0.26"
+tower = { version = "0.5", features = ["util"] }
+tracing-subscriber = { workspace = true }
+
+[features]
+# Builds the scripted stand-in agent the test lanes drive. Off by default so
+# a release build does not ship it.
+testagent = []
+
+[[bin]]
+name = "pm-testagent"
+path = "src/bin/testagent.rs"
+required-features = ["testagent"]

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="256" viewBox="0 0 820 256" role="img" aria-labelledby="title desc">
+  <title id="title">Puppet Master — Color horizontal lockup for dark backgrounds</title>
+  <desc id="desc">Articulated Operator mark with custom outlined Puppet Master wordmark.</desc>
+  <g transform="translate(24 26) scale(.78)">  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M44 42 128 16l84 26v14l-84-24-84 24Z" fill="#3D9BFF" stroke="none"/>
+    <path d="M64 49 72 104M192 49l-8 55" stroke="#3D9BFF" stroke-width="6"/>
+    <rect x="104" y="55" width="48" height="42" rx="8" fill="#F4F7FB" stroke="none"/>
+    <rect x="82" y="104" width="92" height="64" rx="11" fill="#F4F7FB" stroke="none"/>
+    <path d="m111 130 17 15 17-15" stroke="#3D9BFF" stroke-width="7"/>
+    <circle cx="72" cy="116" r="10" stroke="#F4F7FB" stroke-width="7"/>
+    <circle cx="184" cy="116" r="10" stroke="#F4F7FB" stroke-width="7"/>
+    <path d="m64 125-22 29-15 27M192 125l22 29 15 27" stroke="#F4F7FB" stroke-width="16"/>
+    <circle cx="42" cy="154" r="6" fill="#3D9BFF" stroke="none"/>
+    <circle cx="214" cy="154" r="6" fill="#3D9BFF" stroke="none"/>
+    <circle cx="27" cy="181" r="9" stroke="#F4F7FB" stroke-width="7"/>
+    <circle cx="229" cy="181" r="9" stroke="#F4F7FB" stroke-width="7"/>
+    <rect x="18" y="194" width="19" height="13" rx="4" fill="#F4F7FB" stroke="none"/>
+    <rect x="219" y="194" width="19" height="13" rx="4" fill="#F4F7FB" stroke="none"/>
+    <path d="M95 175h66l-11 19h-44Z" fill="#F4F7FB" stroke="none"/>
+    <circle cx="105" cy="187" r="9" stroke="#F4F7FB" stroke-width="7"/>
+    <circle cx="151" cy="187" r="9" stroke="#F4F7FB" stroke-width="7"/>
+    <path d="m103 197-12 27v14H72M153 197l12 27v14h19" stroke="#F4F7FB" stroke-width="17"/>
+    <circle cx="94" cy="220" r="6" fill="#3D9BFF" stroke="none"/>
+    <circle cx="162" cy="220" r="6" fill="#3D9BFF" stroke="none"/>
+  </g></g>
+  <g transform="translate(242 88) scale(1.48)"><g fill="none" stroke="#F4F7FB" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 42V3h12q10 0 10 10T15 23H3" transform="translate(0)"/><path d="M3 12v20q0 9 9 9t10-9V12" transform="translate(33)"/><path d="M3 52V13m0 4q5-6 11-6 10 0 10 14T14 39q-7 0-11-5" transform="translate(63)"/><path d="M3 52V13m0 4q5-6 11-6 10 0 10 14T14 39q-7 0-11-5" transform="translate(95)"/><path d="M24 33q-4 8-11 8Q3 41 3 26t11-15q10 0 10 14H3" transform="translate(127)"/><path d="M13 3v29q0 9 9 9M5 13h17" transform="translate(159)"/><path d="M3 42V3l13 21L29 3v39" transform="translate(208)"/><path d="M4 17q4-6 11-6 9 0 9 10v20m0-17H13q-10 0-10 9t10 8q7 0 11-6" transform="translate(245)"/><path d="M22 16q-4-5-10-5-9 0-9 7 0 6 8 8l6 2q8 2 8 8 0 7-10 7-7 0-11-5" transform="translate(277)"/><path d="M13 3v29q0 9 9 9M5 13h17" transform="translate(307)"/><path d="M24 33q-4 8-11 8Q3 41 3 26t11-15q10 0 10 14H3" transform="translate(336)"/><path d="M3 41V12m0 8q5-9 13-9 5 0 8 4" transform="translate(368)"/>
+    </g></g>
+</svg>

@@ -1,0 +1,23 @@
+[package]
+name = "pm-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pm-protocol = { workspace = true }
+pm-tls = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging"] }
+tokio-tungstenite = { version = "0.26", features = ["handshake"] }
+tempfile = "3"

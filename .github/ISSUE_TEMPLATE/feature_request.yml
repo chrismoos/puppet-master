@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest something Puppet Master should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The project is early and moving quickly, so describing the problem
+        tends to be more useful than describing a solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is the problem
+      description: What are you trying to do, and where does Puppet Master get in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional. If you have a shape in mind, describe it — including what you would give up for it.
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do instead today
+      description: Optional, but it says a lot about how much this costs you.

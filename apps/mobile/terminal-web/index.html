@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <style>
+      __XTERM_CSS__
+    </style>
+    <!-- Overrides must come after xterm's stylesheet so equal-specificity
+         rules here win the cascade. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      #terminal {
+        position: fixed;
+        inset: 0;
+      }
+      /* xterm renders its own DOM scrollbar inside the scrollable element.
+         The overlay indicator below replaces it, so it must never show. */
+      .xterm .xterm-scrollable-element > .scrollbar {
+        display: none;
+      }
+      .xterm .xterm-viewport {
+        scrollbar-width: none;
+      }
+      .xterm .xterm-viewport::-webkit-scrollbar {
+        display: none;
+        width: 0;
+      }
+      /* xterm's accessibility rows mirror the visible buffer as real DOM
+         text. Let WebKit own selection on those rows so iOS supplies its
+         native loupe, highlight handles, and edit menu over the canvas. */
+      .xterm .xterm-accessibility:not(.debug) {
+        pointer-events: auto;
+      }
+      .xterm .xterm-accessibility-tree,
+      .xterm .xterm-accessibility-tree * {
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      #scrollbar {
+        position: fixed;
+        top: 0;
+        right: 2px;
+        width: 3px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.4);
+        opacity: 0;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="terminal"></div>
+    <div id="scrollbar"></div>
+    <script>
+      __BUNDLE_JS__
+    </script>
+  </body>
+</html>

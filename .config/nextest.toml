@@ -1,0 +1,11 @@
+# Hard time bound for every test: anything past the slow threshold is
+# flagged, and at terminate-after multiples it is killed and failed.
+# No test in this repo has a legitimate reason to run longer.
+
+[profile.default]
+slow-timeout = { period = "15s", terminate-after = 2 }
+final-status-level = "slow"
+
+[profile.ci]
+slow-timeout = { period = "30s", terminate-after = 2 }
+failure-output = "immediate-final"

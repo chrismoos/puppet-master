@@ -1,0 +1,76 @@
+name: Bug report
+description: Something does not work the way it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report a vulnerability here. `SECURITY.md` describes how to
+        report one privately.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what the daemon, the dashboard or the CLI did instead of what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest sequence that shows it. Include the commands you ran.
+      placeholder: |
+        1. pm daemon
+        2. pm spawn --project 1 --agent claude "..."
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `pm --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where you saw it
+      multiple: true
+      options:
+        - Web dashboard
+        - TUI (pm tui)
+        - CLI
+        - iOS app
+        - Daemon (logs or behaviour)
+        - Remote worker
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: macOS 15 on Apple Silicon, or Ubuntu 24.04 on x86_64
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent, if the session matters
+      multiple: true
+      options:
+        - Claude Code
+        - Codex
+        - Gemini
+        - OpenCode
+        - Antigravity
+        - Not agent-specific
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Relevant output from `pm -v daemon`, or the browser console for a
+        dashboard problem. Check it for paths, tokens and project names you do
+        not want to publish before pasting it.
+      render: text

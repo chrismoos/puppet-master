@@ -1,0 +1,46 @@
+{
+  "name": "puppet-master-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "prebuild": "expo prebuild",
+    "build:terminal": "node terminal-web/build.mjs",
+    "check": "pnpm run build:terminal && tsc --noEmit -p tsconfig.json && tsc --noEmit -p terminal-web/tsconfig.json",
+    "test": "vitest run"
+  },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./plugins"
+    }
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.12.1",
+    "@puppet-master/client-core": "workspace:*",
+    "expo": "~54.0.0",
+    "expo-build-properties": "~1.0.9",
+    "expo-dev-client": "~6.0.13",
+    "expo-device": "~8.0.6",
+    "expo-notifications": "~0.32.10",
+    "expo-secure-store": "~15.0.7",
+    "expo-status-bar": "~3.0.8",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-marked": "^8.2.0",
+    "react-native-svg": "^15.15.5",
+    "react-native-webview": "13.15.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "babel-preset-expo": "~54.0.12",
+    "esbuild": "^0.28.1",
+    "typescript": "~5.9.2",
+    "vitest": "^4.1.10"
+  }
+}

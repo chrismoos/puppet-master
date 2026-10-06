@@ -1,0 +1,51 @@
+# Reverse proxy for the Puppet Master push gateway relay (`pm pushgw`).
+#
+# Caddy terminates TLS, which puts it inside the relay's trust boundary:
+# a push request carries no signature, so whatever can rewrite it in
+# flight can retarget it at another device token.
+
+# The https:// scheme on the site address is not by itself enough to keep
+# Caddy off port 80: it still opens a listener there to redirect. This
+# turns that off, so a plaintext request is refused rather than answered
+# with a redirect a push client would have to follow. The option is
+# global, so it applies to every site this Caddy instance serves.
+{
+	auto_https disable_redirects
+}
+
+https://pushgw.puppet-master.xyz {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	# A sealed push is bounded by SEALED_JSON_BUDGET, so a full request
+	# body is under 8 KB. The cap rejects oversized bodies at the edge.
+	request_body {
+		max_size 16KB
+	}
+
+	# The relay serves only these two routes and 404s everything else.
+	@relay path /v1/push /health
+	handle @relay {
+		reverse_proxy 127.0.0.1:8400 {
+			transport http {
+				dial_timeout 5s
+				# Above the relay's own 20s APNs timeout, so the
+				# relay answers before Caddy gives up on it.
+				read_timeout 30s
+			}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+
+	log {
+		output file /var/log/caddy/pushgw.log
+		format json
+	}
+}

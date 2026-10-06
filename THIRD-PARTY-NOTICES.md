@@ -1,0 +1,1443 @@
+# Third-party notices
+
+Puppet Master itself is MIT licensed — see `LICENSE`. It is built on work by
+other people under their own licences, listed here.
+
+This inventory was generated for **0.9.0** from `Cargo.lock` and
+`pnpm-lock.yaml`. It covers the whole dependency graph of both lockfiles:
+libraries that end up inside a distributed build and tools that only ever run
+during one. Separating those exactly would mean tracing each bundler's output,
+so this over-covers rather than under-covers. Regenerate it after a dependency
+change:
+
+```sh
+cargo metadata --format-version 1 --all-features \
+  | jq -r '.packages[] | select(.source != null) | "\(.name) \(.version) \(.license)"' \
+  | sort -u
+pnpm licenses list --json
+```
+
+Where a package offers a choice of licences, every alternative it offers is
+listed and any one of them may be taken. The `MPL-2.0` dependencies
+(`option-ext`, `uluru`, and `lightningcss` with its platform binaries) are used
+unmodified, so that license's file-level source obligation is met by the
+upstream projects' own published sources. `node-forge` is offered under
+`BSD-3-Clause OR GPL-2.0` and is taken under `BSD-3-Clause`.
+
+## What a distributed build contains
+
+- The `pm` binary embeds the web UI bundle, so the web dependencies that reach
+  that bundle ship inside it.
+- SQLite is compiled from the C sources bundled in `libsqlite3-sys`, through
+  `rusqlite`'s `bundled` feature. SQLite itself is public domain and its
+  authors have disclaimed copyright.
+- The iOS app bundles React Native, Expo, and the xterm.js terminal it renders
+  in a WebView.
+- `@xterm/addon-webgl` is patched in this repository. The patch is
+  `patches/@xterm__addon-webgl@0.19.0.patch` and the addon stays under its own
+  MIT license.
+
+## Works carrying their own attribution
+
+**JetBrains Mono**, the terminal and interface typeface, is bundled into the
+web UI through `@fontsource-variable/jetbrains-mono` and is licensed under the
+SIL Open Font License 1.1. Its copyright and license text travel with the font
+files in that package.
+
+**Inter**, the interface typeface of the Graphite and Studio themes, is bundled
+into the web UI through `@fontsource-variable/inter` under the same license and
+on the same terms.
+
+The built-in terminal palettes are taken from each project's own published
+terminal definition. Each palette carries its author and license in its own
+theme metadata, so the notice stays with the colours wherever a theme is
+exported or shown:
+
+| Palette | Author | License |
+| --- | --- | --- |
+| Dracula | Dracula Theme | MIT License, Copyright (c) 2016 Dracula Theme |
+| Nord | Arctic Ice Studio | MIT License, Copyright (c) 2016-present Arctic Ice Studio and Sven Greb |
+| Gruvbox Dark | Pavel Pertsev | MIT License, Copyright (c) 2018 Pavel Pertsev |
+| Solarized Dark | Ethan Schoonover | MIT License, Copyright (c) 2011 Ethan Schoonover |
+| Solarized Light | Ethan Schoonover | MIT License, Copyright (c) 2011 Ethan Schoonover |
+
+## Rust dependencies
+
+| License | Packages |
+| --- | --- |
+| `MIT OR Apache-2.0` | 304 |
+| `MIT` | 77 |
+| `Apache-2.0 OR MIT` | 36 |
+| `Unicode-3.0` | 18 |
+| `Apache-2.0` | 11 |
+| `Unlicense OR MIT` | 11 |
+| `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | 8 |
+| `BSD-3-Clause` | 3 |
+| `ISC` | 3 |
+| `MIT OR Apache-2.0 OR Zlib` | 3 |
+| `Zlib` | 3 |
+| `Apache-2.0 OR ISC OR MIT` | 2 |
+| `BSD-2-Clause OR Apache-2.0 OR MIT` | 2 |
+| `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 2 |
+| `MPL-2.0` | 2 |
+| `(Apache-2.0 OR MIT) AND BSD-3-Clause` | 1 |
+| `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
+| `Apache-2.0 AND ISC` | 1 |
+| `Apache-2.0 OR BSL-1.0` | 1 |
+| `CC0-1.0 OR MIT-0 OR Apache-2.0` | 1 |
+| `CDLA-Permissive-2.0` | 1 |
+| `MIT AND BSD-3-Clause` | 1 |
+| `MIT OR Apache-2.0 OR BSD-1-Clause` | 1 |
+| `Zlib OR Apache-2.0 OR MIT` | 1 |
+| **Total** | **494** |
+
+<details>
+<summary>Every Rust dependency</summary>
+
+- `aead 0.5.2` — MIT OR Apache-2.0
+- `aes 0.8.4` — MIT OR Apache-2.0
+- `aes-gcm 0.10.3` — Apache-2.0 OR MIT
+- `ahash 0.8.12` — MIT OR Apache-2.0
+- `aho-corasick 1.1.4` — Unlicense OR MIT
+- `alacritty_terminal 0.26.0` — Apache-2.0
+- `allocator-api2 0.2.21` — MIT OR Apache-2.0
+- `anstream 1.0.0` — MIT OR Apache-2.0
+- `anstyle 1.0.14` — MIT OR Apache-2.0
+- `anstyle-parse 1.0.0` — MIT OR Apache-2.0
+- `anstyle-query 1.1.5` — MIT OR Apache-2.0
+- `anstyle-wincon 3.0.11` — MIT OR Apache-2.0
+- `anyhow 1.0.103` — MIT OR Apache-2.0
+- `arc-swap 1.9.2` — MIT OR Apache-2.0
+- `argon2 0.5.3` — MIT OR Apache-2.0
+- `arrayvec 0.7.8` — MIT OR Apache-2.0
+- `asn1-rs 0.6.2` — MIT OR Apache-2.0
+- `asn1-rs-derive 0.5.1` — MIT OR Apache-2.0
+- `asn1-rs-impl 0.2.0` — MIT OR Apache-2.0
+- `async-trait 0.1.92` — MIT OR Apache-2.0
+- `atomic-waker 1.1.2` — Apache-2.0 OR MIT
+- `autocfg 1.5.1` — Apache-2.0 OR MIT
+- `axum 0.8.9` — MIT
+- `axum-core 0.5.6` — MIT
+- `base16ct 0.2.0` — Apache-2.0 OR MIT
+- `base64 0.22.1` — MIT OR Apache-2.0
+- `base64ct 1.8.3` — Apache-2.0 OR MIT
+- `beef 0.5.2` — MIT OR Apache-2.0
+- `bitflags 1.3.2` — MIT OR Apache-2.0
+- `bitflags 2.13.1` — MIT OR Apache-2.0
+- `blake2 0.10.6` — MIT OR Apache-2.0
+- `block-buffer 0.10.4` — MIT OR Apache-2.0
+- `block-buffer 0.12.1` — MIT OR Apache-2.0
+- `bstr 1.13.1` — MIT OR Apache-2.0
+- `bumpalo 3.20.3` — MIT OR Apache-2.0
+- `byteorder 1.5.0` — Unlicense OR MIT
+- `bytes 1.12.1` — MIT
+- `cassowary 0.3.0` — MIT OR Apache-2.0
+- `castaway 0.2.4` — MIT
+- `cc 1.2.67` — MIT OR Apache-2.0
+- `cfg-if 1.0.4` — MIT OR Apache-2.0
+- `cfg_aliases 0.2.2` — MIT
+- `chacha20 0.10.1` — MIT OR Apache-2.0
+- `chacha20 0.9.1` — Apache-2.0 OR MIT
+- `chacha20poly1305 0.10.1` — Apache-2.0 OR MIT
+- `chrono 0.4.45` — MIT OR Apache-2.0
+- `cipher 0.4.4` — MIT OR Apache-2.0
+- `clap 4.6.2` — MIT OR Apache-2.0
+- `clap_builder 4.6.2` — MIT OR Apache-2.0
+- `clap_derive 4.6.1` — MIT OR Apache-2.0
+- `clap_lex 1.1.0` — MIT OR Apache-2.0
+- `clru 0.6.3` — MIT
+- `colorchoice 1.0.5` — MIT OR Apache-2.0
+- `compact_str 0.8.2` — MIT
+- `concurrent-queue 2.5.0` — Apache-2.0 OR MIT
+- `const-oid 0.10.2` — Apache-2.0 OR MIT
+- `const-oid 0.9.6` — Apache-2.0 OR MIT
+- `cpufeatures 0.2.17` — MIT OR Apache-2.0
+- `cpufeatures 0.3.0` — MIT OR Apache-2.0
+- `crc32fast 1.5.1` — MIT OR Apache-2.0
+- `crossbeam-channel 0.5.16` — MIT OR Apache-2.0
+- `crossbeam-deque 0.8.7` — MIT OR Apache-2.0
+- `crossbeam-epoch 0.9.20` — MIT OR Apache-2.0
+- `crossbeam-utils 0.8.22` — MIT OR Apache-2.0
+- `crossterm 0.28.1` — MIT
+- `crossterm_winapi 0.9.1` — MIT
+- `crypto-bigint 0.5.5` — Apache-2.0 OR MIT
+- `crypto-common 0.1.7` — MIT OR Apache-2.0
+- `crypto-common 0.2.2` — MIT OR Apache-2.0
+- `ctr 0.9.2` — MIT OR Apache-2.0
+- `cursor-icon 1.2.0` — MIT OR Apache-2.0 OR Zlib
+- `curve25519-dalek 4.1.3` — BSD-3-Clause
+- `curve25519-dalek-derive 0.1.1` — MIT OR Apache-2.0
+- `darling 0.23.0` — MIT
+- `darling_core 0.23.0` — MIT
+- `darling_macro 0.23.0` — MIT
+- `dashmap 6.2.1` — MIT
+- `data-encoding 2.11.0` — MIT
+- `defmt 1.1.1` — MIT OR Apache-2.0
+- `defmt-macros 1.1.1` — MIT OR Apache-2.0
+- `defmt-parser 1.0.0` — MIT OR Apache-2.0
+- `der 0.7.10` — Apache-2.0 OR MIT
+- `der-parser 9.0.0` — MIT OR Apache-2.0
+- `deranged 0.5.8` — MIT OR Apache-2.0
+- `digest 0.10.7` — MIT OR Apache-2.0
+- `digest 0.11.3` — MIT OR Apache-2.0
+- `directories 5.0.1` — MIT OR Apache-2.0
+- `dirs-sys 0.4.1` — MIT OR Apache-2.0
+- `displaydoc 0.2.6` — MIT OR Apache-2.0
+- `downcast-rs 1.2.1` — MIT OR Apache-2.0
+- `dunce 1.0.5` — CC0-1.0 OR MIT-0 OR Apache-2.0
+- `either 1.16.0` — MIT OR Apache-2.0
+- `elliptic-curve 0.13.8` — Apache-2.0 OR MIT
+- `encoding_rs 0.8.35` — (Apache-2.0 OR MIT) AND BSD-3-Clause
+- `equivalent 1.0.2` — Apache-2.0 OR MIT
+- `errno 0.3.14` — MIT OR Apache-2.0
+- `fallible-iterator 0.3.0` — MIT OR Apache-2.0
+- `fallible-streaming-iterator 0.1.9` — MIT OR Apache-2.0
+- `faster-hex 0.10.0` — MIT
+- `fastrand 2.4.1` — Apache-2.0 OR MIT
+- `ff 0.13.1` — MIT OR Apache-2.0
+- `fiat-crypto 0.2.9` — MIT OR Apache-2.0 OR BSD-1-Clause
+- `filedescriptor 0.8.3` — MIT
+- `filetime 0.2.29` — MIT OR Apache-2.0
+- `find-msvc-tools 0.1.9` — MIT OR Apache-2.0
+- `fixedbitset 0.5.7` — MIT OR Apache-2.0
+- `fnv 1.0.7` — Apache-2.0 OR MIT
+- `foldhash 0.1.5` — Zlib
+- `foldhash 0.2.0` — Zlib
+- `form_urlencoded 1.2.2` — MIT OR Apache-2.0
+- `futures 0.3.32` — MIT OR Apache-2.0
+- `futures-channel 0.3.32` — MIT OR Apache-2.0
+- `futures-core 0.3.32` — MIT OR Apache-2.0
+- `futures-executor 0.3.32` — MIT OR Apache-2.0
+- `futures-io 0.3.32` — MIT OR Apache-2.0
+- `futures-macro 0.3.32` — MIT OR Apache-2.0
+- `futures-sink 0.3.32` — MIT OR Apache-2.0
+- `futures-task 0.3.32` — MIT OR Apache-2.0
+- `futures-util 0.3.32` — MIT OR Apache-2.0
+- `generic-array 0.14.7` — MIT
+- `getrandom 0.2.17` — MIT OR Apache-2.0
+- `getrandom 0.3.4` — MIT OR Apache-2.0
+- `getrandom 0.4.3` — MIT OR Apache-2.0
+- `ghash 0.5.1` — Apache-2.0 OR MIT
+- `gix 0.87.1` — MIT OR Apache-2.0
+- `gix-actor 0.42.0` — MIT OR Apache-2.0
+- `gix-attributes 0.35.0` — MIT OR Apache-2.0
+- `gix-bitmap 0.4.0` — MIT OR Apache-2.0
+- `gix-chunk 0.8.0` — MIT OR Apache-2.0
+- `gix-command 0.10.0` — MIT OR Apache-2.0
+- `gix-commitgraph 0.39.0` — MIT OR Apache-2.0
+- `gix-config 0.60.0` — MIT OR Apache-2.0
+- `gix-config-value 0.19.1` — MIT OR Apache-2.0
+- `gix-date 0.16.0` — MIT OR Apache-2.0
+- `gix-diff 0.67.1` — MIT OR Apache-2.0
+- `gix-dir 0.29.1` — MIT OR Apache-2.0
+- `gix-discover 0.55.0` — MIT OR Apache-2.0
+- `gix-error 0.3.1` — MIT OR Apache-2.0
+- `gix-features 0.49.1` — MIT OR Apache-2.0
+- `gix-filter 0.34.0` — MIT OR Apache-2.0
+- `gix-fs 0.22.1` — MIT OR Apache-2.0
+- `gix-glob 0.27.1` — MIT OR Apache-2.0
+- `gix-hash 0.26.2` — MIT OR Apache-2.0
+- `gix-hashtable 0.16.0` — MIT OR Apache-2.0
+- `gix-ignore 0.22.1` — MIT OR Apache-2.0
+- `gix-imara-diff 0.2.5` — Apache-2.0
+- `gix-index 0.55.0` — MIT OR Apache-2.0
+- `gix-lock 24.0.0` — MIT OR Apache-2.0
+- `gix-macros 0.1.6` — MIT OR Apache-2.0
+- `gix-note 0.1.1` — MIT OR Apache-2.0
+- `gix-object 0.64.1` — MIT OR Apache-2.0
+- `gix-odb 0.84.0` — MIT OR Apache-2.0
+- `gix-pack 0.74.2` — MIT OR Apache-2.0
+- `gix-packetline 0.22.2` — MIT OR Apache-2.0
+- `gix-path 0.12.5` — MIT OR Apache-2.0
+- `gix-pathspec 0.20.0` — MIT OR Apache-2.0
+- `gix-protocol 0.65.1` — MIT OR Apache-2.0
+- `gix-quote 0.8.0` — MIT OR Apache-2.0
+- `gix-ref 0.67.1` — MIT OR Apache-2.0
+- `gix-refspec 0.45.1` — MIT OR Apache-2.0
+- `gix-revision 0.49.1` — MIT OR Apache-2.0
+- `gix-revwalk 0.35.0` — MIT OR Apache-2.0
+- `gix-sec 0.14.2` — MIT OR Apache-2.0
+- `gix-shallow 0.13.0` — MIT OR Apache-2.0
+- `gix-status 0.34.1` — MIT OR Apache-2.0
+- `gix-submodule 0.34.0` — MIT OR Apache-2.0
+- `gix-tempfile 24.0.0` — MIT OR Apache-2.0
+- `gix-trace 0.1.21` — MIT OR Apache-2.0
+- `gix-transport 0.59.1` — MIT OR Apache-2.0
+- `gix-traverse 0.61.0` — MIT OR Apache-2.0
+- `gix-url 0.38.0` — MIT OR Apache-2.0
+- `gix-utils 0.3.6` — MIT OR Apache-2.0
+- `gix-validate 0.11.4` — MIT OR Apache-2.0
+- `gix-worktree 0.56.0` — MIT OR Apache-2.0
+- `gix-worktree-stream 0.36.1` — MIT OR Apache-2.0
+- `gix-zlib 0.1.0` — MIT OR Apache-2.0
+- `group 0.13.0` — MIT OR Apache-2.0
+- `h2 0.4.15` — MIT
+- `hash32 0.3.1` — MIT OR Apache-2.0
+- `hashbrown 0.14.5` — MIT OR Apache-2.0
+- `hashbrown 0.15.5` — MIT OR Apache-2.0
+- `hashbrown 0.16.1` — MIT OR Apache-2.0
+- `hashbrown 0.17.1` — MIT OR Apache-2.0
+- `hashlink 0.9.1` — MIT OR Apache-2.0
+- `heapless 0.8.0` — MIT OR Apache-2.0
+- `heck 0.5.0` — MIT OR Apache-2.0
+- `hermit-abi 0.5.2` — MIT OR Apache-2.0
+- `hex 0.4.3` — MIT OR Apache-2.0
+- `hkdf 0.12.4` — MIT OR Apache-2.0
+- `hmac 0.12.1` — MIT OR Apache-2.0
+- `home 0.5.12` — MIT OR Apache-2.0
+- `hpke 0.12.0` — MIT OR Apache-2.0
+- `http 1.4.2` — MIT OR Apache-2.0
+- `http-body 1.1.0` — MIT
+- `http-body-util 0.1.4` — MIT
+- `httparse 1.10.1` — MIT OR Apache-2.0
+- `httpdate 1.0.3` — MIT OR Apache-2.0
+- `hybrid-array 0.4.13` — MIT OR Apache-2.0
+- `hyper 1.10.1` — MIT
+- `hyper-rustls 0.27.9` — Apache-2.0 OR ISC OR MIT
+- `hyper-util 0.1.20` — MIT
+- `icu_collections 2.2.0` — Unicode-3.0
+- `icu_locale_core 2.2.0` — Unicode-3.0
+- `icu_normalizer 2.2.0` — Unicode-3.0
+- `icu_normalizer_data 2.2.0` — Unicode-3.0
+- `icu_properties 2.2.0` — Unicode-3.0
+- `icu_properties_data 2.2.0` — Unicode-3.0
+- `icu_provider 2.2.0` — Unicode-3.0
+- `ident_case 1.0.1` — MIT OR Apache-2.0
+- `idna 1.1.0` — MIT OR Apache-2.0
+- `idna_adapter 1.2.2` — Apache-2.0 OR MIT
+- `indexmap 2.14.0` — Apache-2.0 OR MIT
+- `indoc 2.0.7` — MIT OR Apache-2.0
+- `inout 0.1.4` — MIT OR Apache-2.0
+- `instability 0.3.12` — MIT
+- `ioctl-rs 0.1.6` — MIT
+- `ipnet 2.12.0` — MIT OR Apache-2.0
+- `is_terminal_polyfill 1.70.2` — MIT OR Apache-2.0
+- `itertools 0.13.0` — MIT OR Apache-2.0
+- `itertools 0.14.0` — MIT OR Apache-2.0
+- `itoa 1.0.18` — MIT OR Apache-2.0
+- `jiff 0.2.35` — Unlicense OR MIT
+- `jiff-core 0.1.0` — Unlicense OR MIT
+- `jiff-static 0.2.35` — Unlicense OR MIT
+- `jiff-tzdb 0.1.8` — Unlicense OR MIT
+- `jiff-tzdb-platform 0.1.3` — Unlicense OR MIT
+- `js-sys 0.3.103` — MIT OR Apache-2.0
+- `jsonwebtoken 9.3.1` — MIT
+- `lazy_static 1.5.0` — MIT OR Apache-2.0
+- `libc 0.2.186` — MIT OR Apache-2.0
+- `libredox 0.1.18` — MIT
+- `libsqlite3-sys 0.30.1` — MIT
+- `linux-raw-sys 0.12.1` — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `linux-raw-sys 0.4.15` — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `litemap 0.8.2` — Unicode-3.0
+- `lock_api 0.4.14` — MIT OR Apache-2.0
+- `log 0.4.33` — MIT OR Apache-2.0
+- `logos 0.14.4` — MIT OR Apache-2.0
+- `logos-codegen 0.14.4` — MIT OR Apache-2.0
+- `logos-derive 0.14.4` — MIT OR Apache-2.0
+- `lru 0.12.5` — MIT
+- `lru-slab 0.1.2` — MIT OR Apache-2.0 OR Zlib
+- `matchers 0.2.0` — MIT
+- `matchit 0.8.4` — MIT AND BSD-3-Clause
+- `memchr 2.8.3` — Unlicense OR MIT
+- `memmap2 0.9.11` — MIT OR Apache-2.0
+- `memoffset 0.6.5` — MIT
+- `miette 7.6.0` — Apache-2.0
+- `miette-derive 7.6.0` — Apache-2.0
+- `mime 0.3.17` — MIT OR Apache-2.0
+- `mime_guess 2.0.5` — MIT
+- `minimal-lexical 0.2.1` — MIT OR Apache-2.0
+- `mio 1.2.2` — MIT
+- `miow 0.6.1` — MIT OR Apache-2.0
+- `multimap 0.10.1` — MIT OR Apache-2.0
+- `nix 0.25.1` — MIT
+- `nom 7.1.3` — MIT
+- `nonempty 0.12.0` — MIT
+- `nu-ansi-term 0.50.3` — MIT
+- `num-bigint 0.4.8` — MIT OR Apache-2.0
+- `num-conv 0.2.2` — MIT OR Apache-2.0
+- `num-integer 0.1.46` — MIT OR Apache-2.0
+- `num-traits 0.2.19` — MIT OR Apache-2.0
+- `oid-registry 0.7.1` — MIT OR Apache-2.0
+- `once_cell 1.21.4` — MIT OR Apache-2.0
+- `once_cell_polyfill 1.70.2` — MIT OR Apache-2.0
+- `opaque-debug 0.3.1` — MIT OR Apache-2.0
+- `option-ext 0.2.0` — MPL-2.0
+- `p256 0.13.2` — Apache-2.0 OR MIT
+- `parking_lot 0.12.5` — MIT OR Apache-2.0
+- `parking_lot_core 0.9.12` — MIT OR Apache-2.0
+- `password-hash 0.5.0` — MIT OR Apache-2.0
+- `paste 1.0.15` — MIT OR Apache-2.0
+- `pem 3.0.6` — MIT
+- `percent-encoding 2.3.2` — MIT OR Apache-2.0
+- `petgraph 0.7.1` — MIT OR Apache-2.0
+- `pin-project-lite 0.2.17` — Apache-2.0 OR MIT
+- `pin-utils 0.1.0` — MIT OR Apache-2.0
+- `piper 0.2.5` — MIT OR Apache-2.0
+- `pkg-config 0.3.33` — MIT OR Apache-2.0
+- `polling 3.11.0` — Apache-2.0 OR MIT
+- `poly1305 0.8.0` — Apache-2.0 OR MIT
+- `polyval 0.6.2` — Apache-2.0 OR MIT
+- `portable-atomic 1.15.0` — Apache-2.0 OR MIT
+- `portable-atomic-util 0.2.7` — Apache-2.0 OR MIT
+- `portable-pty 0.8.1` — MIT
+- `potential_utf 0.1.5` — Unicode-3.0
+- `powerfmt 0.2.0` — MIT OR Apache-2.0
+- `ppv-lite86 0.2.21` — MIT OR Apache-2.0
+- `prettyplease 0.2.37` — MIT OR Apache-2.0
+- `primeorder 0.13.6` — Apache-2.0 OR MIT
+- `proc-macro2 1.0.106` — MIT OR Apache-2.0
+- `prodash 31.0.0` — MIT
+- `prost 0.13.5` — Apache-2.0
+- `prost-build 0.13.5` — Apache-2.0
+- `prost-derive 0.13.5` — Apache-2.0
+- `prost-reflect 0.14.7` — MIT OR Apache-2.0
+- `prost-types 0.13.5` — Apache-2.0
+- `protox 0.7.2` — MIT OR Apache-2.0
+- `protox-parse 0.7.0` — MIT OR Apache-2.0
+- `quinn 0.11.11` — MIT OR Apache-2.0
+- `quinn-proto 0.11.16` — MIT OR Apache-2.0
+- `quinn-udp 0.5.15` — MIT OR Apache-2.0
+- `quote 1.0.46` — MIT OR Apache-2.0
+- `r-efi 5.3.0` — MIT OR Apache-2.0 OR LGPL-2.1-or-later
+- `r-efi 6.0.0` — MIT OR Apache-2.0 OR LGPL-2.1-or-later
+- `rand 0.10.2` — MIT OR Apache-2.0
+- `rand 0.8.7` — MIT OR Apache-2.0
+- `rand 0.9.5` — MIT OR Apache-2.0
+- `rand_chacha 0.3.1` — MIT OR Apache-2.0
+- `rand_chacha 0.9.0` — MIT OR Apache-2.0
+- `rand_core 0.10.1` — MIT OR Apache-2.0
+- `rand_core 0.6.4` — MIT OR Apache-2.0
+- `rand_core 0.9.5` — MIT OR Apache-2.0
+- `rand_pcg 0.10.2` — MIT OR Apache-2.0
+- `ratatui 0.29.0` — MIT
+- `rcgen 0.13.2` — MIT OR Apache-2.0
+- `redox_syscall 0.5.18` — MIT
+- `redox_users 0.4.6` — MIT
+- `regex 1.13.1` — MIT OR Apache-2.0
+- `regex-automata 0.4.16` — MIT OR Apache-2.0
+- `regex-syntax 0.8.11` — MIT OR Apache-2.0
+- `reqwest 0.12.28` — MIT OR Apache-2.0
+- `ring 0.17.14` — Apache-2.0 AND ISC
+- `rusqlite 0.32.1` — MIT
+- `rust-embed 8.12.0` — MIT
+- `rust-embed-impl 8.12.0` — MIT
+- `rust-embed-utils 8.12.0` — MIT
+- `rustc-hash 2.1.3` — Apache-2.0 OR MIT
+- `rustc_version 0.4.1` — MIT OR Apache-2.0
+- `rusticata-macros 4.1.0` — MIT OR Apache-2.0
+- `rustix 0.38.44` — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `rustix 1.1.4` — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `rustix-openpty 0.2.0` — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `rustls 0.23.42` — Apache-2.0 OR ISC OR MIT
+- `rustls-pki-types 1.15.0` — MIT OR Apache-2.0
+- `rustls-webpki 0.103.13` — ISC
+- `rustversion 1.0.23` — MIT OR Apache-2.0
+- `ryu 1.0.23` — Apache-2.0 OR BSL-1.0
+- `same-file 1.0.6` — Unlicense OR MIT
+- `scopeguard 1.2.0` — MIT OR Apache-2.0
+- `sec1 0.7.3` — Apache-2.0 OR MIT
+- `semver 1.0.28` — MIT OR Apache-2.0
+- `serde 1.0.228` — MIT OR Apache-2.0
+- `serde_core 1.0.228` — MIT OR Apache-2.0
+- `serde_derive 1.0.228` — MIT OR Apache-2.0
+- `serde_json 1.0.150` — MIT OR Apache-2.0
+- `serde_path_to_error 0.1.20` — MIT OR Apache-2.0
+- `serde_spanned 0.6.9` — MIT OR Apache-2.0
+- `serde_urlencoded 0.7.1` — MIT OR Apache-2.0
+- `serial 0.4.0` — MIT
+- `serial-core 0.4.0` — MIT
+- `serial-unix 0.4.0` — MIT
+- `serial-windows 0.4.0` — MIT
+- `sha1 0.10.7` — MIT OR Apache-2.0
+- `sha1-checked 0.10.0` — MIT OR Apache-2.0
+- `sha2 0.10.9` — MIT OR Apache-2.0
+- `sha2 0.11.0` — MIT OR Apache-2.0
+- `sharded-slab 0.1.7` — MIT
+- `shared_library 0.1.9` — Apache-2.0 OR MIT
+- `shell-words 1.1.1` — MIT OR Apache-2.0
+- `shlex 2.0.1` — MIT OR Apache-2.0
+- `signal-hook 0.3.18` — Apache-2.0 OR MIT
+- `signal-hook 0.4.4` — MIT OR Apache-2.0
+- `signal-hook-mio 0.2.5` — MIT OR Apache-2.0
+- `signal-hook-registry 1.4.8` — MIT OR Apache-2.0
+- `similar 2.7.0` — Apache-2.0
+- `simple_asn1 0.6.4` — ISC
+- `slab 0.4.12` — MIT
+- `smallvec 1.15.2` — MIT OR Apache-2.0
+- `socket2 0.6.5` — MIT OR Apache-2.0
+- `stable_deref_trait 1.2.1` — MIT OR Apache-2.0
+- `static_assertions 1.1.0` — MIT OR Apache-2.0
+- `strsim 0.11.1` — MIT
+- `strum 0.26.3` — MIT
+- `strum_macros 0.26.4` — MIT
+- `subtle 2.6.1` — BSD-3-Clause
+- `syn 2.0.119` — MIT OR Apache-2.0
+- `syn 3.0.3` — MIT OR Apache-2.0
+- `sync_wrapper 1.0.2` — Apache-2.0
+- `synstructure 0.13.2` — MIT
+- `tempfile 3.27.0` — MIT OR Apache-2.0
+- `termios 0.2.2` — MIT
+- `thiserror 1.0.69` — MIT OR Apache-2.0
+- `thiserror 2.0.18` — MIT OR Apache-2.0
+- `thiserror-impl 1.0.69` — MIT OR Apache-2.0
+- `thiserror-impl 2.0.18` — MIT OR Apache-2.0
+- `thread_local 1.1.10` — MIT OR Apache-2.0
+- `time 0.3.54` — MIT OR Apache-2.0
+- `time-core 0.1.9` — MIT OR Apache-2.0
+- `time-macros 0.2.32` — MIT OR Apache-2.0
+- `tinystr 0.8.3` — Unicode-3.0
+- `tinyvec 1.12.0` — Zlib OR Apache-2.0 OR MIT
+- `tinyvec_macros 0.1.1` — MIT OR Apache-2.0 OR Zlib
+- `tokio 1.52.3` — MIT
+- `tokio-macros 2.7.0` — MIT
+- `tokio-rustls 0.26.4` — MIT OR Apache-2.0
+- `tokio-tungstenite 0.26.2` — MIT
+- `tokio-tungstenite 0.29.0` — MIT
+- `tokio-util 0.7.19` — MIT
+- `toml 0.8.23` — MIT OR Apache-2.0
+- `toml_datetime 0.6.11` — MIT OR Apache-2.0
+- `toml_edit 0.22.27` — MIT OR Apache-2.0
+- `toml_write 0.1.2` — MIT OR Apache-2.0
+- `tower 0.5.3` — MIT
+- `tower-http 0.6.11` — MIT
+- `tower-layer 0.3.3` — MIT
+- `tower-service 0.3.3` — MIT
+- `tracing 0.1.44` — MIT
+- `tracing-attributes 0.1.31` — MIT
+- `tracing-core 0.1.36` — MIT
+- `tracing-log 0.2.0` — MIT
+- `tracing-subscriber 0.3.23` — MIT
+- `try-lock 0.2.5` — MIT
+- `tungstenite 0.26.2` — MIT OR Apache-2.0
+- `tungstenite 0.29.0` — MIT OR Apache-2.0
+- `typenum 1.20.1` — MIT OR Apache-2.0
+- `uluru 3.1.0` — MPL-2.0
+- `unicase 2.9.0` — MIT OR Apache-2.0
+- `unicode-bom 2.0.3` — Apache-2.0
+- `unicode-ident 1.0.24` — (MIT OR Apache-2.0) AND Unicode-3.0
+- `unicode-normalization 0.1.25` — MIT OR Apache-2.0
+- `unicode-segmentation 1.13.3` — MIT OR Apache-2.0
+- `unicode-truncate 1.1.0` — MIT OR Apache-2.0
+- `unicode-width 0.1.14` — MIT OR Apache-2.0
+- `unicode-width 0.2.0` — MIT OR Apache-2.0
+- `universal-hash 0.5.1` — MIT OR Apache-2.0
+- `untrusted 0.9.0` — ISC
+- `url 2.5.8` — MIT OR Apache-2.0
+- `utf-8 0.7.6` — MIT OR Apache-2.0
+- `utf8_iter 1.0.4` — Apache-2.0 OR MIT
+- `utf8parse 0.2.2` — Apache-2.0 OR MIT
+- `valuable 0.1.1` — MIT
+- `vcpkg 0.2.15` — MIT OR Apache-2.0
+- `version_check 0.9.5` — MIT OR Apache-2.0
+- `vte 0.15.0` — Apache-2.0 OR MIT
+- `walkdir 2.5.0` — Unlicense OR MIT
+- `want 0.3.1` — MIT
+- `wasi 0.11.1+wasi-snapshot-preview1` — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `wasip2 1.0.4+wasi-0.2.12` — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `wasm-bindgen 0.2.126` — MIT OR Apache-2.0
+- `wasm-bindgen-futures 0.4.76` — MIT OR Apache-2.0
+- `wasm-bindgen-macro 0.2.126` — MIT OR Apache-2.0
+- `wasm-bindgen-macro-support 0.2.126` — MIT OR Apache-2.0
+- `wasm-bindgen-shared 0.2.126` — MIT OR Apache-2.0
+- `web-sys 0.3.103` — MIT OR Apache-2.0
+- `web-time 1.1.0` — MIT OR Apache-2.0
+- `webpki-roots 1.0.9` — CDLA-Permissive-2.0
+- `winapi 0.3.9` — MIT OR Apache-2.0
+- `winapi-i686-pc-windows-gnu 0.4.0` — MIT OR Apache-2.0
+- `winapi-util 0.1.11` — Unlicense OR MIT
+- `winapi-x86_64-pc-windows-gnu 0.4.0` — MIT OR Apache-2.0
+- `windows-link 0.2.1` — MIT OR Apache-2.0
+- `windows-sys 0.48.0` — MIT OR Apache-2.0
+- `windows-sys 0.52.0` — MIT OR Apache-2.0
+- `windows-sys 0.59.0` — MIT OR Apache-2.0
+- `windows-sys 0.61.2` — MIT OR Apache-2.0
+- `windows-targets 0.48.5` — MIT OR Apache-2.0
+- `windows-targets 0.52.6` — MIT OR Apache-2.0
+- `windows_aarch64_gnullvm 0.48.5` — MIT OR Apache-2.0
+- `windows_aarch64_gnullvm 0.52.6` — MIT OR Apache-2.0
+- `windows_aarch64_msvc 0.48.5` — MIT OR Apache-2.0
+- `windows_aarch64_msvc 0.52.6` — MIT OR Apache-2.0
+- `windows_i686_gnu 0.48.5` — MIT OR Apache-2.0
+- `windows_i686_gnu 0.52.6` — MIT OR Apache-2.0
+- `windows_i686_gnullvm 0.52.6` — MIT OR Apache-2.0
+- `windows_i686_msvc 0.48.5` — MIT OR Apache-2.0
+- `windows_i686_msvc 0.52.6` — MIT OR Apache-2.0
+- `windows_x86_64_gnu 0.48.5` — MIT OR Apache-2.0
+- `windows_x86_64_gnu 0.52.6` — MIT OR Apache-2.0
+- `windows_x86_64_gnullvm 0.48.5` — MIT OR Apache-2.0
+- `windows_x86_64_gnullvm 0.52.6` — MIT OR Apache-2.0
+- `windows_x86_64_msvc 0.48.5` — MIT OR Apache-2.0
+- `windows_x86_64_msvc 0.52.6` — MIT OR Apache-2.0
+- `winnow 0.7.15` — MIT
+- `winreg 0.10.1` — MIT
+- `wit-bindgen 0.57.1` — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `writeable 0.6.3` — Unicode-3.0
+- `x25519-dalek 2.0.1` — BSD-3-Clause
+- `x509-parser 0.16.0` — MIT OR Apache-2.0
+- `yasna 0.5.2` — MIT OR Apache-2.0
+- `yoke 0.8.3` — Unicode-3.0
+- `yoke-derive 0.8.2` — Unicode-3.0
+- `zerocopy 0.8.54` — BSD-2-Clause OR Apache-2.0 OR MIT
+- `zerocopy-derive 0.8.54` — BSD-2-Clause OR Apache-2.0 OR MIT
+- `zerofrom 0.1.8` — Unicode-3.0
+- `zerofrom-derive 0.1.7` — Unicode-3.0
+- `zeroize 1.9.0` — Apache-2.0 OR MIT
+- `zeroize_derive 1.5.0` — Apache-2.0 OR MIT
+- `zerotrie 0.2.4` — Unicode-3.0
+- `zerovec 0.11.6` — Unicode-3.0
+- `zerovec-derive 0.11.3` — Unicode-3.0
+- `zlib-rs 0.6.7` — Zlib
+- `zmij 1.0.23` — MIT
+</details>
+
+## npm dependencies
+
+| License | Packages |
+| --- | --- |
+| `MIT` | 660 |
+| `Apache-2.0` | 51 |
+| `ISC` | 42 |
+| `BSD-3-Clause` | 17 |
+| `BSD-2-Clause` | 16 |
+| `MPL-2.0` | 12 |
+| `BlueOak-1.0.0` | 10 |
+| `(MIT OR CC0-1.0)` | 2 |
+| `CC0-1.0` | 2 |
+| `MIT-0` | 2 |
+| `Unlicense` | 2 |
+| `(Apache-2.0 AND BSD-3-Clause)` | 1 |
+| `(BSD-2-Clause OR MIT OR Apache-2.0)` | 1 |
+| `(BSD-3-Clause OR GPL-2.0)` | 1 |
+| `0BSD` | 1 |
+| `CC-BY-4.0` | 1 |
+| `OFL-1.1` | 1 |
+| `Python-2.0` | 1 |
+| **Total** | **823** |
+
+<details>
+<summary>Every npm dependency</summary>
+
+- `@0no-co/graphql.web 1.3.4` — MIT
+- `@asamuzakjp/css-color 7.1.2` — MIT
+- `@asamuzakjp/dom-selector 9.2.2` — MIT
+- `@babel/code-frame 7.10.4` — MIT
+- `@babel/code-frame 7.29.7` — MIT
+- `@babel/compat-data 7.29.7` — MIT
+- `@babel/core 7.29.7` — MIT
+- `@babel/generator 7.29.8` — MIT
+- `@babel/helper-annotate-as-pure 7.29.7` — MIT
+- `@babel/helper-compilation-targets 7.29.7` — MIT
+- `@babel/helper-create-class-features-plugin 7.29.7` — MIT
+- `@babel/helper-create-regexp-features-plugin 7.29.7` — MIT
+- `@babel/helper-define-polyfill-provider 0.6.8` — MIT
+- `@babel/helper-globals 7.29.7` — MIT
+- `@babel/helper-member-expression-to-functions 7.29.7` — MIT
+- `@babel/helper-module-imports 7.29.7` — MIT
+- `@babel/helper-module-transforms 7.29.7` — MIT
+- `@babel/helper-optimize-call-expression 7.29.7` — MIT
+- `@babel/helper-plugin-utils 7.29.7` — MIT
+- `@babel/helper-remap-async-to-generator 7.29.7` — MIT
+- `@babel/helper-replace-supers 7.29.7` — MIT
+- `@babel/helper-skip-transparent-expression-wrappers 7.29.7` — MIT
+- `@babel/helper-string-parser 7.29.7` — MIT
+- `@babel/helper-validator-identifier 7.29.7` — MIT
+- `@babel/helper-validator-option 7.29.7` — MIT
+- `@babel/helper-wrap-function 7.29.7` — MIT
+- `@babel/helpers 7.29.7` — MIT
+- `@babel/highlight 7.25.9` — MIT
+- `@babel/parser 7.29.8` — MIT
+- `@babel/plugin-proposal-decorators 7.29.7` — MIT
+- `@babel/plugin-proposal-export-default-from 7.29.7` — MIT
+- `@babel/plugin-syntax-async-generators 7.8.4` — MIT
+- `@babel/plugin-syntax-bigint 7.8.3` — MIT
+- `@babel/plugin-syntax-class-properties 7.12.13` — MIT
+- `@babel/plugin-syntax-class-static-block 7.14.5` — MIT
+- `@babel/plugin-syntax-decorators 7.29.7` — MIT
+- `@babel/plugin-syntax-dynamic-import 7.8.3` — MIT
+- `@babel/plugin-syntax-export-default-from 7.29.7` — MIT
+- `@babel/plugin-syntax-flow 7.29.7` — MIT
+- `@babel/plugin-syntax-import-attributes 7.29.7` — MIT
+- `@babel/plugin-syntax-import-meta 7.10.4` — MIT
+- `@babel/plugin-syntax-json-strings 7.8.3` — MIT
+- `@babel/plugin-syntax-jsx 7.29.7` — MIT
+- `@babel/plugin-syntax-logical-assignment-operators 7.10.4` — MIT
+- `@babel/plugin-syntax-nullish-coalescing-operator 7.8.3` — MIT
+- `@babel/plugin-syntax-numeric-separator 7.10.4` — MIT
+- `@babel/plugin-syntax-object-rest-spread 7.8.3` — MIT
+- `@babel/plugin-syntax-optional-catch-binding 7.8.3` — MIT
+- `@babel/plugin-syntax-optional-chaining 7.8.3` — MIT
+- `@babel/plugin-syntax-private-property-in-object 7.14.5` — MIT
+- `@babel/plugin-syntax-top-level-await 7.14.5` — MIT
+- `@babel/plugin-syntax-typescript 7.29.7` — MIT
+- `@babel/plugin-transform-arrow-functions 7.29.7` — MIT
+- `@babel/plugin-transform-async-generator-functions 7.29.7` — MIT
+- `@babel/plugin-transform-async-to-generator 7.29.7` — MIT
+- `@babel/plugin-transform-block-scoping 7.29.7` — MIT
+- `@babel/plugin-transform-class-properties 7.29.7` — MIT
+- `@babel/plugin-transform-class-static-block 7.29.7` — MIT
+- `@babel/plugin-transform-classes 7.29.7` — MIT
+- `@babel/plugin-transform-computed-properties 7.29.7` — MIT
+- `@babel/plugin-transform-destructuring 7.29.7` — MIT
+- `@babel/plugin-transform-export-namespace-from 7.29.7` — MIT
+- `@babel/plugin-transform-flow-strip-types 7.29.7` — MIT
+- `@babel/plugin-transform-for-of 7.29.7` — MIT
+- `@babel/plugin-transform-function-name 7.29.7` — MIT
+- `@babel/plugin-transform-literals 7.29.7` — MIT
+- `@babel/plugin-transform-logical-assignment-operators 7.29.7` — MIT
+- `@babel/plugin-transform-modules-commonjs 7.29.7` — MIT
+- `@babel/plugin-transform-named-capturing-groups-regex 7.29.7` — MIT
+- `@babel/plugin-transform-nullish-coalescing-operator 7.29.7` — MIT
+- `@babel/plugin-transform-numeric-separator 7.29.7` — MIT
+- `@babel/plugin-transform-object-rest-spread 7.29.7` — MIT
+- `@babel/plugin-transform-optional-catch-binding 7.29.7` — MIT
+- `@babel/plugin-transform-optional-chaining 7.29.7` — MIT
+- `@babel/plugin-transform-parameters 7.29.7` — MIT
+- `@babel/plugin-transform-private-methods 7.29.7` — MIT
+- `@babel/plugin-transform-private-property-in-object 7.29.7` — MIT
+- `@babel/plugin-transform-react-display-name 7.29.7` — MIT
+- `@babel/plugin-transform-react-jsx-development 7.29.7` — MIT
+- `@babel/plugin-transform-react-jsx-self 7.29.7` — MIT
+- `@babel/plugin-transform-react-jsx-source 7.29.7` — MIT
+- `@babel/plugin-transform-react-jsx 7.29.7` — MIT
+- `@babel/plugin-transform-react-pure-annotations 7.29.7` — MIT
+- `@babel/plugin-transform-regenerator 7.29.8` — MIT
+- `@babel/plugin-transform-runtime 7.29.7` — MIT
+- `@babel/plugin-transform-shorthand-properties 7.29.7` — MIT
+- `@babel/plugin-transform-spread 7.29.8` — MIT
+- `@babel/plugin-transform-sticky-regex 7.29.7` — MIT
+- `@babel/plugin-transform-typescript 7.29.7` — MIT
+- `@babel/plugin-transform-unicode-regex 7.29.7` — MIT
+- `@babel/preset-react 7.29.7` — MIT
+- `@babel/preset-typescript 7.29.7` — MIT
+- `@babel/runtime 7.29.7` — MIT
+- `@babel/template 7.29.7` — MIT
+- `@babel/traverse 7.29.8` — MIT
+- `@babel/types 7.29.8` — MIT
+- `@bramus/specificity 2.4.2` — MIT
+- `@bufbuild/buf-darwin-arm64 1.72.0` — Apache-2.0
+- `@bufbuild/buf-darwin-x64 1.72.0` — Apache-2.0
+- `@bufbuild/buf-linux-aarch64 1.72.0` — Apache-2.0
+- `@bufbuild/buf-linux-armv7 1.72.0` — Apache-2.0
+- `@bufbuild/buf-linux-x64 1.72.0` — Apache-2.0
+- `@bufbuild/buf-win32-arm64 1.72.0` — Apache-2.0
+- `@bufbuild/buf-win32-x64 1.72.0` — Apache-2.0
+- `@bufbuild/buf 1.72.0` — Apache-2.0
+- `@bufbuild/protobuf 2.14.1` — (Apache-2.0 AND BSD-3-Clause)
+- `@bufbuild/protoc-gen-es 2.14.1` — Apache-2.0
+- `@bufbuild/protoplugin 2.14.1` — Apache-2.0
+- `@csstools/color-helpers 6.1.2` — MIT-0
+- `@csstools/css-calc 3.4.1` — MIT
+- `@csstools/css-color-parser 4.2.4` — MIT
+- `@csstools/css-parser-algorithms 4.0.1` — MIT
+- `@csstools/css-syntax-patches-for-csstree 1.1.14` — MIT-0
+- `@csstools/css-tokenizer 4.0.2` — MIT
+- `@esbuild/aix-ppc64 0.28.2` — MIT
+- `@esbuild/android-arm64 0.28.2` — MIT
+- `@esbuild/android-arm 0.28.2` — MIT
+- `@esbuild/android-x64 0.28.2` — MIT
+- `@esbuild/darwin-arm64 0.28.2` — MIT
+- `@esbuild/darwin-x64 0.28.2` — MIT
+- `@esbuild/freebsd-arm64 0.28.2` — MIT
+- `@esbuild/freebsd-x64 0.28.2` — MIT
+- `@esbuild/linux-arm64 0.28.2` — MIT
+- `@esbuild/linux-arm 0.28.2` — MIT
+- `@esbuild/linux-ia32 0.28.2` — MIT
+- `@esbuild/linux-loong64 0.28.2` — MIT
+- `@esbuild/linux-mips64el 0.28.2` — MIT
+- `@esbuild/linux-ppc64 0.28.2` — MIT
+- `@esbuild/linux-riscv64 0.28.2` — MIT
+- `@esbuild/linux-s390x 0.28.2` — MIT
+- `@esbuild/linux-x64 0.28.2` — MIT
+- `@esbuild/netbsd-arm64 0.28.2` — MIT
+- `@esbuild/netbsd-x64 0.28.2` — MIT
+- `@esbuild/openbsd-arm64 0.28.2` — MIT
+- `@esbuild/openbsd-x64 0.28.2` — MIT
+- `@esbuild/openharmony-arm64 0.28.2` — MIT
+- `@esbuild/sunos-x64 0.28.2` — MIT
+- `@esbuild/win32-arm64 0.28.2` — MIT
+- `@esbuild/win32-ia32 0.28.2` — MIT
+- `@esbuild/win32-x64 0.28.2` — MIT
+- `@exodus/bytes 1.16.0` — MIT
+- `@expo/cli 54.0.27` — MIT
+- `@expo/code-signing-certificates 0.0.6` — MIT
+- `@expo/config-plugins 54.0.5` — MIT
+- `@expo/config-types 54.0.10` — MIT
+- `@expo/config 12.0.14` — MIT
+- `@expo/devcert 1.2.1` — MIT
+- `@expo/devtools 0.1.8` — MIT
+- `@expo/env 2.0.12` — MIT
+- `@expo/fingerprint 0.15.5` — MIT
+- `@expo/image-utils 0.8.17` — MIT
+- `@expo/json-file 10.0.16` — MIT
+- `@expo/json-file 10.2.0` — MIT
+- `@expo/json-file 11.0.1` — MIT
+- `@expo/metro-config 54.0.17` — MIT
+- `@expo/metro 54.2.0` — MIT
+- `@expo/osascript 2.7.1` — MIT
+- `@expo/package-manager 1.13.1` — MIT
+- `@expo/plist 0.4.9` — MIT
+- `@expo/prebuild-config 54.0.9` — MIT
+- `@expo/require-utils 55.0.8` — MIT
+- `@expo/schema-utils 0.1.9` — MIT
+- `@expo/sdk-runtime-versions 1.0.0` — MIT
+- `@expo/spawn-async 1.8.0` — MIT
+- `@expo/sudo-prompt 9.3.2` — MIT
+- `@expo/vector-icons 15.1.1` — MIT
+- `@expo/ws-tunnel 1.0.6` — MIT
+- `@expo/xcpretty 4.4.4` — BSD-3-Clause
+- `@fontsource-variable/inter 5.3.0` — OFL-1.1
+- `@fontsource-variable/jetbrains-mono 5.3.0` — OFL-1.1
+- `@ide/backoff 1.0.0` — MIT
+- `@isaacs/fs-minipass 4.0.1` — ISC
+- `@isaacs/ttlcache 1.4.1` — ISC
+- `@istanbuljs/load-nyc-config 1.1.0` — ISC
+- `@istanbuljs/schema 0.1.6` — MIT
+- `@jest/create-cache-key-function 29.7.0` — MIT
+- `@jest/environment 29.7.0` — MIT
+- `@jest/fake-timers 29.7.0` — MIT
+- `@jest/schemas 29.6.3` — MIT
+- `@jest/transform 29.7.0` — MIT
+- `@jest/types 29.6.3` — MIT
+- `@jridgewell/gen-mapping 0.3.13` — MIT
+- `@jridgewell/remapping 2.3.5` — MIT
+- `@jridgewell/resolve-uri 3.1.2` — MIT
+- `@jridgewell/source-map 0.3.11` — MIT
+- `@jridgewell/sourcemap-codec 1.6.0` — MIT
+- `@jridgewell/trace-mapping 0.3.31` — MIT
+- `@jsamr/counter-style 2.0.2` — MIT
+- `@jsamr/react-native-li 2.3.1` — MIT
+- `@oxc-project/types 0.148.0` — MIT
+- `@playwright/test 1.63.0` — Apache-2.0
+- `@react-native/assets-registry 0.81.5` — MIT
+- `@react-native/babel-plugin-codegen 0.81.5` — MIT
+- `@react-native/babel-preset 0.81.5` — MIT
+- `@react-native/codegen 0.81.5` — MIT
+- `@react-native/community-cli-plugin 0.81.5` — MIT
+- `@react-native/debugger-frontend 0.81.5` — BSD-3-Clause
+- `@react-native/dev-middleware 0.81.5` — MIT
+- `@react-native/gradle-plugin 0.81.5` — MIT
+- `@react-native/js-polyfills 0.81.5` — MIT
+- `@react-native/normalize-colors 0.81.5` — MIT
+- `@react-native/virtualized-lists 0.81.5` — MIT
+- `@rolldown/binding-android-arm-eabi 1.2.7` — MIT
+- `@rolldown/binding-android-arm64 1.2.7` — MIT
+- `@rolldown/binding-darwin-arm64 1.2.7` — MIT
+- `@rolldown/binding-darwin-x64 1.2.7` — MIT
+- `@rolldown/binding-freebsd-x64 1.2.7` — MIT
+- `@rolldown/binding-linux-arm-gnueabihf 1.2.7` — MIT
+- `@rolldown/binding-linux-arm64-gnu 1.2.7` — MIT
+- `@rolldown/binding-linux-arm64-musl 1.2.7` — MIT
+- `@rolldown/binding-linux-ppc64-gnu 1.2.7` — MIT
+- `@rolldown/binding-linux-s390x-gnu 1.2.7` — MIT
+- `@rolldown/binding-linux-x64-gnu 1.2.7` — MIT
+- `@rolldown/binding-linux-x64-musl 1.2.7` — MIT
+- `@rolldown/binding-openharmony-arm64 1.2.7` — MIT
+- `@rolldown/binding-win32-arm64-msvc 1.2.7` — MIT
+- `@rolldown/binding-win32-x64-msvc 1.2.7` — MIT
+- `@rolldown/pluginutils 1.0.1` — MIT
+- `@sinclair/typebox 0.27.12` — MIT
+- `@sinonjs/commons 3.0.1` — BSD-3-Clause
+- `@sinonjs/fake-timers 10.3.0` — BSD-3-Clause
+- `@standard-schema/spec 1.1.0` — MIT
+- `@types/babel__core 7.20.5` — MIT
+- `@types/babel__generator 7.27.0` — MIT
+- `@types/babel__template 7.4.4` — MIT
+- `@types/babel__traverse 7.28.0` — MIT
+- `@types/chai 5.2.3` — MIT
+- `@types/deep-eql 4.0.2` — MIT
+- `@types/estree 1.0.9` — MIT
+- `@types/graceful-fs 4.1.9` — MIT
+- `@types/istanbul-lib-coverage 2.0.6` — MIT
+- `@types/istanbul-lib-report 3.0.3` — MIT
+- `@types/istanbul-reports 3.0.4` — MIT
+- `@types/node 26.4.1` — MIT
+- `@types/react-dom 19.2.7` — MIT
+- `@types/react 19.1.17` — MIT
+- `@types/react 19.2.18` — MIT
+- `@types/stack-utils 2.0.3` — MIT
+- `@types/yargs-parser 21.0.3` — MIT
+- `@types/yargs 17.0.35` — MIT
+- `@typescript/typescript-aix-ppc64 7.0.2` — Apache-2.0
+- `@typescript/typescript-darwin-arm64 7.0.2` — Apache-2.0
+- `@typescript/typescript-darwin-x64 7.0.2` — Apache-2.0
+- `@typescript/typescript-freebsd-arm64 7.0.2` — Apache-2.0
+- `@typescript/typescript-freebsd-x64 7.0.2` — Apache-2.0
+- `@typescript/typescript-linux-arm64 7.0.2` — Apache-2.0
+- `@typescript/typescript-linux-arm 7.0.2` — Apache-2.0
+- `@typescript/typescript-linux-loong64 7.0.2` — Apache-2.0
+- `@typescript/typescript-linux-mips64el 7.0.2` — Apache-2.0
+- `@typescript/typescript-linux-ppc64 7.0.2` — Apache-2.0
+- `@typescript/typescript-linux-riscv64 7.0.2` — Apache-2.0
+- `@typescript/typescript-linux-s390x 7.0.2` — Apache-2.0
+- `@typescript/typescript-linux-x64 7.0.2` — Apache-2.0
+- `@typescript/typescript-netbsd-arm64 7.0.2` — Apache-2.0
+- `@typescript/typescript-netbsd-x64 7.0.2` — Apache-2.0
+- `@typescript/typescript-openbsd-arm64 7.0.2` — Apache-2.0
+- `@typescript/typescript-openbsd-x64 7.0.2` — Apache-2.0
+- `@typescript/typescript-sunos-x64 7.0.2` — Apache-2.0
+- `@typescript/typescript-win32-arm64 7.0.2` — Apache-2.0
+- `@typescript/typescript-win32-x64 7.0.2` — Apache-2.0
+- `@typescript/vfs 1.6.4` — MIT
+- `@ungap/structured-clone 1.4.0` — ISC
+- `@urql/core 5.2.0` — MIT
+- `@urql/exchange-retry 1.3.2` — MIT
+- `@vitejs/plugin-react 6.1.1` — MIT
+- `@vitest/expect 4.1.11` — MIT
+- `@vitest/mocker 4.1.11` — MIT
+- `@vitest/pretty-format 4.1.11` — MIT
+- `@vitest/runner 4.1.11` — MIT
+- `@vitest/snapshot 4.1.11` — MIT
+- `@vitest/spy 4.1.11` — MIT
+- `@vitest/utils 4.1.11` — MIT
+- `@xmldom/xmldom 0.8.15` — MIT
+- `@xmldom/xmldom 0.9.12` — MIT
+- `@xterm/addon-webgl 0.19.0` — MIT
+- `@xterm/xterm 6.0.0` — MIT
+- `abort-controller 3.0.0` — MIT
+- `accepts 1.3.8` — MIT
+- `accepts 2.0.0` — MIT
+- `acorn 8.18.0` — MIT
+- `agent-base 7.1.4` — MIT
+- `agent-cli-detector 0.1.7` — MIT
+- `ajv 8.20.0` — MIT
+- `anser 1.4.10` — MIT
+- `ansi-escapes 4.3.2` — MIT
+- `ansi-regex 4.1.1` — MIT
+- `ansi-regex 5.0.1` — MIT
+- `ansi-styles 3.2.1` — MIT
+- `ansi-styles 4.3.0` — MIT
+- `ansi-styles 5.2.0` — MIT
+- `any-promise 1.3.0` — MIT
+- `anymatch 3.1.3` — ISC
+- `arg 5.0.2` — MIT
+- `argparse 1.0.10` — MIT
+- `argparse 2.0.1` — Python-2.0
+- `asap 2.0.6` — MIT
+- `assert 2.1.0` — MIT
+- `assertion-error 2.0.1` — MIT
+- `async-limiter 1.0.1` — MIT
+- `available-typed-arrays 1.0.7` — MIT
+- `babel-jest 29.7.0` — MIT
+- `babel-plugin-istanbul 6.1.1` — BSD-3-Clause
+- `babel-plugin-jest-hoist 29.6.3` — MIT
+- `babel-plugin-polyfill-corejs2 0.4.17` — MIT
+- `babel-plugin-polyfill-corejs3 0.13.0` — MIT
+- `babel-plugin-polyfill-regenerator 0.6.8` — MIT
+- `babel-plugin-react-compiler 1.0.0` — MIT
+- `babel-plugin-react-native-web 0.21.2` — MIT
+- `babel-plugin-syntax-hermes-parser 0.29.1` — MIT
+- `babel-plugin-transform-flow-enums 0.0.2` — MIT
+- `babel-preset-current-node-syntax 1.2.0` — MIT
+- `babel-preset-expo 54.0.12` — MIT
+- `babel-preset-jest 29.6.3` — MIT
+- `badgin 1.2.3` — MIT
+- `balanced-match 1.0.2` — MIT
+- `balanced-match 4.0.4` — MIT
+- `base64-js 1.5.1` — MIT
+- `baseline-browser-mapping 2.11.21` — Apache-2.0
+- `better-opn 3.0.2` — MIT
+- `bidi-js 1.1.0` — MIT
+- `big-integer 1.6.52` — Unlicense
+- `boolbase 1.0.0` — ISC
+- `bplist-creator 0.1.0` — MIT
+- `bplist-parser 0.3.1` — MIT
+- `bplist-parser 0.3.2` — MIT
+- `brace-expansion 1.1.18` — MIT
+- `brace-expansion 2.1.4` — MIT
+- `brace-expansion 5.0.9` — MIT
+- `braces 3.0.3` — MIT
+- `browserslist 4.28.9` — MIT
+- `bser 2.1.1` — Apache-2.0
+- `buffer-from 1.1.2` — MIT
+- `buffer 5.7.1` — MIT
+- `bytes 3.1.2` — MIT
+- `call-bind-apply-helpers 1.0.2` — MIT
+- `call-bind 1.0.9` — MIT
+- `call-bound 1.0.4` — MIT
+- `camelcase 5.3.1` — MIT
+- `camelcase 6.3.0` — MIT
+- `caniuse-lite 1.0.30001810` — CC-BY-4.0
+- `chai 6.2.2` — MIT
+- `chalk 2.4.2` — MIT
+- `chalk 4.1.2` — MIT
+- `chownr 3.0.0` — BlueOak-1.0.0
+- `chrome-launcher 0.15.2` — Apache-2.0
+- `chromium-edge-launcher 0.2.0` — Apache-2.0
+- `ci-info 2.0.0` — MIT
+- `ci-info 3.9.0` — MIT
+- `cli-cursor 2.1.0` — MIT
+- `cli-spinners 2.9.2` — MIT
+- `cliui 8.0.1` — ISC
+- `clone 1.0.4` — MIT
+- `color-convert 1.9.3` — MIT
+- `color-convert 2.0.1` — MIT
+- `color-name 1.1.3` — MIT
+- `color-name 1.1.4` — MIT
+- `commander 12.1.0` — MIT
+- `commander 2.20.3` — MIT
+- `commander 4.1.1` — MIT
+- `commander 7.2.0` — MIT
+- `compressible 2.0.18` — MIT
+- `compression 1.8.1` — MIT
+- `concat-map 0.0.1` — MIT
+- `connect 3.7.0` — MIT
+- `content-type 2.1.0` — MIT
+- `convert-source-map 2.0.0` — MIT
+- `core-js-compat 3.50.0` — MIT
+- `cross-spawn 7.0.6` — MIT
+- `css-select 5.2.2` — BSD-2-Clause
+- `css-tree 1.1.3` — MIT
+- `css-tree 3.2.1` — MIT
+- `css-what 6.2.2` — BSD-2-Clause
+- `csstype 3.2.3` — MIT
+- `data-urls 7.0.0` — MIT
+- `debug 2.6.9` — MIT
+- `debug 3.2.7` — MIT
+- `debug 4.4.3` — MIT
+- `decimal.js 10.6.0` — MIT
+- `deep-extend 0.6.0` — MIT
+- `deepmerge 4.3.1` — MIT
+- `defaults 1.0.4` — MIT
+- `define-data-property 1.1.4` — MIT
+- `define-lazy-prop 2.0.0` — MIT
+- `define-properties 1.2.1` — MIT
+- `depd 2.0.0` — MIT
+- `destroy 1.2.0` — MIT
+- `detect-libc 2.1.2` — Apache-2.0
+- `dom-serializer 2.0.0` — MIT
+- `domelementtype 2.3.0` — BSD-2-Clause
+- `domhandler 5.0.3` — BSD-2-Clause
+- `domutils 3.2.2` — BSD-2-Clause
+- `dotenv-expand 11.0.7` — BSD-2-Clause
+- `dotenv 16.4.7` — BSD-2-Clause
+- `dunder-proto 1.0.1` — MIT
+- `ee-first 1.1.1` — MIT
+- `electron-to-chromium 1.5.422` — ISC
+- `emoji-regex 8.0.0` — MIT
+- `encodeurl 1.0.2` — MIT
+- `encodeurl 2.0.0` — MIT
+- `entities 4.5.0` — BSD-2-Clause
+- `entities 8.1.0` — BSD-2-Clause
+- `env-editor 0.4.2` — MIT
+- `error-stack-parser 2.1.4` — MIT
+- `es-define-property 1.0.1` — MIT
+- `es-errors 1.3.0` — MIT
+- `es-module-lexer 2.3.2` — MIT
+- `es-object-atoms 1.1.2` — MIT
+- `esbuild 0.28.2` — MIT
+- `escalade 3.2.0` — MIT
+- `escape-html 1.0.3` — MIT
+- `escape-string-regexp 1.0.5` — MIT
+- `escape-string-regexp 2.0.0` — MIT
+- `escape-string-regexp 4.0.0` — MIT
+- `esprima 4.0.1` — BSD-2-Clause
+- `estree-walker 3.0.3` — MIT
+- `etag 1.8.1` — MIT
+- `event-target-shim 5.0.1` — MIT
+- `expect-type 1.4.0` — Apache-2.0
+- `expo-application 7.0.8` — MIT
+- `expo-asset 12.0.13` — MIT
+- `expo-build-properties 1.0.10` — MIT
+- `expo-constants 18.0.14` — MIT
+- `expo-dev-client 6.0.21` — MIT
+- `expo-dev-launcher 6.0.21` — MIT
+- `expo-dev-menu-interface 2.0.0` — MIT
+- `expo-dev-menu 7.0.19` — MIT
+- `expo-device 8.0.10` — MIT
+- `expo-file-system 19.0.24` — MIT
+- `expo-font 14.0.12` — MIT
+- `expo-json-utils 0.15.0` — MIT
+- `expo-keep-awake 15.0.8` — MIT
+- `expo-manifests 1.0.11` — MIT
+- `expo-modules-autolinking 3.0.27` — MIT
+- `expo-modules-core 3.0.30` — MIT
+- `expo-notifications 0.32.17` — MIT
+- `expo-secure-store 15.0.8` — MIT
+- `expo-server 1.0.7` — MIT
+- `expo-status-bar 3.0.9` — MIT
+- `expo-updates-interface 2.0.0` — MIT
+- `expo 54.0.37` — MIT
+- `exponential-backoff 3.1.3` — Apache-2.0
+- `fast-deep-equal 3.1.3` — MIT
+- `fast-json-stable-stringify 2.1.0` — MIT
+- `fast-uri 3.1.7` — BSD-3-Clause
+- `fb-watchman 2.0.2` — Apache-2.0
+- `fdir 6.5.0` — MIT
+- `fill-range 7.1.1` — MIT
+- `finalhandler 1.1.2` — MIT
+- `find-up 4.1.0` — MIT
+- `flow-enums-runtime 0.0.6` — MIT
+- `fontfaceobserver 2.3.0` — BSD-2-Clause
+- `for-each 0.3.5` — MIT
+- `freeport-async 2.0.0` — MIT
+- `fresh 0.5.2` — MIT
+- `fs.realpath 1.0.0` — ISC
+- `fsevents 2.3.3` — MIT
+- `function-bind 1.1.2` — MIT
+- `generator-function 2.0.1` — MIT
+- `gensync 1.0.0-beta.2` — MIT
+- `get-caller-file 2.0.5` — ISC
+- `get-intrinsic 1.3.0` — MIT
+- `get-package-type 0.1.0` — MIT
+- `get-proto 1.0.1` — MIT
+- `getenv 2.0.0` — MIT
+- `github-slugger 2.0.0` — ISC
+- `glob 13.0.6` — BlueOak-1.0.0
+- `glob 7.2.3` — ISC
+- `gopd 1.2.0` — MIT
+- `graceful-fs 4.2.11` — ISC
+- `has-flag 3.0.0` — MIT
+- `has-flag 4.0.0` — MIT
+- `has-property-descriptors 1.0.2` — MIT
+- `has-symbols 1.1.0` — MIT
+- `has-tostringtag 1.0.2` — MIT
+- `hasown 2.0.4` — MIT
+- `hermes-estree 0.29.1` — MIT
+- `hermes-estree 0.32.0` — MIT
+- `hermes-estree 0.35.0` — MIT
+- `hermes-parser 0.29.1` — MIT
+- `hermes-parser 0.32.0` — MIT
+- `hermes-parser 0.35.0` — MIT
+- `highlight.js 11.12.0` — BSD-3-Clause
+- `hosted-git-info 7.0.2` — ISC
+- `html-encoding-sniffer 7.0.0` — MIT
+- `html-entities 2.6.0` — MIT
+- `http-errors 2.0.1` — MIT
+- `https-proxy-agent 7.0.6` — MIT
+- `ieee754 1.2.1` — BSD-3-Clause
+- `ignore 5.3.2` — MIT
+- `image-size 1.2.1` — MIT
+- `imurmurhash 0.1.4` — MIT
+- `inflight 1.0.6` — ISC
+- `inherits 2.0.4` — ISC
+- `ini 1.3.8` — ISC
+- `invariant 2.2.4` — MIT
+- `is-arguments 1.2.0` — MIT
+- `is-callable 1.2.7` — MIT
+- `is-core-module 2.16.2` — MIT
+- `is-docker 2.2.1` — MIT
+- `is-fullwidth-code-point 3.0.0` — MIT
+- `is-generator-function 1.1.2` — MIT
+- `is-nan 1.3.2` — MIT
+- `is-number 7.0.0` — MIT
+- `is-potential-custom-element-name 1.0.1` — MIT
+- `is-regex 1.2.1` — MIT
+- `is-typed-array 1.1.15` — MIT
+- `is-wsl 2.2.0` — MIT
+- `isexe 2.0.0` — ISC
+- `istanbul-lib-coverage 3.2.2` — BSD-3-Clause
+- `istanbul-lib-instrument 5.2.1` — BSD-3-Clause
+- `jest-environment-node 29.7.0` — MIT
+- `jest-get-type 29.6.3` — MIT
+- `jest-haste-map 29.7.0` — MIT
+- `jest-message-util 29.7.0` — MIT
+- `jest-mock 29.7.0` — MIT
+- `jest-regex-util 29.6.3` — MIT
+- `jest-util 29.7.0` — MIT
+- `jest-validate 29.7.0` — MIT
+- `jest-worker 29.7.0` — MIT
+- `jimp-compact 0.16.1` — MIT
+- `js-tokens 4.0.0` — MIT
+- `js-yaml 3.15.2` — MIT
+- `js-yaml 4.3.2` — MIT
+- `jsc-safe-url 0.2.4` — 0BSD
+- `jsdom 30.1.1` — MIT
+- `jsesc 3.1.0` — MIT
+- `json-schema-traverse 1.0.0` — MIT
+- `json5 2.2.3` — MIT
+- `kleur 3.0.3` — MIT
+- `lan-network 0.2.1` — MIT
+- `leven 3.1.0` — MIT
+- `lighthouse-logger 1.4.2` — Apache-2.0
+- `lightningcss-android-arm64 1.33.0` — MPL-2.0
+- `lightningcss-darwin-arm64 1.33.0` — MPL-2.0
+- `lightningcss-darwin-x64 1.33.0` — MPL-2.0
+- `lightningcss-freebsd-x64 1.33.0` — MPL-2.0
+- `lightningcss-linux-arm-gnueabihf 1.33.0` — MPL-2.0
+- `lightningcss-linux-arm64-gnu 1.33.0` — MPL-2.0
+- `lightningcss-linux-arm64-musl 1.33.0` — MPL-2.0
+- `lightningcss-linux-x64-gnu 1.33.0` — MPL-2.0
+- `lightningcss-linux-x64-musl 1.33.0` — MPL-2.0
+- `lightningcss-win32-arm64-msvc 1.33.0` — MPL-2.0
+- `lightningcss-win32-x64-msvc 1.33.0` — MPL-2.0
+- `lightningcss 1.33.0` — MPL-2.0
+- `lines-and-columns 1.2.4` — MIT
+- `locate-path 5.0.0` — MIT
+- `lodash.debounce 4.0.8` — MIT
+- `lodash.throttle 4.1.1` — MIT
+- `log-symbols 2.2.0` — MIT
+- `loose-envify 1.4.0` — MIT
+- `lru-cache 10.4.3` — ISC
+- `lru-cache 11.5.2` — BlueOak-1.0.0
+- `lru-cache 11.5.3` — BlueOak-1.0.0
+- `lru-cache 5.1.1` — ISC
+- `magic-string 0.30.21` — MIT
+- `makeerror 1.0.12` — BSD-3-Clause
+- `marked 18.0.11` — MIT
+- `marky 1.3.0` — Apache-2.0
+- `math-intrinsics 1.1.0` — MIT
+- `mdn-data 2.0.14` — CC0-1.0
+- `mdn-data 2.27.1` — CC0-1.0
+- `memoize-one 5.2.1` — MIT
+- `merge-stream 2.0.0` — MIT
+- `metro-babel-transformer 0.83.3` — MIT
+- `metro-babel-transformer 0.83.8` — MIT
+- `metro-cache-key 0.83.3` — MIT
+- `metro-cache-key 0.83.8` — MIT
+- `metro-cache 0.83.3` — MIT
+- `metro-cache 0.83.8` — MIT
+- `metro-config 0.83.3` — MIT
+- `metro-config 0.83.8` — MIT
+- `metro-core 0.83.3` — MIT
+- `metro-core 0.83.8` — MIT
+- `metro-file-map 0.83.3` — MIT
+- `metro-file-map 0.83.8` — MIT
+- `metro-minify-terser 0.83.3` — MIT
+- `metro-minify-terser 0.83.8` — MIT
+- `metro-resolver 0.83.3` — MIT
+- `metro-resolver 0.83.8` — MIT
+- `metro-runtime 0.83.3` — MIT
+- `metro-runtime 0.83.8` — MIT
+- `metro-source-map 0.83.3` — MIT
+- `metro-source-map 0.83.8` — MIT
+- `metro-symbolicate 0.83.3` — MIT
+- `metro-symbolicate 0.83.8` — MIT
+- `metro-transform-plugins 0.83.3` — MIT
+- `metro-transform-plugins 0.83.8` — MIT
+- `metro-transform-worker 0.83.3` — MIT
+- `metro-transform-worker 0.83.8` — MIT
+- `metro 0.83.3` — MIT
+- `metro 0.83.8` — MIT
+- `micromatch 4.0.8` — MIT
+- `mime-db 1.52.0` — MIT
+- `mime-db 1.54.0` — MIT
+- `mime-types 2.1.35` — MIT
+- `mime-types 3.0.2` — MIT
+- `mime 1.6.0` — MIT
+- `mimic-fn 1.2.0` — MIT
+- `minimatch 10.2.6` — BlueOak-1.0.0
+- `minimatch 3.1.5` — ISC
+- `minimatch 9.0.9` — ISC
+- `minimist 1.2.8` — MIT
+- `minipass 7.1.3` — BlueOak-1.0.0
+- `minizlib 3.1.0` — MIT
+- `mkdirp 1.0.4` — MIT
+- `ms 2.0.0` — MIT
+- `ms 2.1.3` — MIT
+- `mz 2.7.0` — MIT
+- `nanoid 3.3.18` — MIT
+- `negotiator 0.6.3` — MIT
+- `negotiator 0.6.4` — MIT
+- `negotiator 1.1.0` — MIT
+- `nested-error-stacks 2.0.1` — MIT
+- `node-forge 1.4.0` — (BSD-3-Clause OR GPL-2.0)
+- `node-int64 0.4.0` — MIT
+- `node-releases 2.0.54` — MIT
+- `normalize-path 3.0.0` — MIT
+- `npm-package-arg 11.0.3` — ISC
+- `nth-check 2.1.1` — BSD-2-Clause
+- `nullthrows 1.1.1` — MIT
+- `ob1 0.83.3` — MIT
+- `ob1 0.83.8` — MIT
+- `object-assign 4.1.1` — MIT
+- `object-is 1.1.6` — MIT
+- `object-keys 1.1.1` — MIT
+- `object.assign 4.1.7` — MIT
+- `obug 2.1.4` — MIT
+- `on-finished 2.3.0` — MIT
+- `on-finished 2.4.1` — MIT
+- `on-headers 1.1.0` — MIT
+- `once 1.4.0` — ISC
+- `onetime 2.0.1` — MIT
+- `open 7.4.2` — MIT
+- `open 8.4.2` — MIT
+- `ora 3.4.0` — MIT
+- `p-limit 2.3.0` — MIT
+- `p-limit 3.1.0` — MIT
+- `p-locate 4.1.0` — MIT
+- `p-try 2.2.0` — MIT
+- `parse-png 2.1.0` — MIT
+- `parse5 8.0.1` — MIT
+- `parseurl 1.3.3` — MIT
+- `path-exists 4.0.0` — MIT
+- `path-is-absolute 1.0.1` — MIT
+- `path-key 3.1.1` — MIT
+- `path-parse 1.0.7` — MIT
+- `path-scurry 2.0.2` — BlueOak-1.0.0
+- `pathe 2.0.3` — MIT
+- `picocolors 1.1.1` — ISC
+- `picomatch 2.3.2` — MIT
+- `picomatch 4.0.7` — MIT
+- `pirates 4.0.7` — MIT
+- `playwright-core 1.63.0` — Apache-2.0
+- `playwright 1.63.0` — Apache-2.0
+- `plist 3.1.1` — MIT
+- `pngjs 3.4.0` — MIT
+- `possible-typed-array-names 1.1.0` — MIT
+- `postcss 8.4.49` — MIT
+- `postcss 8.5.28` — MIT
+- `pretty-bytes 5.6.0` — MIT
+- `pretty-format 29.7.0` — MIT
+- `proc-log 4.2.0` — ISC
+- `progress 2.0.3` — MIT
+- `promise 8.3.0` — MIT
+- `prompts 2.4.2` — MIT
+- `punycode 2.3.1` — MIT
+- `qrcode-terminal 0.11.0` — Apache-2.0
+- `queue 6.0.2` — MIT
+- `range-parser 1.2.1` — MIT
+- `rc 1.2.8` — (BSD-2-Clause OR MIT OR Apache-2.0)
+- `react-devtools-core 6.1.5` — MIT
+- `react-dom 19.1.0` — MIT
+- `react-dom 19.2.8` — MIT
+- `react-is 18.3.1` — MIT
+- `react-native-is-edge-to-edge 1.3.1` — MIT
+- `react-native-marked 8.2.0` — MIT
+- `react-native-reanimated-table 0.0.2` — MIT
+- `react-native-svg 15.15.5` — MIT
+- `react-native-webview 13.15.0` — MIT
+- `react-native 0.81.5` — MIT
+- `react-refresh 0.14.2` — MIT
+- `react 19.1.0` — MIT
+- `react 19.2.8` — MIT
+- `regenerate-unicode-properties 10.2.2` — MIT
+- `regenerate 1.4.2` — MIT
+- `regenerator-runtime 0.13.11` — MIT
+- `regexpu-core 6.4.0` — MIT
+- `regjsgen 0.8.0` — MIT
+- `regjsparser 0.13.2` — BSD-2-Clause
+- `require-directory 2.1.1` — MIT
+- `require-from-string 2.0.2` — MIT
+- `requireg 0.2.2` — MIT
+- `resolve-from 5.0.0` — MIT
+- `resolve-workspace-root 2.0.1` — MIT
+- `resolve.exports 2.0.3` — MIT
+- `resolve 1.22.12` — MIT
+- `resolve 1.7.1` — MIT
+- `restore-cursor 2.0.0` — MIT
+- `rimraf 3.0.2` — ISC
+- `rolldown 1.2.7` — MIT
+- `safe-buffer 5.2.1` — MIT
+- `safe-regex-test 1.1.0` — MIT
+- `sax 1.6.1` — BlueOak-1.0.0
+- `saxes 6.0.0` — ISC
+- `scheduler 0.26.0` — MIT
+- `scheduler 0.27.0` — MIT
+- `semver 6.3.1` — ISC
+- `semver 7.8.5` — ISC
+- `send 0.19.2` — MIT
+- `serialize-error 2.1.0` — MIT
+- `serve-static 1.16.3` — MIT
+- `set-function-length 1.2.2` — MIT
+- `setprototypeof 1.2.0` — ISC
+- `shebang-command 2.0.0` — MIT
+- `shebang-regex 3.0.0` — MIT
+- `shell-quote 1.10.0` — MIT
+- `siginfo 2.0.0` — ISC
+- `signal-exit 3.0.7` — ISC
+- `simple-plist 1.3.1` — MIT
+- `sisteransi 1.0.5` — MIT
+- `slash 3.0.0` — MIT
+- `slugify 1.6.9` — MIT
+- `source-map-js 1.2.1` — BSD-3-Clause
+- `source-map-support 0.5.21` — MIT
+- `source-map 0.5.7` — BSD-3-Clause
+- `source-map 0.6.1` — BSD-3-Clause
+- `sprintf-js 1.0.3` — BSD-3-Clause
+- `stack-utils 2.0.6` — MIT
+- `stackback 0.0.2` — MIT
+- `stackframe 1.3.4` — MIT
+- `stacktrace-parser 0.1.11` — MIT
+- `statuses 1.5.0` — MIT
+- `statuses 2.0.2` — MIT
+- `std-env 4.2.0` — MIT
+- `stream-buffers 2.2.0` — Unlicense
+- `string-width 4.2.3` — MIT
+- `strip-ansi 5.2.0` — MIT
+- `strip-ansi 6.0.1` — MIT
+- `strip-json-comments 2.0.1` — MIT
+- `structured-headers 0.4.1` — MIT
+- `sucrase 3.35.1` — MIT
+- `supports-color 5.5.0` — MIT
+- `supports-color 7.2.0` — MIT
+- `supports-color 8.1.1` — MIT
+- `supports-hyperlinks 2.3.0` — MIT
+- `supports-preserve-symlinks-flag 1.0.0` — MIT
+- `svg-parser 2.1.0` — MIT
+- `tar 7.5.22` — BlueOak-1.0.0
+- `terminal-link 2.1.1` — MIT
+- `terser 5.51.2` — BSD-2-Clause
+- `test-exclude 6.0.0` — ISC
+- `thenify-all 1.6.0` — MIT
+- `thenify 3.3.1` — MIT
+- `throat 5.0.0` — MIT
+- `tinybench 2.9.0` — MIT
+- `tinyexec 1.3.1` — MIT
+- `tinyglobby 0.2.17` — MIT
+- `tinyrainbow 3.1.1` — MIT
+- `tldts-core 7.4.16` — MIT
+- `tldts 7.4.16` — MIT
+- `tmpl 1.0.5` — BSD-3-Clause
+- `to-regex-range 5.0.1` — MIT
+- `toidentifier 1.0.1` — MIT
+- `tough-cookie 6.0.2` — BSD-3-Clause
+- `tr46 6.0.0` — MIT
+- `ts-interface-checker 0.1.13` — Apache-2.0
+- `type-detect 4.0.8` — MIT
+- `type-fest 0.21.3` — (MIT OR CC0-1.0)
+- `type-fest 0.7.1` — (MIT OR CC0-1.0)
+- `typescript 5.4.5` — Apache-2.0
+- `typescript 5.9.3` — Apache-2.0
+- `typescript 7.0.2` — Apache-2.0
+- `ua-parser-js 0.7.41` — MIT
+- `undici-types 8.3.0` — MIT
+- `undici 6.28.1` — MIT
+- `undici 8.11.2` — MIT
+- `unicode-canonical-property-names-ecmascript 2.0.1` — MIT
+- `unicode-match-property-ecmascript 2.0.0` — MIT
+- `unicode-match-property-value-ecmascript 2.2.1` — MIT
+- `unicode-property-aliases-ecmascript 2.2.0` — MIT
+- `unpipe 1.0.0` — MIT
+- `update-browserslist-db 1.3.2` — MIT
+- `util 0.12.5` — MIT
+- `utils-merge 1.0.1` — MIT
+- `uuid 7.0.3` — MIT
+- `validate-npm-package-name 5.0.1` — ISC
+- `vary 1.1.2` — MIT
+- `vite 8.2.2` — MIT
+- `vitest 4.1.11` — MIT
+- `vlq 1.0.1` — MIT
+- `w3c-xmlserializer 6.0.0` — MIT
+- `walker 1.0.8` — Apache-2.0
+- `wcwidth 1.0.1` — MIT
+- `webidl-conversions 5.0.0` — BSD-2-Clause
+- `webidl-conversions 8.0.1` — BSD-2-Clause
+- `whatwg-fetch 3.6.20` — MIT
+- `whatwg-mimetype 5.0.0` — MIT
+- `whatwg-url-without-unicode 8.0.0-3` — MIT
+- `whatwg-url 16.0.1` — MIT
+- `whatwg-url 17.1.2` — MIT
+- `which-typed-array 1.1.22` — MIT
+- `which 2.0.2` — ISC
+- `why-is-node-running 2.3.0` — MIT
+- `wonka 6.3.6` — MIT
+- `wrap-ansi 7.0.0` — MIT
+- `wrappy 1.0.2` — ISC
+- `write-file-atomic 4.0.2` — ISC
+- `ws 6.2.6` — MIT
+- `ws 7.5.13` — MIT
+- `ws 8.21.3` — MIT
+- `xcode 3.0.1` — Apache-2.0
+- `xml-name-validator 5.0.0` — Apache-2.0
+- `xml2js 0.6.0` — MIT
+- `xmlbuilder 11.0.1` — MIT
+- `xmlbuilder 15.1.1` — MIT
+- `xmlchars 2.2.0` — MIT
+- `y18n 5.0.8` — ISC
+- `yallist 3.1.1` — ISC
+- `yallist 5.0.0` — BlueOak-1.0.0
+- `yaml 2.9.0` — ISC
+- `yargs-parser 21.1.1` — ISC
+- `yargs 17.7.3` — MIT
+- `yocto-queue 0.1.0` — MIT
+</details>

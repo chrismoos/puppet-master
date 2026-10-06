@@ -1,0 +1,85 @@
+Puppet Master
+Copyright (c) 2026 Chris Moos
+
+This product is licensed under the MIT License. See LICENSE.
+
+It is distributed as binaries that statically link third-party Rust crates and
+embed a built web bundle, so the licenses of both travel with every release.
+The full resolved inventory is in licenses/THIRD-PARTY.md, regenerated from the
+lockfiles by `make licenses`. What follows is only what places an obligation
+beyond including a copyright notice and a permission notice.
+
+Build-time tooling is deliberately absent from that inventory. Most of this
+project's npm dependency count is Vite, Playwright, Expo and Metro, none of
+which is distributed, so their licenses place no obligation on the binaries.
+What ships from the npm side is nine packages.
+
+--------------------------------------------------------------------------------
+SIL Open Font License 1.1
+--------------------------------------------------------------------------------
+
+The binaries embed JetBrains Mono, used as the terminal and monospace typeface,
+and Inter, used as the interface typeface of the Graphite and Studio themes.
+
+  Copyright 2020 The JetBrains Mono Project Authors
+  Copyright 2016 The Inter Project Authors
+
+  This Font Software is licensed under the SIL Open Font License, Version 1.1.
+  The full license text is in licenses/OFL-1.1.txt.
+
+The fonts are distributed unmodified and are not sold on their own. Reserved
+Font Names are not used in any derivative, because no derivative is made.
+
+--------------------------------------------------------------------------------
+Mozilla Public License 2.0
+--------------------------------------------------------------------------------
+
+Two crates compiled into the binaries are under the MPL-2.0:
+
+  option-ext 0.2.0
+  uluru 3.1.0
+
+Both are used unmodified, as published to the crates.io registry at exactly
+those versions, which is where their source form may be obtained. No file
+covered by the MPL has been altered, so there is no modified source to publish.
+The full license text is in licenses/MPL-2.0.txt.
+
+lightningcss is also MPL-2.0 but is a build-time dependency of Vite and is not
+distributed, so it is not listed here.
+
+--------------------------------------------------------------------------------
+Apache License 2.0
+--------------------------------------------------------------------------------
+
+Eleven crates compiled into the binaries are offered under the Apache-2.0 alone
+rather than as a choice including MIT:
+
+  alacritty_terminal 0.26.0   miette 7.6.0          prost-derive 0.13.5
+  gix-imara-diff 0.2.5        miette-derive 7.6.0   prost-types 0.13.5
+  similar 2.7.0               prost 0.13.5          sync_wrapper 1.0.2
+  unicode-bom 2.0.3           prost-build 0.13.5
+
+None of them ships a NOTICE file of its own, so there is no upstream notice
+text to reproduce here. None is modified. The full license text is in
+licenses/APACHE-2.0.txt.
+
+Many further crates are offered under a choice that includes Apache-2.0; they
+are taken under the MIT option and need no separate notice.
+
+--------------------------------------------------------------------------------
+Dual-licensed packages, and the option taken
+--------------------------------------------------------------------------------
+
+  node-forge              BSD-3-Clause OR GPL-2.0, taken under BSD-3-Clause
+  webpki-roots 1.0.9      CDLA-Permissive-2.0, which permits redistribution of
+                          the certificate data it carries
+
+--------------------------------------------------------------------------------
+Everything else
+--------------------------------------------------------------------------------
+
+The remaining crates and packages are under MIT, BSD-2-Clause, BSD-3-Clause,
+ISC, Zlib, Unicode-3.0, Unlicense, CC0-1.0, MIT-0 or BSL-1.0, each of which is
+satisfied by reproducing its copyright and permission notice. Those notices
+travel in each package's own source, and the per-package license is recorded in
+licenses/THIRD-PARTY.md.

@@ -1,0 +1,94 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pm",
+    "crates/pm-protocol",
+    "crates/pm-daemon",
+    "crates/pm-push",
+    "crates/pm-pushgw",
+    "crates/pm-client",
+    "crates/pm-adapters",
+    "crates/pm-tui",
+    "crates/pm-tls",
+]
+
+[workspace.package]
+version = "0.10.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+prost = "0.13"
+prost-build = "0.13"
+protox = "0.7"
+bytes = "1"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+portable-pty = "0.8"
+axum = { version = "0.8", features = ["ws"] }
+rust-embed = "8"
+argon2 = "0.5"
+rand = "0.8"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+mime_guess = "2"
+similar = "2"
+gix = { version = "0.87", default-features = false, features = ["max-performance-safe", "sha1", "basic", "revision", "blob-diff", "status", "dirwalk", "excludes"] }
+clap = { version = "4", features = ["derive", "env"] }
+crossterm = "0.28"
+ratatui = "0.29"
+directories = "5"
+futures = "0.3"
+libc = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
+jsonwebtoken = "9"
+chacha20poly1305 = "0.10"
+async-trait = "0.1.92"
+
+pm-protocol = { path = "crates/pm-protocol" }
+pm-daemon = { path = "crates/pm-daemon" }
+pm-pushgw = { path = "crates/pm-pushgw" }
+pm-client = { path = "crates/pm-client" }
+pm-adapters = { path = "crates/pm-adapters" }
+pm-tui = { path = "crates/pm-tui" }
+pm-tls = { path = "crates/pm-tls" }
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# The browser lanes run the binary the release build produces, optimized the
+# same way, and skip only link-time optimization so a rebuild between specs
+# stays cheap. Line tables keep a panic backtrace readable.
+#
+# Debug assertions stay on, and not for the assertions: rust-embed serves
+# web/dist from the worktree when they are enabled, so a web-only change needs
+# no Rust rebuild. Turning them off would embed the bundle at build time.
+[profile.e2e]
+inherits = "release"
+lto = false
+strip = false
+debug = "line-tables-only"
+debug-assertions = true
+split-debuginfo = "unpacked"
+
+# Backtraces point at workspace code, so dependencies carry no debug info.
+[profile.e2e.package."*"]
+debug = false
+
+# Faster edit-test loop: line tables keep panic backtraces readable
+# without full debuginfo's compile and link cost.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

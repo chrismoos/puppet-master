@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Puppet Master — Color mark for dark backgrounds</title>
+  <desc id="desc">Articulated Operator standalone logo mark.</desc>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M44 42 128 16l84 26v14l-84-24-84 24Z" fill="#3D9BFF" stroke="none"/>
+    <path d="M64 49 72 104M192 49l-8 55" stroke="#3D9BFF" stroke-width="6"/>
+    <rect x="104" y="55" width="48" height="42" rx="8" fill="#F4F7FB" stroke="none"/>
+    <rect x="82" y="104" width="92" height="64" rx="11" fill="#F4F7FB" stroke="none"/>
+    <path d="m111 130 17 15 17-15" stroke="#3D9BFF" stroke-width="7"/>
+    <circle cx="72" cy="116" r="10" stroke="#F4F7FB" stroke-width="7"/>
+    <circle cx="184" cy="116" r="10" stroke="#F4F7FB" stroke-width="7"/>
+    <path d="m64 125-22 29-15 27M192 125l22 29 15 27" stroke="#F4F7FB" stroke-width="16"/>
+    <circle cx="42" cy="154" r="6" fill="#3D9BFF" stroke="none"/>
+    <circle cx="214" cy="154" r="6" fill="#3D9BFF" stroke="none"/>
+    <circle cx="27" cy="181" r="9" stroke="#F4F7FB" stroke-width="7"/>
+    <circle cx="229" cy="181" r="9" stroke="#F4F7FB" stroke-width="7"/>
+    <rect x="18" y="194" width="19" height="13" rx="4" fill="#F4F7FB" stroke="none"/>
+    <rect x="219" y="194" width="19" height="13" rx="4" fill="#F4F7FB" stroke="none"/>
+    <path d="M95 175h66l-11 19h-44Z" fill="#F4F7FB" stroke="none"/>
+    <circle cx="105" cy="187" r="9" stroke="#F4F7FB" stroke-width="7"/>
+    <circle cx="151" cy="187" r="9" stroke="#F4F7FB" stroke-width="7"/>
+    <path d="m103 197-12 27v14H72M153 197l12 27v14h19" stroke="#F4F7FB" stroke-width="17"/>
+    <circle cx="94" cy="220" r="6" fill="#3D9BFF" stroke="none"/>
+    <circle cx="162" cy="220" r="6" fill="#3D9BFF" stroke="none"/>
+  </g>
+</svg>

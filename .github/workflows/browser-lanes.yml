@@ -1,0 +1,97 @@
+name: browser lanes
+
+# Read-only by default; see ci.yml.
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Browser lane to run
+        required: true
+        type: choice
+        default: integration
+        options:
+          - integration
+          - terminal-heavy
+          - performance
+
+concurrency:
+  group: puppet-master-browser-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    if: github.event_name != 'workflow_dispatch' || inputs.lane == 'integration'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: sh scripts/ci-rust.sh
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+      - run: make e2e-integration
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-integration-results
+          path: web/test-results
+          if-no-files-found: ignore
+
+  performance:
+    if: github.event_name == 'workflow_dispatch' && inputs.lane == 'performance'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: sh scripts/ci-rust.sh
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+      - run: make e2e-performance
+
+  terminal-heavy:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.lane == 'terminal-heavy')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: sh scripts/ci-rust.sh
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+      - run: make e2e-terminal-heavy
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-terminal-heavy-results
+          path: web/test-results
+          if-no-files-found: ignore

@@ -1,0 +1,17 @@
+[package]
+name = "pm-tls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+subtle = "2"
+hmac = "0.12"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-native-certs = "0.8"
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+x509-parser = "0.16"

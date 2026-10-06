@@ -1,0 +1,11 @@
+.expo/
+# Anchored: these name the directories `expo prebuild` generates here, not
+# every directory called ios or android. Unanchored, they also matched a
+# config plugin's own Swift and Kotlin sources under plugins/*/ios/, which
+# git then refused to track and prebuild failed on for anyone who did not
+# have the untracked copies.
+/ios/
+/android/
+terminal-web/dist/
+src/terminal/gen/
+.uitest-env/
