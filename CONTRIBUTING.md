@@ -112,6 +112,8 @@ it only around the interaction and idle timer checks. Advance rendering frames
 before checking the thumb, then resume the clock for unrelated work. Terminal
 switch tests sample completed render events because synchronized output can
 change the buffer while the previous screen remains painted.
+Wait for terminal selection and its initial focus transfer before testing
+keyboard navigation elsewhere on the page.
 
 `make e2e-terminal-heavy` covers terminal lifecycle, replay and high-volume
 scrollback. `make e2e-performance` is the only lane that produces release

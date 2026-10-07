@@ -258,6 +258,7 @@ test("role explanation belongs only to direct icon hover, focus, and touch", asy
 
     await row.click({ position: { x: box.width - 6, y: 4 } });
     await expect(row).toHaveAttribute("aria-current", "page");
+    await expect(page.locator('.term-layer[style*="visibility: visible"] .xterm-helper-textarea')).toBeFocused();
     await expect(tooltip).toHaveCSS("opacity", "0");
 
     await row.locator(".sb-session-title").click();
