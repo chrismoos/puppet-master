@@ -2499,7 +2499,11 @@ async fn run_hook(socket: &Target, kind: &str, agent: Option<&str>) -> anyhow::R
     }
 
     let detail = if kind == pm_protocol::domain::HookKind::TurnFailed {
-        field(&["error"])
+        if field(&["hook_event_name"]) == "Interrupt" {
+            "interrupted by user".to_string()
+        } else {
+            field(&["error"])
+        }
     } else {
         field(&["message"])
     };

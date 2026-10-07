@@ -72,7 +72,7 @@ async fn pm_hook_binary_flips_session_state() {
                 .env("PM_SOCKET", &socket)
                 .env("PM_SESSION_TOKEN", &token)
                 .stdin(Stdio::piped())
-                .stdout(Stdio::null())
+                .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
@@ -93,6 +93,7 @@ async fn pm_hook_binary_flips_session_state() {
                 "pm _hook failed: {}",
                 String::from_utf8_lossy(&out.stderr)
             );
+            out.stdout
         }
     };
 
@@ -139,6 +140,38 @@ async fn pm_hook_binary_flips_session_state() {
         .unwrap();
     assert_eq!(session.state, SessionState::Idle);
     assert_eq!(session.state_detail, "rate_limit");
+
+    run_hook("prompt-submitted", "").await;
+    assert_eq!(
+        daemon
+            .subscribe()
+            .0
+            .sessions
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .unwrap()
+            .state,
+        SessionState::Working
+    );
+    let output = run_hook(
+        "turn-failed",
+        r#"{"hook_event_name":"Interrupt","session_id":"codex-interrupted","turn_id":"turn-canceled"}"#,
+    )
+    .await;
+    assert!(output.is_empty());
+    let session = daemon
+        .subscribe()
+        .0
+        .sessions
+        .into_iter()
+        .find(|s| s.id == session_id)
+        .unwrap();
+    assert_eq!(session.state, SessionState::Idle);
+    assert_eq!(session.state_detail, "interrupted by user");
+    assert_eq!(
+        session.agent_session_id.as_deref(),
+        Some("codex-interrupted")
+    );
 }
 
 /// Emulates how agent CLIs execute lifecycle hooks: the command string

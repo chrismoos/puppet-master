@@ -876,22 +876,25 @@ impl ClaudeCodeAdapter {
 
 pub struct CodexAdapter;
 
+const CODEX_INTERRUPT_HOOK_TIMEOUT_SECONDS: u64 = 3;
+
 /// Codex's lifecycle hooks share Claude's schema and payload shape
 /// (session_id, transcript_path, hook_event_name), so the same
 /// `pm _hook` receiver serves both. Hooks are injected as inline TOML
 /// config overrides rather than a settings file.
 impl CodexAdapter {
     fn hook_override(pm_exe: &std::path::Path, event: &str, kind: &str) -> String {
+        let timeout = if event == "Interrupt" {
+            format!(",timeout={CODEX_INTERRUPT_HOOK_TIMEOUT_SECONDS}")
+        } else {
+            String::new()
+        };
         format!(
-            "hooks.{event}=[{{hooks=[{{type=\"command\",command={}}}]}}]",
+            "hooks.{event}=[{{hooks=[{{type=\"command\",command={}{timeout}}}]}}]",
             toml_string(&hook_shell_command(pm_exe, kind))
         )
     }
 
-    /// The `-c` config overrides shared by spawn and resume: MCP
-    /// reporting server (when the HTTP surface is up) plus the three
-    /// lifecycle hooks. Codex reads the bearer token from the injected
-    /// PM_SESSION_TOKEN env var.
     fn config_args(&self, ctx: &SpawnCtx) -> Result<Vec<String>, AdapterError> {
         let pm_exe = &ctx.integration.pm_exe;
         let mut config = Vec::new();
@@ -921,6 +924,7 @@ impl CodexAdapter {
         }
         config.push(Self::hook_override(pm_exe, "SessionStart", "session-start"));
         config.push(Self::hook_override(pm_exe, "Stop", "turn-ended"));
+        config.push(Self::hook_override(pm_exe, "Interrupt", "turn-failed"));
         config.push(Self::hook_override(pm_exe, "Notification", "needs-input"));
         config.push(Self::hook_override(
             pm_exe,
@@ -2757,6 +2761,7 @@ mod tests {
         );
         for (event, kind) in [
             ("Stop", "turn-ended"),
+            ("Interrupt", "turn-failed"),
             ("Notification", "needs-input"),
             ("UserPromptSubmit", "prompt-submitted"),
         ] {
@@ -2790,6 +2795,7 @@ mod tests {
             .spec;
         assert!(config_value(&spec.args, "mcp_servers").is_none());
         assert!(config_value(&spec.args, "hooks.Stop=").is_some());
+        assert!(config_value(&spec.args, "hooks.Interrupt=").is_some());
         assert_eq!(spec.args.last().unwrap(), "fix the tests");
     }
 
@@ -2806,6 +2812,9 @@ mod tests {
         assert!(plan.spec.args[..resume_at]
             .iter()
             .any(|a| a == "--dangerously-bypass-hook-trust"));
+        let hook = config_value(&plan.spec.args, "hooks.Interrupt=").unwrap();
+        assert!(hook.contains("_hook turn-failed"));
+        assert!(hook.contains(&format!("timeout={CODEX_INTERRUPT_HOOK_TIMEOUT_SECONDS}")));
         assert_eq!(plan.agent_session_id.as_deref(), Some("uuid-9"));
     }
 
