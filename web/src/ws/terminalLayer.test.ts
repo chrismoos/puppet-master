@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyMeasuredFit, deliverLayerFrame, isInitialSnapshotFrame, showLayer } from "./terminalLayer";
+import { applyMeasuredFit, deliverLayerFrame, isInitialSnapshotFrame, showLayer, waitForTerminalRender } from "./terminalLayer";
 
 describe("hidden layers", () => {
   it("keep parsing every frame into the emulator when sizes already match", () => {
@@ -155,5 +155,52 @@ describe("applyMeasuredFit", () => {
     expect(applyMeasuredFit(term, { cols: 140, rows: 40 }, true)).toBe("unchanged");
     expect(resize).not.toHaveBeenCalled();
     expect(reset).not.toHaveBeenCalled();
+  });
+});
+
+describe("waitForTerminalRender", () => {
+  it("waits for a ready render and reveals only once", () => {
+    let ready = false;
+    let onRender: (() => void) | undefined;
+    const dispose = vi.fn();
+    const term = {
+      rows: 24,
+      refresh: vi.fn(),
+      onRender: vi.fn((listener: () => void) => {
+        onRender = listener;
+        return { dispose };
+      }),
+    };
+    const rendered = vi.fn();
+    waitForTerminalRender(term, () => ready, rendered);
+    expect(term.refresh).toHaveBeenCalledWith(0, term.rows - 1);
+    expect(rendered).not.toHaveBeenCalled();
+    onRender?.();
+    expect(rendered).not.toHaveBeenCalled();
+    ready = true;
+    onRender?.();
+    onRender?.();
+    expect(rendered).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a pending reveal when its terminal is disposed", () => {
+    let onRender: (() => void) | undefined;
+    const dispose = vi.fn();
+    const term = {
+      rows: 24,
+      refresh: vi.fn(),
+      onRender: (listener: () => void) => {
+        onRender = listener;
+        return { dispose };
+      },
+    };
+    const rendered = vi.fn();
+    const pending = waitForTerminalRender(term, () => true, rendered);
+    pending.dispose();
+    pending.dispose();
+    onRender?.();
+    expect(rendered).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });

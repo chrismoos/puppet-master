@@ -81,7 +81,7 @@ async function visibleLayerKey(page: Page): Promise<string> {
   });
 }
 
-test("claudestream survives a reload without a window resize", async ({ page }) => {
+async function verifyClaudeReload(page: Page, frames: number): Promise<void> {
   await logIn(page);
   const sessions = page.locator(".sb-session");
   await expect(sessions.nth(0)).toBeVisible();
@@ -90,7 +90,7 @@ test("claudestream survives a reload without a window resize", async ({ page }) 
 
   const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
   await textarea.focus();
-  await page.keyboard.type(`claudestream ${HISTORY_LINES} ${FRAMES} ${FRAME_DELAY_MS} ${LINE_LEN}`);
+  await page.keyboard.type(`claudestream ${HISTORY_LINES} ${frames} ${FRAME_DELAY_MS} ${LINE_LEN}`);
   await page.keyboard.press("Enter");
 
   const key = await visibleLayerKey(page);
@@ -99,6 +99,10 @@ test("claudestream survives a reload without a window resize", async ({ page }) 
     .poll(async () => historyNumbers((await visibleScreen(page, key)).rows).length, { timeout: 20_000 })
     .toBeGreaterThan(3);
 
+  if (frames === 1) {
+    await expect.poll(async () => (await visibleScreen(page, key)).rows.join("\n"))
+      .toContain("CLAUDE-STREAM-DONE");
+  }
   const before = historyNumbers((await visibleScreen(page, key)).rows);
   await page.reload();
   await expect(page.locator(".xterm")).toBeVisible();
@@ -159,7 +163,13 @@ test("claudestream survives a reload without a window resize", async ({ page }) 
     spuriousWraps(grown),
     `post-paint wider fit wrapped snapshot cells (cols ${colsBeforeGrow} -> ${grown.cols}):\n${grown.rows.join("\n")}`,
   ).toEqual([]);
-});
+}
+
+for (const frames of [1, FRAMES]) {
+  test(`${frames === 1 ? "completed" : "streaming"} claudestream survives a reload without a window resize`, async ({ page }) => {
+    await verifyClaudeReload(page, frames);
+  });
+}
 
 test("syncout survives a reload without a window resize", async ({ page }) => {
   await logIn(page);

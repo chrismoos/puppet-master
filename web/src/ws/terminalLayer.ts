@@ -59,3 +59,31 @@ export function applyMeasuredFit(
   term.resize(measured.cols, measured.rows);
   return "reset";
 }
+
+export interface RenderTerminal {
+  rows: number;
+  refresh(start: number, end: number): void;
+  onRender(listener: () => void): { dispose(): void };
+}
+
+export function waitForTerminalRender(
+  term: RenderTerminal,
+  ready: () => boolean,
+  rendered: () => void,
+): { dispose(): void } {
+  let disposed = false;
+  const listener = term.onRender(() => {
+    if (disposed || !ready()) return;
+    disposed = true;
+    listener.dispose();
+    rendered();
+  });
+  term.refresh(0, term.rows - 1);
+  return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      listener.dispose();
+    },
+  };
+}

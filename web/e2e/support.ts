@@ -3,6 +3,13 @@ import { expect, type Locator, type Page } from "@playwright/test";
 export const USERNAME = "browser-e2e";
 export const PASSWORD = "browser-e2e-password";
 
+const CLOCK_OFFSET_MS = 60_000;
+export const SCROLL_RENDER_MS = 100;
+
+export async function installScrollbarClock(page: Page): Promise<void> {
+  await page.clock.install({ time: Date.now() - CLOCK_OFFSET_MS });
+}
+
 export async function logIn(page: Page, options: { minimumSessions?: number } = {}): Promise<void> {
   await page.goto(process.env.PM_E2E_BASE_URL!);
   const create = page.getByRole("button", { name: "create user" });

@@ -11,7 +11,7 @@ import { isRealPaneFit, measureFit, spawnGeometry, type TerminalGeometry } from 
 import { collectXtermDebug, type TerminalLayerDebug } from "./terminalDiagnostics";
 import { wireViewerSize, type ViewerSizeController } from "@puppet-master/client-core/ws/terminalRepaint";
 import { applyEchoedPtySize } from "@puppet-master/client-core/ws/terminalResize";
-import { applyMeasuredFit, deliverLayerFrame, isInitialSnapshotFrame, showLayer } from "./terminalLayer";
+import { applyMeasuredFit, deliverLayerFrame, isInitialSnapshotFrame, showLayer, waitForTerminalRender } from "./terminalLayer";
 import { wireTransientTerminalScrollbar } from "./terminalScrollbar";
 import { TerminalClipboard } from "./terminalClipboard";
 import { registerForegroundCommandHandler, wireTerminalClipboard } from "./terminalHostWiring";
@@ -75,6 +75,7 @@ interface Layer {
   settlingFit: TerminalSize | null;
   settleTimer: ReturnType<typeof setTimeout> | null;
   revealTimeout: ReturnType<typeof setTimeout> | null;
+  revealRender: { dispose(): void } | null;
 }
 
 type TerminalCommandListener = (terminalId: bigint, command: string) => void;
@@ -87,9 +88,8 @@ type TerminalCommandListener = (terminalId: bigint, command: string) => void;
  */
 let activeStage: TerminalStage | null = null;
 
-/** How long a switch keeps the previous screen while the next one waits for
- * a snapshot at the pane's size, before showing it as it is. */
-const SWAP_FALLBACK_MS = 2_000;
+const SWAP_RECHECK_MS = 2_000;
+const INITIAL_RECHECK_MS = 250;
 /** How long a dragged window's size must hold before it is sent. */
 const WIDTH_SETTLE_MS = 100;
 const ACK_BATCH_BYTES = 4 * 1024;
@@ -268,8 +268,8 @@ export class TerminalStage {
       if (layer.revealTimeout === null) {
         layer.revealTimeout = setTimeout(() => {
           layer.revealTimeout = null;
-          this.revealPendingLayer(layer, layer.swapPending);
-        }, layer.swapPending ? SWAP_FALLBACK_MS : 250);
+          this.revealPendingLayer(layer);
+        }, layer.swapPending ? SWAP_RECHECK_MS : INITIAL_RECHECK_MS);
       }
       this.evict();
       return;
@@ -402,6 +402,7 @@ export class TerminalStage {
       settlingFit: null,
       settleTimer: null,
       revealTimeout: null,
+      revealRender: null,
       disposers: [
         () => sizePrompt.dispose(),
         () => dataSub.dispose(),
@@ -478,7 +479,7 @@ export class TerminalStage {
           layer.pendingWrites -= 1;
           layer.replayPainted = true;
           if (layer.initialReplayPending || (layer.swapPending && frame.replay)) {
-            this.revealPendingLayer(layer, layer.swapPending);
+            this.revealPendingLayer(layer);
           }
           if (!frame.replay) this.acknowledgeParsed(layer, frame.data.byteLength);
         },
@@ -789,7 +790,25 @@ export class TerminalStage {
 
   private revealPendingLayer(layer: Layer, force = false): void {
     if (!layer.initialReplayPending && !layer.swapPending) return;
-    if (!force && !layer.replayPainted) return;
+    if (force) {
+      layer.revealRender?.dispose();
+      layer.revealRender = null;
+      this.finishLayerReveal(layer);
+      return;
+    }
+    if (!layer.replayPainted || layer.pendingFit || layer.pendingWrites > 0) return;
+    if (layer.revealRender) return;
+    layer.revealRender = waitForTerminalRender(
+      layer.term,
+      () => !layer.pendingFit && layer.pendingWrites === 0 && !layer.term.modes.synchronizedOutputMode,
+      () => {
+        layer.revealRender = null;
+        this.finishLayerReveal(layer);
+      },
+    );
+  }
+
+  private finishLayerReveal(layer: Layer): void {
     layer.initialReplayPending = false;
     layer.swapPending = false;
     if (layer.revealTimeout !== null) {
@@ -829,6 +848,7 @@ export class TerminalStage {
       clearTimeout(layer.revealTimeout);
       layer.revealTimeout = null;
     }
+    layer.revealRender?.dispose();
     this.layers.delete(key);
     for (const dispose of layer.disposers) dispose();
     layer.handle?.close();

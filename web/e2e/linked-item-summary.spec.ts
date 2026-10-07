@@ -22,6 +22,7 @@ test("actual session rows show, resize, and internally route linked items", asyn
   await page.goto(`${process.env.PM_E2E_BASE_URL!}/#/bucket/1/item/${itemId}`);
   await expect(page.getByLabel("item title")).toHaveValue(LONG_TITLE);
   await page.getByRole("button", { name: "spawn session" }).click();
+  await page.locator(".modal").getByRole("combobox", { name: /^agent/ }).selectOption("codex");
   await page.locator(".modal").getByRole("button", { name: "spawn", exact: true }).click();
   await expect(page).toHaveURL(/#\/session\/\d+$/);
   const sessionId = page.url().match(/#\/session\/(\d+)$/)?.[1];

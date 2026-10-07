@@ -161,6 +161,8 @@ test("remote cwd override directs one Supervisor spawn and leaves the project de
   await pop.locator('[data-chip="role"]').click();
   await page.getByRole("menuitemradio", { name: "worker", exact: true }).click();
   await expect(pop).toContainText("worker in");
+  await pop.locator('[data-chip="agent"]').click();
+  await page.getByRole("menuitemradio", { name: "Codex", exact: true }).click();
   await pop.getByRole("button", { name: /permissions, profile, directory/ }).click();
   await expect(pop.locator(".dirpicker input")).toHaveValue(projectPath);
   const title = pop.getByLabel("title (optional)");
@@ -185,6 +187,8 @@ test("remote cwd override directs one Supervisor spawn and leaves the project de
   await pop.getByRole("button", { name: /permissions, profile, directory/ }).click();
   await pop.locator(".dirpicker input").fill(isolatedDaemon.explicitCwd);
   await pop.getByLabel("title (optional)").fill("remote supervisor override");
+  await pop.locator('[data-chip="agent"]').click();
+  await page.getByRole("menuitemradio", { name: "Codex", exact: true }).click();
   await pop.getByRole("button", { name: "spawn", exact: true }).click();
   await expect.poll(() => isolatedDaemon.session("remote supervisor override")).toMatchObject({
     cwd: isolatedDaemon.explicitCwd,

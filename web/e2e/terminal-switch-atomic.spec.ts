@@ -1,12 +1,6 @@
 import { expect, test, type Page } from "./fixtures";
 import { logIn } from "./support";
 
-// Switching sessions must replace one finished screen with another. A session
-// whose snapshot is still on its way, or one that has to be redrawn at a new
-// size, used to show up empty, or at its old size, and then fill in. Only a
-// real browser shows this, and only per animation frame: the sampler records
-// what is on screen every frame across the switch.
-
 const HISTORY_LINES = 3_000;
 const LINE_LEN = 120;
 
@@ -18,13 +12,21 @@ interface Sample {
 interface StageWindow extends Window {
   __switchSamples: Sample[];
   __switchSampling: boolean;
+  __switchRenderListeners: Array<{ dispose(): void }>;
   __pmStage: {
     layers: Map<string, {
       el: HTMLElement;
       replayPainted: boolean;
       initialReplayPending: boolean;
       swapPending: boolean;
-      term: { cols: number; rows: number; buffer: { active: { length: number } } };
+      term: {
+        cols: number;
+        rows: number;
+        buffer: { active: { length: number } };
+        modes: { synchronizedOutputMode: boolean };
+        onRender(listener: () => void): { dispose(): void };
+        refresh(start: number, end: number): void;
+      };
     }>;
   };
 }
@@ -60,16 +62,37 @@ async function startSampling(page: Page): Promise<void> {
     const w = window as unknown as StageWindow;
     w.__switchSamples = [];
     w.__switchSampling = true;
+    const rendered = new Map<string, Omit<Sample["layers"][string], "painted">>();
+    const record = (key: string) => {
+      const layer = w.__pmStage.layers.get(key)!;
+      if (layer.term.modes.synchronizedOutputMode) return;
+      rendered.set(key, {
+        lines: layer.term.buffer.active.length,
+        cols: layer.term.cols,
+        rows: layer.term.rows,
+      });
+    };
+    w.__switchRenderListeners = [];
+    for (const [key, layer] of w.__pmStage.layers) {
+      record(key);
+      // Synchronized output changes the buffer before those cells are painted.
+      w.__switchRenderListeners.push(layer.term.onRender(() => record(key)));
+    }
+    const observed = new Set(w.__pmStage.layers.keys());
     const tick = () => {
       if (!w.__switchSampling) return;
       const sample: Sample = { onScreen: [], layers: {} };
       for (const [key, layer] of w.__pmStage.layers) {
+        if (!observed.has(key)) {
+          observed.add(key);
+          w.__switchRenderListeners.push(layer.term.onRender(() => record(key)));
+          layer.term.refresh(0, layer.term.rows - 1);
+        }
         if (layer.el.style.visibility === "visible") sample.onScreen.push(key);
-        sample.layers[key] = {
+        const painted = rendered.get(key);
+        if (painted) sample.layers[key] = {
+          ...painted,
           painted: layer.replayPainted && !layer.initialReplayPending && !layer.swapPending,
-          lines: layer.term.buffer.active.length,
-          cols: layer.term.cols,
-          rows: layer.term.rows,
         };
       }
       w.__switchSamples.push(sample);
@@ -83,6 +106,7 @@ async function stopSampling(page: Page): Promise<Sample[]> {
   return page.evaluate(() => {
     const w = window as unknown as StageWindow;
     w.__switchSampling = false;
+    for (const listener of w.__switchRenderListeners) listener.dispose();
     return w.__switchSamples;
   });
 }
@@ -112,11 +136,10 @@ async function switchAndSample(page: Page): Promise<{ from: string; to: string; 
   return { from, to: await visibleKey(page), samples };
 }
 
-/** Every frame shows one finished screen: the previous session, or the next
- * one exactly as it ends up. */
 function expectOneSwap(result: { from: string; to: string; samples: Sample[] }): void {
   const { from, to, samples } = result;
   const final = samples.at(-1)!.layers[to];
+  expect(final.painted).toBe(true);
   let swapped = false;
   for (const [index, sample] of samples.entries()) {
     expect(sample.onScreen, `frame ${index}`).toHaveLength(1);
@@ -152,7 +175,6 @@ test("a session whose snapshot is slow to arrive replaces the previous screen in
 
   const result = await switchAndSample(page);
   expectOneSwap(result);
-  // The previous screen stayed up while the snapshot travelled.
   expect(result.samples.filter((sample) => sample.onScreen[0] === result.from).length).toBeGreaterThan(5);
 });
 

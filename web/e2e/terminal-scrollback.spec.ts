@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { installScrollbarClock, logIn, SCROLL_RENDER_MS } from "./support";
 const LONG_OUTPUT_BYTES = 120_000;
 const SHORT_OUTPUT_BYTES = 32_000;
 const MINIMUM_SCROLLBAR_THUMB_PX = 20;
@@ -63,6 +63,7 @@ async function startOutput(page: Page, bytes: number): Promise<number> {
 }
 
 test("warm agent session switches expose each scrollback without a resize", async ({ page }) => {
+  await installScrollbarClock(page);
   await logInWithProbe(page);
   const sessions = page.locator(".sb-session");
   const workspaceTabs = page.locator(".workspace-tab");
@@ -90,13 +91,16 @@ test("warm agent session switches expose each scrollback without a resize", asyn
     .toBe(0);
   const longScreen = await longLayer.locator(".xterm-screen").boundingBox();
   if (!longScreen) throw new Error("missing long terminal screen");
+  await page.clock.pauseAt(new Date());
   await page.mouse.move(longScreen.x + longScreen.width / 2, longScreen.y + longScreen.height / 2);
   await page.mouse.wheel(0, -1_200);
+  await page.clock.runFor(SCROLL_RENDER_MS);
   await expect.poll(() => longScrollbar.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)))
     .toBe(1);
   const readingTop = await longSlider.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
   const readingHeight = await longSlider.evaluate((element) => Number.parseFloat((element as HTMLElement).style.height));
   const socketsBeforeHiddenOutput = await page.evaluate(() => structuredClone((window as MetricWindow).__scrollbackStreams));
+  await page.clock.resume();
   const hiddenOutputStart = await startOutput(page, 240_000);
   await sessions.nth(1).click();
   await expect(sessions.nth(1)).toHaveClass(/is-selected/);

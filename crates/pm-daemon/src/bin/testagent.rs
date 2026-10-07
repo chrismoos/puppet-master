@@ -396,7 +396,8 @@ fn main() {
                         }
                     });
                 }
-                writeln!(out, "OUT CLAUDE-STREAM-DONE").unwrap();
+                write!(out, "\x1b7OUT CLAUDE-STREAM-DONE\x1b8").unwrap();
+                out.flush().unwrap();
             }
             "pacedout" => {
                 let mut args = arg.split_whitespace();
