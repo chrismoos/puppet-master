@@ -26,7 +26,7 @@ interface Stream {
 
 interface ProbeWindow extends Window {
   __cacheProbe: { contexts: WebGL2RenderingContext[]; releases: number; streams: Record<string, Stream> };
-  __pmStage: { visibleId: string; layers: Map<string, {
+  __pmStage?: { visibleId: string; layers: Map<string, {
     el: HTMLElement;
     initialReplayPending: boolean;
     replayPainted: boolean;
@@ -98,7 +98,7 @@ async function settle(page: Page): Promise<void> {
     const stage = (window as ProbeWindow).__pmStage;
     const sessionId = location.hash.match(/^#\/session\/(\d+)$/)?.[1];
     const layer = stage?.layers.get(stage.visibleId);
-    return Boolean(sessionId && stage.visibleId === `s:${sessionId}` && layer?.replayPainted
+    return Boolean(sessionId && stage?.visibleId === `s:${sessionId}` && layer?.replayPainted
       && layer.webgl.active && layer.el.style.visibility === "visible" && !layer.initialReplayPending
       && !layer.pendingFit && !layer.pendingWrites && !layer.swapPending);
   })).toBe(true);
