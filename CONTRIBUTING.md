@@ -106,14 +106,8 @@ spec paths:
 make e2e-worker E2E_SPECS=e2e/terminal-scrollback.spec.ts
 ```
 
-Browser spawn tests use the installed Codex test agent explicitly. For transient
-scrollbar assertions, install the Playwright clock before navigation and pause
-it only around the interaction and idle timer checks. Advance rendering frames
-before checking the thumb, then resume the clock for unrelated work. Terminal
-switch tests sample completed render events because synchronized output can
-change the buffer while the previous screen remains painted.
-Wait for terminal selection and its initial focus transfer before testing
-keyboard navigation elsewhere on the page.
+Browser tests wait for observable readiness and use the Playwright clock for
+timer assertions.
 
 `make e2e-terminal-heavy` covers terminal lifecycle, replay and high-volume
 scrollback. `make e2e-performance` is the only lane that produces release
