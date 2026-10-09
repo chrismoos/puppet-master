@@ -1556,6 +1556,11 @@ async fn serve(
 
     // The persistent event relays now write to this connection.
     *rt.out_slot.lock().unwrap() = Some(out_tx.clone());
+    // Changes made while no controller was connected never reached one, and
+    // a restarted controller holds nothing, so each terminal starts over.
+    for update in rt.mux.program_status_snapshots() {
+        let _ = out_tx.send(control(program_status_message(update))).await;
+    }
 
     let forwarders: Forwarders = Arc::new(Mutex::new(HashMap::new()));
     let pm_exe = std::env::current_exe()?;
@@ -1692,6 +1697,7 @@ async fn handle_command(
             model_endpoint,
             initial_cols,
             initial_rows,
+            program_status,
         } => {
             let initial_size = match (initial_cols, initial_rows) {
                 (Some(cols), Some(rows)) => Some((cols, rows)),
@@ -1731,6 +1737,7 @@ async fn handle_command(
                 truecolor,
                 fullscreen,
                 initial_size,
+                program_status,
             )
             .await
             {
@@ -1773,6 +1780,7 @@ async fn handle_command(
                     true,
                     truecolor,
                     initial_size,
+                    false,
                 )
                 .is_err()
             {
@@ -2379,6 +2387,7 @@ async fn spawn_local(
     truecolor: bool,
     fullscreen: bool,
     initial_size: Option<(u16, u16)>,
+    program_status: bool,
 ) -> anyhow::Result<()> {
     let adapter = registry.get(agent).map_err(|e| anyhow!("{e}"))?;
     let ctx = spawn_ctx(
@@ -2409,6 +2418,7 @@ async fn spawn_local(
         false,
         truecolor,
         initial_size,
+        program_status,
     )?;
     tokio::spawn(probe_agent_tools(
         mcp_url.to_string(),
@@ -2787,6 +2797,10 @@ async fn relay_mux_events(
                 }
                 None => break,
             },
+            update = channels.program_status_rx.recv() => match update {
+                Some(update) => send_via(&out_slot, control(program_status_message(update))),
+                None => break,
+            },
             activity = channels.activity_rx.recv() => match activity {
                 Some(activity) if activity.session_id != 0 => {
                     send_via(&out_slot, control(WorkerMsg::TerminalActivity {
@@ -2798,6 +2812,18 @@ async fn relay_mux_events(
                 None => break,
             },
         }
+    }
+}
+
+/// Only a controller that asked for Program Status on a spawn receives
+/// these, so an older controller is never sent a message it cannot decode.
+fn program_status_message(update: pm_daemon::mux::ProgramStatusUpdate) -> WorkerMsg {
+    WorkerMsg::ProgramStatus {
+        terminal_id: update.terminal_id,
+        generation: update.generation,
+        reset: update.changes.reset,
+        records: update.changes.records,
+        removed: update.changes.removed,
     }
 }
 
@@ -3263,7 +3289,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(7, 1, 7, &spec, false, false, false, None)
+        mux.spawn(7, 1, 7, &spec, false, false, false, None, false)
             .unwrap();
         let forwarders: Forwarders = Arc::new(Mutex::new(HashMap::new()));
 
@@ -3344,6 +3370,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )
         .unwrap();
     }
@@ -3612,7 +3639,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(9, 1, 9, &spec, false, false, false, None)
+        mux.spawn(9, 1, 9, &spec, false, false, false, None, false)
             .unwrap();
         let exit = tokio::time::timeout(Duration::from_secs(10), channels.exit_rx.recv())
             .await
@@ -3837,6 +3864,57 @@ mod tests {
             exit_run_state(None),
             pm_protocol::domain::TerminalRunState::Exited
         );
+    }
+
+    /// A spawn asking for Program Status gets a terminal that answers the
+    /// query, and what the agent reports goes up as a worker message.
+    #[tokio::test]
+    async fn a_program_status_terminal_answers_and_its_changes_become_worker_messages() {
+        let (mux, mut channels) = Mux::new();
+        let spec = pm_adapters::CommandSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                concat!(
+                    "stty raw -echo; printf '\\033]7501;?\\007'; head -c 9 >/dev/null; ",
+                    "printf '\\033]7501;state=blocked:kind=question\\007'; sleep 30",
+                )
+                .into(),
+            ],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+        };
+        mux.spawn(17, 4, 70, &spec, false, false, false, None, true)
+            .unwrap();
+        let update =
+            tokio::time::timeout(Duration::from_secs(10), channels.program_status_rx.recv())
+                .await
+                .expect("the agent never got past its probe")
+                .unwrap();
+        match program_status_message(update) {
+            WorkerMsg::ProgramStatus {
+                terminal_id,
+                generation,
+                reset,
+                records,
+                removed,
+            } => {
+                assert_eq!((terminal_id, generation, reset), (17, 4, false));
+                assert!(removed.is_empty());
+                assert_eq!(records.len(), 1);
+                assert_eq!(
+                    records[0].state,
+                    pm_protocol::domain::ProgramStatusState::Blocked
+                );
+            }
+            other => panic!("expected program status, got {other:?}"),
+        }
+        let snapshots = mux.program_status_snapshots();
+        assert!(matches!(
+            program_status_message(snapshots.into_iter().next().unwrap()),
+            WorkerMsg::ProgramStatus { reset: true, .. }
+        ));
+        mux.kill(17).unwrap();
     }
 
     #[tokio::test]

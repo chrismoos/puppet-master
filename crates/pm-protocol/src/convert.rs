@@ -333,6 +333,67 @@ impl TryFrom<i32> for SessionState {
     }
 }
 
+impl From<ProgramStatusRecord> for wire::ProgramStatusRecord {
+    fn from(v: ProgramStatusRecord) -> Self {
+        wire::ProgramStatusRecord {
+            id: v.id,
+            state: match v.state {
+                ProgramStatusState::Idle => wire::ProgramStatusState::Idle,
+                ProgramStatusState::Working => wire::ProgramStatusState::Working,
+                ProgramStatusState::Done => wire::ProgramStatusState::Done,
+                ProgramStatusState::Blocked => wire::ProgramStatusState::Blocked,
+                ProgramStatusState::Error => wire::ProgramStatusState::Error,
+            } as i32,
+            kind: match v.kind {
+                None => wire::ProgramStatusKind::Unspecified,
+                Some(ProgramStatusKind::Permission) => wire::ProgramStatusKind::Permission,
+                Some(ProgramStatusKind::Question) => wire::ProgramStatusKind::Question,
+                Some(ProgramStatusKind::Auth) => wire::ProgramStatusKind::Auth,
+            } as i32,
+            progress: v.progress,
+            app: v.app,
+            title: v.title,
+            msg: v.msg,
+            updated_at_unix_ms: v.updated_at_unix_ms,
+        }
+    }
+}
+
+/// A record whose state this build does not know is dropped rather than
+/// failing the message that carries it, so a newer peer's records never
+/// make a session undecodable.
+fn program_status_records(records: Vec<wire::ProgramStatusRecord>) -> Vec<ProgramStatusRecord> {
+    records
+        .into_iter()
+        .filter_map(|v| {
+            let state = match wire::ProgramStatusState::try_from(v.state) {
+                Ok(wire::ProgramStatusState::Idle) => ProgramStatusState::Idle,
+                Ok(wire::ProgramStatusState::Working) => ProgramStatusState::Working,
+                Ok(wire::ProgramStatusState::Done) => ProgramStatusState::Done,
+                Ok(wire::ProgramStatusState::Blocked) => ProgramStatusState::Blocked,
+                Ok(wire::ProgramStatusState::Error) => ProgramStatusState::Error,
+                _ => return None,
+            };
+            let kind = match wire::ProgramStatusKind::try_from(v.kind) {
+                Ok(wire::ProgramStatusKind::Permission) => Some(ProgramStatusKind::Permission),
+                Ok(wire::ProgramStatusKind::Question) => Some(ProgramStatusKind::Question),
+                Ok(wire::ProgramStatusKind::Auth) => Some(ProgramStatusKind::Auth),
+                _ => None,
+            };
+            Some(ProgramStatusRecord {
+                id: v.id,
+                state,
+                kind,
+                progress: v.progress,
+                app: v.app,
+                title: v.title,
+                msg: v.msg,
+                updated_at_unix_ms: v.updated_at_unix_ms,
+            })
+        })
+        .collect()
+}
+
 impl From<SessionRole> for wire::SessionRole {
     fn from(v: SessionRole) -> Self {
         match v {
@@ -1007,6 +1068,11 @@ impl From<Session> for wire::Session {
             idle_unseen: v.idle_unseen,
             model_profile_id: v.model_profile_id,
             model_profile_source: wire::ModelProfileSource::from(v.model_profile_source) as i32,
+            program_status: v
+                .program_status
+                .into_iter()
+                .map(wire::ProgramStatusRecord::from)
+                .collect(),
         }
     }
 }
@@ -1401,6 +1467,7 @@ impl TryFrom<wire::Session> for Session {
             idle_unseen: v.idle_unseen,
             model_profile_id: v.model_profile_id,
             model_profile_source: model_profile_source(v.model_profile_source)?,
+            program_status: program_status_records(v.program_status),
         })
     }
 }
@@ -2857,6 +2924,22 @@ impl From<WorkerMsg> for wire::WorkerMessage {
             WorkerMsg::NeedsInput { session_id } => {
                 Msg::NeedsInput(wire::WorkerNeedsInput { session_id })
             }
+            WorkerMsg::ProgramStatus {
+                terminal_id,
+                generation,
+                reset,
+                records,
+                removed,
+            } => Msg::ProgramStatus(wire::WorkerProgramStatus {
+                terminal_id,
+                generation,
+                reset,
+                records: records
+                    .into_iter()
+                    .map(wire::ProgramStatusRecord::from)
+                    .collect(),
+                removed,
+            }),
             WorkerMsg::TerminalActivity {
                 terminal_id,
                 generation,
@@ -3071,6 +3154,13 @@ impl TryFrom<wire::WorkerMessage> for WorkerMsg {
                     terminal_id: m.terminal_id,
                     generation: m.generation,
                 },
+                Msg::ProgramStatus(m) => WorkerMsg::ProgramStatus {
+                    terminal_id: m.terminal_id,
+                    generation: m.generation,
+                    reset: m.reset,
+                    records: program_status_records(m.records),
+                    removed: m.removed,
+                },
                 Msg::HookReport(m) => WorkerMsg::HookReport {
                     session_token: m.session_token,
                     kind: m.kind.try_into()?,
@@ -3192,6 +3282,7 @@ impl From<ControllerMsg> for wire::ControllerMessage {
                 model_endpoint,
                 initial_cols,
                 initial_rows,
+                program_status,
             } => Msg::Spawn(wire::ControllerSpawn {
                 session_id,
                 agent: wire::AgentKind::from(agent) as i32,
@@ -3208,6 +3299,7 @@ impl From<ControllerMsg> for wire::ControllerMessage {
                 model_endpoint: model_endpoint.map(|endpoint| Box::new((*endpoint).into())),
                 initial_cols: initial_cols.map(|c| c as u32),
                 initial_rows: initial_rows.map(|r| r as u32),
+                program_status,
             }),
             ControllerMsg::SpawnShell {
                 terminal_id,
@@ -3410,6 +3502,7 @@ impl TryFrom<wire::ControllerMessage> for ControllerMsg {
                         .map(Box::new),
                     initial_cols: m.initial_cols.map(|c| c as u16),
                     initial_rows: m.initial_rows.map(|r| r as u16),
+                    program_status: m.program_status,
                 },
                 Msg::SpawnShell(m) => ControllerMsg::SpawnShell {
                     terminal_id: m.terminal_id,
@@ -3608,6 +3701,7 @@ mod tests {
             idle_unseen: true,
             model_profile_id: Some(11),
             model_profile_source: Some(ModelProfileSource::Bucket),
+            program_status: Vec::new(),
         }
     }
 
@@ -4213,6 +4307,34 @@ mod tests {
                 terminal_id: 8,
                 generation: 3,
             },
+            WorkerMsg::ProgramStatus {
+                terminal_id: 8,
+                generation: 3,
+                reset: true,
+                records: vec![
+                    ProgramStatusRecord {
+                        id: String::new(),
+                        state: ProgramStatusState::Blocked,
+                        kind: Some(ProgramStatusKind::Permission),
+                        progress: Some(40),
+                        app: "claude-code".into(),
+                        title: String::new(),
+                        msg: "Allow edit?".into(),
+                        updated_at_unix_ms: 1_700_000_000_000,
+                    },
+                    ProgramStatusRecord {
+                        id: "task/1".into(),
+                        state: ProgramStatusState::Done,
+                        kind: None,
+                        progress: None,
+                        app: String::new(),
+                        title: "Explore".into(),
+                        msg: String::new(),
+                        updated_at_unix_ms: 1_700_000_000_001,
+                    },
+                ],
+                removed: vec!["task/2".into()],
+            },
             WorkerMsg::HookReport {
                 session_token: "tok".into(),
                 kind: HookKind::TurnFailed,
@@ -4312,6 +4434,7 @@ mod tests {
                 })),
                 initial_cols: Some(120),
                 initial_rows: Some(32),
+                program_status: true,
             },
             ControllerMsg::TerminalAttach {
                 terminal_id: 9,
@@ -4481,6 +4604,52 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A controller that predates Program Status sends no flag, and its
+    /// agents must keep a terminal that neither answers nor strips OSC 7501.
+    #[test]
+    fn a_spawn_without_the_program_status_field_leaves_it_off() {
+        let decoded = ControllerMsg::try_from(wire::ControllerMessage {
+            msg: Some(wire::controller_message::Msg::Spawn(
+                wire::ControllerSpawn {
+                    session_id: 3,
+                    agent: wire::AgentKind::ClaudeCode as i32,
+                    terminal_id: 9,
+                    generation: 2,
+                    ..Default::default()
+                },
+            )),
+        })
+        .unwrap();
+        assert!(matches!(
+            decoded,
+            ControllerMsg::Spawn {
+                program_status: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_program_status_record_with_an_unknown_state_is_dropped_not_fatal() {
+        const FUTURE_STATE: i32 = 99;
+        let records = program_status_records(vec![
+            wire::ProgramStatusRecord {
+                id: "a".into(),
+                state: FUTURE_STATE,
+                ..Default::default()
+            },
+            wire::ProgramStatusRecord {
+                id: "b".into(),
+                state: wire::ProgramStatusState::Working as i32,
+                kind: FUTURE_STATE,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, "b");
+        assert_eq!(records[0].kind, None);
     }
 
     #[test]

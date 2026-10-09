@@ -339,6 +339,84 @@ impl SessionState {
     }
 }
 
+/// A program's own state as it reports it through the Program Status
+/// Protocol (OSC 7501).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProgramStatusState {
+    Idle,
+    Working,
+    Done,
+    Blocked,
+    Error,
+}
+
+impl ProgramStatusState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Done => "done",
+            Self::Blocked => "blocked",
+            Self::Error => "error",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "idle" => Some(Self::Idle),
+            "working" => Some(Self::Working),
+            "done" => Some(Self::Done),
+            "blocked" => Some(Self::Blocked),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
+/// What a blocked program is waiting on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProgramStatusKind {
+    Permission,
+    Question,
+    Auth,
+}
+
+impl ProgramStatusKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Permission => "permission",
+            Self::Question => "question",
+            Self::Auth => "auth",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "permission" => Some(Self::Permission),
+            "question" => Some(Self::Question),
+            "auth" => Some(Self::Auth),
+            _ => None,
+        }
+    }
+}
+
+/// One Program Status record of a terminal. `msg` and `title` are plain
+/// text with control and invisible formatting characters already removed,
+/// and are never markup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramStatusRecord {
+    /// Empty for the root record, otherwise a `/`-separated path.
+    pub id: String,
+    pub state: ProgramStatusState,
+    pub kind: Option<ProgramStatusKind>,
+    /// 0 to 100, absent when the program is busy without a percentage.
+    pub progress: Option<u32>,
+    pub app: String,
+    pub title: String,
+    pub msg: String,
+    pub updated_at_unix_ms: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionMode {
     /// Inherit from the level above (project inherits bucket, spawn
@@ -892,6 +970,9 @@ pub struct Session {
     /// edits made since.
     pub model_profile_id: Option<u64>,
     pub model_profile_source: Option<ModelProfileSource>,
+    /// The agent terminal's Program Status records, root first, each with
+    /// `app` resolved through its ancestors. Held in memory, never stored.
+    pub program_status: Vec<ProgramStatusRecord>,
 }
 
 impl Session {
@@ -2021,6 +2102,16 @@ pub enum WorkerMsg {
         terminal_id: u64,
         generation: u64,
     },
+    /// A change to an agent terminal's Program Status records. `reset`
+    /// drops every record before `removed` and `records` apply. Records
+    /// carry the `app` the program reported, unresolved.
+    ProgramStatus {
+        terminal_id: u64,
+        generation: u64,
+        reset: bool,
+        records: Vec<ProgramStatusRecord>,
+        removed: Vec<String>,
+    },
     HookReport {
         session_token: String,
         kind: HookKind,
@@ -2233,6 +2324,9 @@ pub enum ControllerMsg {
         model_endpoint: Option<Box<ResolvedModelEndpoint>>,
         initial_cols: Option<u16>,
         initial_rows: Option<u16>,
+        /// Whether the agent terminal answers the Program Status query and
+        /// reports its records.
+        program_status: bool,
     },
     SpawnShell {
         terminal_id: u64,

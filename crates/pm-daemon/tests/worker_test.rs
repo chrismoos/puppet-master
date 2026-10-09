@@ -1085,6 +1085,141 @@ async fn a_remote_spawn_carries_the_renderer_setting() {
     }
 }
 
+fn enroll_at_protocol(
+    env: &TestEnv,
+    protocol_version: u32,
+) -> pm_daemon::daemon::WorkerRegistration {
+    let (token, _expires) = env.daemon.create_worker_enrollment("older").unwrap();
+    env.daemon
+        .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            enrollment_token: &token,
+            credential: "",
+            peer_key_hash: "key-older.local",
+            hostname: "older.local",
+            platform: "linux",
+            pm_version: "",
+            runtime: "",
+            container: "",
+            default_project_root: "/home/dev",
+            live_sessions: &[],
+            live_terminals: &[],
+            protocol_version,
+        })
+        .unwrap()
+}
+
+fn spawned_with_program_status(reg: &mut pm_daemon::daemon::WorkerRegistration) -> bool {
+    match reg.rx.try_recv().unwrap() {
+        ControllerMsg::Spawn { program_status, .. } => program_status,
+        other => panic!("expected spawn, got {other:?}"),
+    }
+}
+
+/// The setting lives on the controller, so it travels with the spawn, and
+/// only to a worker that can honor it.
+#[tokio::test]
+async fn a_remote_spawn_asks_for_program_status_only_when_on_and_supported() {
+    let env = daemon_env();
+    let mut current = enroll(&env);
+    let mut older = enroll_at_protocol(&env, pm_protocol::WORKER_PROTOCOL_PROGRAM_STATUS - 1);
+
+    spawn_remote(&env, current.worker_id);
+    assert!(!spawned_with_program_status(&mut current), "off by default");
+
+    env.daemon
+        .set_setting(
+            pm_daemon::daemon::SETTING_SPAWN_PROGRAM_STATUS,
+            Some("true"),
+        )
+        .unwrap();
+    spawn_remote(&env, current.worker_id);
+    assert!(spawned_with_program_status(&mut current));
+    spawn_remote(&env, older.worker_id);
+    assert!(
+        !spawned_with_program_status(&mut older),
+        "a worker that predates the capability keeps hook-driven state"
+    );
+}
+
+#[tokio::test]
+async fn a_remote_agents_records_drive_its_session_and_a_reset_replaces_them() {
+    use pm_protocol::domain::{ProgramStatusKind, ProgramStatusRecord, ProgramStatusState};
+    let env = daemon_env();
+    let reg = enroll(&env);
+    let worker_id = reg.worker_id;
+    let sid = spawn_remote(&env, worker_id);
+    let terminal = env.daemon.agent_terminal(sid).unwrap();
+    let record = |id: &str, state, kind, msg: &str| ProgramStatusRecord {
+        id: id.into(),
+        state,
+        kind,
+        progress: None,
+        app: if id.is_empty() {
+            "claude-code".into()
+        } else {
+            String::new()
+        },
+        title: String::new(),
+        msg: msg.into(),
+        updated_at_unix_ms: 1,
+    };
+    env.daemon.apply_worker_message(
+        worker_id,
+        WorkerMsg::ProgramStatus {
+            terminal_id: terminal.id,
+            generation: terminal.generation,
+            reset: false,
+            records: vec![
+                record(
+                    "",
+                    ProgramStatusState::Blocked,
+                    Some(ProgramStatusKind::Auth),
+                    "Log in",
+                ),
+                record("bg/1", ProgramStatusState::Working, None, ""),
+            ],
+            removed: Vec::new(),
+        },
+    );
+    let current = session(&env, sid);
+    assert_eq!(current.state, SessionState::NeedsInput);
+    assert_eq!(current.state_detail, "auth: Log in");
+    assert_eq!(current.program_status[1].app, "claude-code");
+
+    env.daemon.apply_worker_message(
+        worker_id,
+        WorkerMsg::ProgramStatus {
+            terminal_id: terminal.id,
+            generation: terminal.generation + 1,
+            reset: true,
+            records: Vec::new(),
+            removed: Vec::new(),
+        },
+    );
+    assert_eq!(
+        session(&env, sid).program_status.len(),
+        2,
+        "a change for another generation is ignored"
+    );
+
+    env.daemon.apply_worker_message(
+        worker_id,
+        WorkerMsg::ProgramStatus {
+            terminal_id: terminal.id,
+            generation: terminal.generation,
+            reset: true,
+            records: vec![record("", ProgramStatusState::Done, None, "")],
+            removed: Vec::new(),
+        },
+    );
+    let current = session(&env, sid);
+    assert_eq!(
+        (current.state, current.state_detail.as_str()),
+        (SessionState::Idle, "done")
+    );
+    assert_eq!(current.program_status.len(), 1);
+}
+
 #[tokio::test]
 async fn a_remote_session_spawns_relays_pty_and_ends() {
     let env = daemon_env();

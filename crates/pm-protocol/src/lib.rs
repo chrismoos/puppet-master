@@ -8,7 +8,7 @@ pub mod worker_frame;
 /// capabilities a peer may use, not a compatibility boundary: a controller
 /// registers a worker announcing any version and adapts to what that
 /// version supports.
-pub const WORKER_PROTOCOL_VERSION: u32 = 20;
+pub const WORKER_PROTOCOL_VERSION: u32 = 21;
 
 /// First protocol in which a worker serves a published directory from a
 /// loopback server it owns. An older worker cannot be asked to, so
@@ -60,6 +60,16 @@ pub const WORKER_PROTOCOL_WORKER_RUNTIME: u32 = 20;
 
 const _: () = assert!(WORKER_PROTOCOL_WORKER_RUNTIME <= WORKER_PROTOCOL_VERSION);
 const _: () = assert!(WORKER_PROTOCOL_WORKER_RUNTIME > WORKER_PROTOCOL_AGENT_INBOX);
+
+/// First protocol in which a worker consumes OSC 7501 on an agent terminal
+/// it is asked to, answers the query, and reports the records upward. An
+/// older worker would ignore the request and leave the agent's terminal
+/// unchanged, so the controller asks only workers at this version and the
+/// session falls back to hook-driven state elsewhere.
+pub const WORKER_PROTOCOL_PROGRAM_STATUS: u32 = 21;
+
+const _: () = assert!(WORKER_PROTOCOL_PROGRAM_STATUS <= WORKER_PROTOCOL_VERSION);
+const _: () = assert!(WORKER_PROTOCOL_PROGRAM_STATUS > WORKER_PROTOCOL_WORKER_RUNTIME);
 
 /// First protocol in which a worker sizes the PTY to the requested
 /// initial geometry on spawn. An older worker ignores the fields and

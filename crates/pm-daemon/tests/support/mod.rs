@@ -177,6 +177,9 @@ impl AgentAdapter for TestRecordingAdapter {
 pub struct TestEnv {
     pub daemon: Arc<Daemon>,
     pub exit_rx: mpsc::UnboundedReceiver<pm_daemon::mux::SessionExit>,
+    /// Program Status changes from local agent terminals. No server runs,
+    /// so a test that needs them applied takes this and applies them.
+    pub program_status_rx: Option<mpsc::UnboundedReceiver<pm_daemon::mux::ProgramStatusUpdate>>,
     pub project_id: u64,
     _tmp: tempfile::TempDir,
 }
@@ -218,6 +221,7 @@ pub fn daemon_env() -> TestEnv {
     TestEnv {
         daemon,
         exit_rx: channels.exit_rx,
+        program_status_rx: Some(channels.program_status_rx),
         project_id,
         _tmp: tmp,
     }
@@ -251,6 +255,7 @@ pub fn daemon_env_with_public_url(public_url: &str) -> TestEnv {
     TestEnv {
         daemon,
         exit_rx: channels.exit_rx,
+        program_status_rx: Some(channels.program_status_rx),
         project_id,
         _tmp: tmp,
     }
@@ -287,6 +292,7 @@ pub fn daemon_env_with_forward_mount(
     TestEnv {
         daemon,
         exit_rx: channels.exit_rx,
+        program_status_rx: Some(channels.program_status_rx),
         project_id,
         _tmp: tmp,
     }
@@ -326,6 +332,7 @@ pub fn daemon_env_with_forward_mount_on_db(
     TestEnv {
         daemon,
         exit_rx: channels.exit_rx,
+        program_status_rx: Some(channels.program_status_rx),
         project_id,
         _tmp: tmp,
     }
@@ -361,6 +368,7 @@ pub fn file_backed_daemon_env() -> (TestEnv, PathBuf) {
         TestEnv {
             daemon,
             exit_rx: channels.exit_rx,
+            program_status_rx: Some(channels.program_status_rx),
             project_id,
             _tmp: tmp,
         },
@@ -405,7 +413,7 @@ pub fn daemon_env_recording_instructions(public_url: &str) -> (TestEnv, Recorded
     )
 }
 
-fn daemon_env_with_registry(registry: AdapterRegistry, public_url: Option<&str>) -> TestEnv {
+pub fn daemon_env_with_registry(registry: AdapterRegistry, public_url: Option<&str>) -> TestEnv {
     let tmp = tempfile::tempdir().unwrap();
     let config = DaemonConfig {
         stale_turn_quiet_ms: None,
@@ -431,6 +439,7 @@ fn daemon_env_with_registry(registry: AdapterRegistry, public_url: Option<&str>)
     TestEnv {
         daemon,
         exit_rx: channels.exit_rx,
+        program_status_rx: Some(channels.program_status_rx),
         project_id,
         _tmp: tmp,
     }
@@ -475,6 +484,7 @@ impl DaemonRestart {
         TestEnv {
             daemon: Arc::new(daemon),
             exit_rx: channels.exit_rx,
+            program_status_rx: Some(channels.program_status_rx),
             project_id: previous.project_id,
             _tmp: tempfile::tempdir().unwrap(),
         }
@@ -516,6 +526,7 @@ pub fn restartable_hooked_agent_daemon_env(agent: AgentKind) -> (TestEnv, Daemon
         TestEnv {
             daemon,
             exit_rx: channels.exit_rx,
+            program_status_rx: Some(channels.program_status_rx),
             project_id,
             _tmp: tmp,
         },

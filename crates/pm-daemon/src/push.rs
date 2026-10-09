@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use pm_protocol::domain::{Session, SessionAlert, SessionAlertKind, SessionRole, SessionState};
+use pm_protocol::domain::{
+    ProgramStatusState, Session, SessionAlert, SessionAlertKind, SessionRole, SessionState,
+};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
@@ -745,7 +747,14 @@ impl Daemon {
                 return None;
             }
         };
-        let Some(class) = classify_transition(from, to, &session.state_detail) else {
+        // A done root record is a clean finish even though its detail
+        // names it, which an empty detail stands for everywhere else.
+        let root_done = session
+            .program_status
+            .first()
+            .is_some_and(|root| root.id.is_empty() && root.state == ProgramStatusState::Done);
+        let detail = if root_done { "" } else { &session.state_detail };
+        let Some(class) = classify_transition(from, to, detail) else {
             declined(GATE_CLASSIFICATION);
             return None;
         };

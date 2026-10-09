@@ -76,6 +76,10 @@ const KNOWN_SETTING_METAS: Record<string, Partial<SettingMeta>> = {
     title: "24-bit truecolor",
     category: "Agent terminal",
   },
+  "spawn.program_status": {
+    title: "Program Status (OSC 7501) reports",
+    category: "Agent terminal",
+  },
   "supervisor.max_children": {
     title: "Concurrent children per supervisor",
     category: "Supervisors",

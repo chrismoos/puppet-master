@@ -48,7 +48,8 @@ fn mux_echo_rtt() {
         env: Vec::new(),
         cwd: std::env::temp_dir(),
     };
-    mux.spawn(1, 1, 7, &spec, false, false, true, None).unwrap();
+    mux.spawn(1, 1, 7, &spec, false, false, true, None, false)
+        .unwrap();
     std::thread::sleep(Duration::from_millis(200));
     let (_replay, mut rx) = mux.attach(1).unwrap();
 

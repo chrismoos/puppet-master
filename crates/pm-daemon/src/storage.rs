@@ -9075,6 +9075,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Result<Session>> {
         model_profile_source: row
             .get::<_, Option<String>>(30)?
             .and_then(|source| ModelProfileSource::parse(&source)),
+        program_status: Vec::new(),
     }))
 }
 

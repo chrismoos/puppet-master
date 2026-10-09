@@ -32,6 +32,10 @@ describe("setting metadata resolution", () => {
     const truecolor = settingMetadata("spawn.truecolor");
     expect(truecolor.title).toBe("24-bit truecolor");
     expect(truecolor.category).toBe("Agent terminal");
+
+    const programStatus = settingMetadata("spawn.program_status");
+    expect(programStatus.title).toBe("Program Status (OSC 7501) reports");
+    expect(programStatus.category).toBe("Agent terminal");
   });
 
   it("resolves known supervisor settings to Supervisors", () => {

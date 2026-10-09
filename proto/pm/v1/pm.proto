@@ -124,6 +124,46 @@ enum SessionState {
   SESSION_STATE_AWAITING_WORKER = 7;
 }
 
+// A program's own state, reported through the Program Status Protocol
+// (OSC 7501) on its terminal.
+enum ProgramStatusState {
+  PROGRAM_STATUS_STATE_UNSPECIFIED = 0;
+  PROGRAM_STATUS_STATE_IDLE = 1;
+  PROGRAM_STATUS_STATE_WORKING = 2;
+  PROGRAM_STATUS_STATE_DONE = 3;
+  PROGRAM_STATUS_STATE_BLOCKED = 4;
+  PROGRAM_STATUS_STATE_ERROR = 5;
+}
+
+// What a blocked program is waiting on.
+enum ProgramStatusKind {
+  PROGRAM_STATUS_KIND_UNSPECIFIED = 0;
+  PROGRAM_STATUS_KIND_PERMISSION = 1;
+  PROGRAM_STATUS_KIND_QUESTION = 2;
+  PROGRAM_STATUS_KIND_AUTH = 3;
+}
+
+// One Program Status record. msg and title are untrusted plain text from
+// the program, with control and invisible formatting characters removed.
+// Clients never render them as markup and show them attributed to the
+// session they came from.
+message ProgramStatusRecord {
+  // Empty for the root record, otherwise a slash-separated path whose
+  // parent is the record named by the path without its last segment.
+  string id = 1;
+  ProgramStatusState state = 2;
+  // Set only on a blocked record.
+  ProgramStatusKind kind = 3;
+  // 0 to 100. Absent means busy without a percentage.
+  optional uint32 progress = 4;
+  // Machine-readable program name. On a session the controller has
+  // already resolved it through the record's ancestors.
+  string app = 5;
+  string title = 6;
+  string msg = 7;
+  int64 updated_at_unix_ms = 8;
+}
+
 // A machine that runs and manages sessions. The controller hosts an
 // embedded local worker with id 0; remote workers enroll over the wire.
 message Worker {
@@ -311,6 +351,10 @@ message Session {
   // from the task title or prompt, replaced when the agent reports one.
   // Clients name the session by it.
   string goal = 33;
+  // The agent terminal's Program Status records, root first. Empty unless
+  // the daemon setting spawn.program_status was on when the session
+  // spawned and the agent reports through it.
+  repeated ProgramStatusRecord program_status = 34;
 }
 
 // The agent-reported git location of a session. Every field is
@@ -1553,6 +1597,7 @@ message WorkerMessage {
     WorkerHarnessStatus harness_status = 15;
     WorkerDirShareBound dir_share_bound = 16;
     WorkerAgentInboxResult agent_inbox_result = 17;
+    WorkerProgramStatus program_status = 18;
   }
 }
 
@@ -1821,6 +1866,18 @@ message WorkerTerminalActivity {
   uint64 generation = 2;
 }
 
+// A change to an agent terminal's Program Status records. reset drops
+// every record before removed and records apply. A worker sends one with
+// reset set for each terminal that has records when it registers.
+message WorkerProgramStatus {
+  uint64 terminal_id = 1;
+  uint64 generation = 2;
+  bool reset = 3;
+  // Records as the program reported them, with app unresolved.
+  repeated ProgramStatusRecord records = 4;
+  repeated string removed = 5;
+}
+
 // A lifecycle hook the worker received locally and relays up, verbatim,
 // so the controller applies it exactly as a local hook.
 message WorkerHookReport {
@@ -2064,6 +2121,9 @@ message ControllerSpawn {
   optional bool fullscreen = 13;
   optional uint32 initial_cols = 14;
   optional uint32 initial_rows = 15;
+  // Whether the agent terminal answers the Program Status query and
+  // reports its records. Absent means no.
+  bool program_status = 16;
 }
 
 message ControllerSpawnShell {

@@ -122,6 +122,11 @@ impl Daemon {
         if !self.adapter_has_lifecycle_hooks(session.agent) {
             return None;
         }
+        // An agent reporting through Program Status states its own turn
+        // end, so a quiet terminal is not evidence of a lost one.
+        if self.program_status_decides(session.id) {
+            return None;
+        }
         let terminal = self.storage().agent_terminal(session.id).ok()?;
         // A session whose agent process is gone is an exit, handled by the
         // exit path rather than here.

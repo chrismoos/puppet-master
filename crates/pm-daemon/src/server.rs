@@ -22,6 +22,11 @@ const SOCKET_DIR_MODE: u32 = 0o700;
 /// batch on this cadence instead of writing SQLite for every chunk.
 const ACTIVITY_CHECKPOINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// How often alerts held for a Program Status session are checked for
+/// having settled, which bounds how late past the debounce one is raised.
+const PROGRAM_STATUS_ALERT_FLUSH_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(250);
+
 /// Poll floor for queued push deliveries; the enqueue wakeup makes
 /// fresh events deliver immediately, this only paces retries.
 const PUSH_DELIVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -42,6 +47,8 @@ pub struct ServerHandle {
     listener_task: JoinHandle<()>,
     exit_task: JoinHandle<()>,
     needs_input_task: JoinHandle<()>,
+    program_status_task: JoinHandle<()>,
+    program_status_alert_task: JoinHandle<()>,
     activity_task: JoinHandle<()>,
     activity_checkpoint_task: JoinHandle<()>,
     push_delivery_task: JoinHandle<()>,
@@ -56,6 +63,8 @@ impl ServerHandle {
             self.listener_task,
             self.exit_task,
             self.needs_input_task,
+            self.program_status_task,
+            self.program_status_alert_task,
             self.activity_task,
             self.activity_checkpoint_task,
             self.push_delivery_task,
@@ -128,6 +137,7 @@ pub async fn start(
     let mut exit_rx = channels.exit_rx;
     let mut needs_input_rx = channels.needs_input_rx;
     let mut activity_rx = channels.activity_rx;
+    let mut program_status_rx = channels.program_status_rx;
 
     let exit_daemon = daemon.clone();
     let exit_task = tokio::spawn(async move {
@@ -146,12 +156,33 @@ pub async fn start(
         }
     });
 
+    let program_status_daemon = daemon.clone();
+    let program_status_task = tokio::spawn(async move {
+        while let Some(update) = program_status_rx.recv().await {
+            let daemon = program_status_daemon.clone();
+            tokio::task::spawn_blocking(move || {
+                daemon.handle_program_status(update.terminal_id, update.generation, &update.changes)
+            })
+            .await
+            .ok();
+        }
+    });
+
     let activity_daemon = daemon.clone();
     let activity_task = tokio::spawn(async move {
         while let Some(signal) = activity_rx.recv().await {
             if signal.session_id != 0 {
                 activity_daemon.handle_terminal_activity(signal.terminal_id, signal.generation);
             }
+        }
+    });
+
+    let alert_daemon = daemon.clone();
+    let program_status_alert_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(PROGRAM_STATUS_ALERT_FLUSH_INTERVAL);
+        loop {
+            interval.tick().await;
+            alert_daemon.flush_program_status_alerts();
         }
     });
 
@@ -259,6 +290,8 @@ pub async fn start(
     Ok(ServerHandle {
         daemon,
         needs_input_task,
+        program_status_task,
+        program_status_alert_task,
         activity_task,
         activity_checkpoint_task,
         push_delivery_task,

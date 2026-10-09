@@ -4,7 +4,7 @@
 //! `mouseon`, `mouseoff`, `lineout <lines>`, `bigout <bytes>`,
 //! `pacedout <bytes> <chunk>`, `syncout <lines> <delayms>`,
 //! `claudestream <history> <frames> <delayms> <linelen>`, `gridtui`,
-//! `exit <code>`.
+//! `pstatus <body>`, `pstatus-probe`, `exit <code>`.
 //! Output lines are prefixed with OUT so tests can tell agent output
 //! from the PTY's echo of their own input.
 
@@ -19,6 +19,12 @@ const GRID_STATUS_TICKS: u64 = 3;
 /// Rule, prompt, and status rows under the numbered grid rows.
 const GRID_FOOTER_ROWS: u16 = 3;
 const GRID_PROMPT: &str = "> ";
+
+/// The Program Status feature query, and the only reply a supporting
+/// terminal gives to it.
+const PROGRAM_STATUS_QUERY: &[u8] = b"\x1b]7501;?\x1b\\";
+/// How long the probe waits for a reply, as Claude Code's startup probe does.
+const PROGRAM_STATUS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 static WINCH: AtomicBool = AtomicBool::new(false);
 static WINCH_WATCHER: AtomicBool = AtomicBool::new(false);
@@ -129,6 +135,48 @@ fn tui_composer(out: &mut impl Write) {
         }
     }
     let _ = unsafe { libc::tcsetattr(0, libc::TCSANOW, &original) };
+}
+
+/// Sends the Program Status query with input raw and unechoed, the way an
+/// agent's startup probe does, and reports whether exactly the reply came
+/// back before the timeout. Whatever arrived is printed in hex either way.
+fn program_status_probe(out: &mut impl Write) {
+    let mut original = unsafe { std::mem::zeroed::<libc::termios>() };
+    assert_eq!(unsafe { libc::tcgetattr(0, &mut original) }, 0);
+    let mut raw = original;
+    unsafe { libc::cfmakeraw(&mut raw) };
+    assert_eq!(unsafe { libc::tcsetattr(0, libc::TCSANOW, &raw) }, 0);
+    out.write_all(PROGRAM_STATUS_QUERY).unwrap();
+    out.flush().unwrap();
+
+    let deadline = std::time::Instant::now() + PROGRAM_STATUS_PROBE_TIMEOUT;
+    let mut received = Vec::new();
+    while received.len() < PROGRAM_STATUS_QUERY.len() {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let mut poll = libc::pollfd {
+            fd: 0,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut poll, 1, remaining.as_millis() as libc::c_int) } <= 0 {
+            break;
+        }
+        let mut byte = 0u8;
+        if unsafe { libc::read(0, (&mut byte as *mut u8).cast(), 1) } != 1 {
+            break;
+        }
+        received.push(byte);
+    }
+    let _ = unsafe { libc::tcsetattr(0, libc::TCSANOW, &original) };
+    let hex: String = received.iter().map(|b| format!("{b:02x}")).collect();
+    if received == PROGRAM_STATUS_QUERY {
+        writeln!(out, "OUT PSTATUS SUPPORTED {hex}").unwrap();
+    } else {
+        writeln!(out, "OUT PSTATUS UNSUPPORTED {hex}").unwrap();
+    }
 }
 
 extern "C" fn on_winch(_signal: libc::c_int) {
@@ -305,6 +353,10 @@ fn main() {
             "osc52" => {
                 write!(out, "\x1b]52;{arg}\x07").unwrap();
             }
+            "pstatus" => {
+                write!(out, "\x1b]7501;{arg}\x1b\\").unwrap();
+            }
+            "pstatus-probe" => program_status_probe(&mut out),
             "mouseon" => {
                 write!(out, "\x1b[?1000h\x1b[?1006h").unwrap();
             }

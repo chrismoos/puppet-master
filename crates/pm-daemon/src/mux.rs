@@ -3,6 +3,7 @@
 //! byte-identical streams; attach is ring-buffer replay followed by
 //! live output with no gap or duplication in between.
 
+use crate::program_status::{parse_body, query_reply, RecordStore, Report, ScanEvent, Scanner};
 use crate::term_model::Retained;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -169,6 +170,15 @@ pub struct PtyNeedsInput {
     pub session_id: u64,
 }
 
+/// A change to an agent terminal's Program Status records.
+#[derive(Debug)]
+pub struct ProgramStatusUpdate {
+    pub terminal_id: u64,
+    pub generation: u64,
+    pub session_id: u64,
+    pub changes: crate::program_status::Changes,
+}
+
 /// A coalesced signal that a terminal produced live output.
 #[derive(Debug)]
 pub struct PtyActivity {
@@ -208,6 +218,7 @@ struct SessionEntry {
     out_tx: broadcast::Sender<Bytes>,
     exited: Arc<AtomicBool>,
     flow: Arc<OutputFlow>,
+    program_status: Option<Arc<Mutex<RecordStore>>>,
 }
 
 pub struct Mux {
@@ -218,12 +229,14 @@ pub struct Mux {
     exit_tx: mpsc::UnboundedSender<SessionExit>,
     needs_input_tx: mpsc::UnboundedSender<PtyNeedsInput>,
     activity_tx: mpsc::UnboundedSender<PtyActivity>,
+    program_status_tx: mpsc::UnboundedSender<ProgramStatusUpdate>,
 }
 
 pub struct MuxChannels {
     pub exit_rx: mpsc::UnboundedReceiver<SessionExit>,
     pub needs_input_rx: mpsc::UnboundedReceiver<PtyNeedsInput>,
     pub activity_rx: mpsc::UnboundedReceiver<PtyActivity>,
+    pub program_status_rx: mpsc::UnboundedReceiver<ProgramStatusUpdate>,
 }
 
 /// What the child will actually see for `name`: an adapter override if
@@ -245,17 +258,20 @@ impl Mux {
         let (exit_tx, exit_rx) = mpsc::unbounded_channel();
         let (needs_input_tx, needs_input_rx) = mpsc::unbounded_channel();
         let (activity_tx, activity_rx) = mpsc::unbounded_channel();
+        let (program_status_tx, program_status_rx) = mpsc::unbounded_channel();
         (
             Mux {
                 terminals: Mutex::new(HashMap::new()),
                 exit_tx,
                 needs_input_tx,
                 activity_tx,
+                program_status_tx,
             },
             MuxChannels {
                 exit_rx,
                 needs_input_rx,
                 activity_rx,
+                program_status_rx,
             },
         )
     }
@@ -271,6 +287,7 @@ impl Mux {
         track_foreground_command: bool,
         truecolor: bool,
         initial_size: Option<(u16, u16)>,
+        program_status: bool,
     ) -> Result<(), MuxError> {
         let (cols, rows) = initial_size
             .map(|(c, r)| (c.max(MIN_COLS), r.max(MIN_ROWS)))
@@ -354,6 +371,8 @@ impl Mux {
         let pid_held = Arc::new(AtomicBool::new(pid.is_some()));
         let flow = Arc::new(OutputFlow::default());
         let flow_for_reader = flow.clone();
+        let program_status = program_status.then(|| Arc::new(Mutex::new(RecordStore::default())));
+        let reply_tx = input_tx.clone();
 
         let entry = Arc::new(SessionEntry {
             generation,
@@ -372,6 +391,7 @@ impl Mux {
             out_tx: out_tx.clone(),
             exited: exited.clone(),
             flow,
+            program_status: program_status.clone(),
         });
         self.terminals
             .lock()
@@ -419,6 +439,15 @@ impl Mux {
         let ring_for_reader = ring.clone();
         let needs_input_tx = self.needs_input_tx.clone();
         let activity_tx = self.activity_tx.clone();
+        let mut status_reader = program_status.clone().map(|store| ProgramStatusReader {
+            store,
+            scanner: Scanner::default(),
+            reply_tx,
+            updates: self.program_status_tx.clone(),
+            terminal_id,
+            generation,
+            session_id: semantic_session_id,
+        });
         std::thread::spawn(move || {
             let mut buf = [0u8; PTY_READ_BUF_BYTES];
             let mut last_activity_signal: Option<std::time::Instant> = None;
@@ -429,8 +458,11 @@ impl Mux {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        flow_for_reader.acquire(n);
-                        let chunk = Bytes::copy_from_slice(&buf[..n]);
+                        let chunk = match &mut status_reader {
+                            Some(status) => Bytes::from(status.consume(&buf[..n])),
+                            None => Bytes::copy_from_slice(&buf[..n]),
+                        };
+                        flow_for_reader.acquire(chunk.len());
                         crate::probe_trace::mark("w_pty_rx", &chunk);
                         let now = std::time::Instant::now();
                         if last_activity_signal
@@ -453,10 +485,22 @@ impl Mux {
                             let keep = carry.len().min(OSC9_MARKER.len() - 1);
                             carry.drain(..carry.len() - keep);
                         }
+                        if chunk.is_empty() {
+                            continue;
+                        }
                         let mut ring = ring_for_reader.lock().unwrap();
                         ring.push(&chunk);
                         let _ = out_tx.send(chunk);
                     }
+                }
+            }
+            if let Some(status) = &mut status_reader {
+                let mut tail = Vec::new();
+                status.scanner.end_of_stream(&mut tail);
+                if !tail.is_empty() {
+                    let tail = Bytes::from(tail);
+                    ring_for_reader.lock().unwrap().push(&tail);
+                    let _ = out_tx.send(tail);
                 }
             }
             let _ = drained_tx.send(());
@@ -472,6 +516,7 @@ impl Mux {
         });
 
         let exit_tx = self.exit_tx.clone();
+        let program_status_tx = self.program_status_tx.clone();
         std::thread::spawn(move || {
             // Reaping frees the pid for reuse, and an agent that names
             // its inbox after its own pid is addressed by it. Waiting
@@ -484,6 +529,17 @@ impl Mux {
             }
             let status = child.wait();
             let _ = drained_rx.recv_timeout(READER_DRAIN_TIMEOUT);
+            if let Some(store) = &program_status {
+                let changes = store.lock().unwrap().drop_transient();
+                if !changes.is_empty() {
+                    let _ = program_status_tx.send(ProgramStatusUpdate {
+                        terminal_id,
+                        generation,
+                        session_id: semantic_session_id,
+                        changes,
+                    });
+                }
+            }
             exited.store(true, Ordering::SeqCst);
             let exit_code = status.ok().map(|s| s.exit_code() as i32);
             let scrollback = ring.lock().unwrap().ring.snapshot();
@@ -696,6 +752,30 @@ impl Mux {
             .collect()
     }
 
+    /// Every running terminal that holds Program Status records, as a
+    /// change that replaces whatever a mirror of it held.
+    pub fn program_status_snapshots(&self) -> Vec<ProgramStatusUpdate> {
+        self.terminals
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, entry)| !entry.exited.load(Ordering::SeqCst))
+            .filter_map(|(terminal_id, entry)| {
+                let records = entry.program_status.as_ref()?.lock().unwrap().snapshot();
+                (!records.is_empty()).then(|| ProgramStatusUpdate {
+                    terminal_id: *terminal_id,
+                    generation: entry.generation,
+                    session_id: entry.semantic_session_id,
+                    changes: crate::program_status::Changes {
+                        reset: true,
+                        records,
+                        removed: Vec::new(),
+                    },
+                })
+            })
+            .collect()
+    }
+
     pub fn live_terminal_ids(&self) -> Vec<u64> {
         self.terminals
             .lock()
@@ -745,6 +825,80 @@ fn await_exit_leaving_zombie(pid: u32) {
         if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
             return;
         }
+    }
+}
+
+/// The Program Status side of one PTY reader: it removes OSC 7501 from
+/// the output, answers the feature query on the terminal's input, and keeps
+/// the terminal's records.
+struct ProgramStatusReader {
+    store: Arc<Mutex<RecordStore>>,
+    scanner: Scanner,
+    reply_tx: std::sync::mpsc::Sender<Bytes>,
+    updates: mpsc::UnboundedSender<ProgramStatusUpdate>,
+    terminal_id: u64,
+    generation: u64,
+    session_id: u64,
+}
+
+impl ProgramStatusReader {
+    /// Returns the bytes viewers see.
+    fn consume(&mut self, raw: &[u8]) -> Vec<u8> {
+        let mut visible = Vec::with_capacity(raw.len());
+        let mut events = Vec::new();
+        self.scanner.feed(raw, &mut visible, &mut events);
+        for event in events {
+            self.handle(event);
+        }
+        visible
+    }
+
+    fn handle(&mut self, event: ScanEvent) {
+        let changes = match event {
+            ScanEvent::Sequence { body, terminator } => match parse_body(&body) {
+                Ok(Report::Query) => {
+                    debug!(
+                        terminal = self.terminal_id,
+                        "answering program status query"
+                    );
+                    let _ = self
+                        .reply_tx
+                        .send(Bytes::from_static(query_reply(terminator)));
+                    return;
+                }
+                Ok(Report::Update(update)) => self
+                    .store
+                    .lock()
+                    .unwrap()
+                    .apply(update, crate::daemon::now_unix_ms()),
+                Err(reason) => {
+                    debug!(
+                        terminal = self.terminal_id,
+                        reason = reason.as_str(),
+                        "ignored program status report"
+                    );
+                    return;
+                }
+            },
+            ScanEvent::Oversized => {
+                debug!(
+                    terminal = self.terminal_id,
+                    "discarded program status report over the size limit"
+                );
+                return;
+            }
+            ScanEvent::FullReset => self.store.lock().unwrap().reset(),
+            ScanEvent::PromptStart => self.store.lock().unwrap().drop_transient(),
+        };
+        if changes.is_empty() {
+            return;
+        }
+        let _ = self.updates.send(ProgramStatusUpdate {
+            terminal_id: self.terminal_id,
+            generation: self.generation,
+            session_id: self.session_id,
+            changes,
+        });
     }
 }
 
@@ -964,6 +1118,7 @@ mod env_tests {
 mod tests {
     use super::*;
     use crate::term_model::Ring;
+    use pm_protocol::domain::ProgramStatusState;
 
     #[tokio::test]
     async fn launches_user_installed_harness_and_honors_session_path_override() {
@@ -1009,6 +1164,7 @@ mod tests {
                 false,
                 true,
                 None,
+                false,
             )
             .unwrap();
             tokio::time::timeout(Duration::from_secs(5), channels.exit_rx.recv())
@@ -1034,8 +1190,18 @@ mod tests {
             env: vec![],
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(TERMINAL_ID, 1, SESSION_ID, &spec, false, false, true, None)
-            .unwrap();
+        mux.spawn(
+            TERMINAL_ID,
+            1,
+            SESSION_ID,
+            &spec,
+            false,
+            false,
+            true,
+            None,
+            false,
+        )
+        .unwrap();
         assert!(mux.child_pid(TERMINAL_ID).is_some());
         assert_eq!(mux.child_pid(SESSION_ID), None);
         mux.kill(TERMINAL_ID).unwrap();
@@ -1057,7 +1223,7 @@ mod tests {
             env: vec![],
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(TERMINAL_ID, 1, 99, &spec, false, false, true, None)
+        mux.spawn(TERMINAL_ID, 1, 99, &spec, false, false, true, None, false)
             .unwrap();
         tokio::time::timeout(Duration::from_secs(10), channels.exit_rx.recv())
             .await
@@ -1111,7 +1277,7 @@ mod tests {
             env: vec![(NO_COLOR_ENV.into(), "1".into())],
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(42, 1, 8, &spec, false, false, true, None)
+        mux.spawn(42, 1, 8, &spec, false, false, true, None, false)
             .unwrap();
         let exit = channels.exit_rx.blocking_recv().unwrap();
         assert!(find_subsequence(&exit.scrollback, b"xterm-256color,truecolor,unset").is_some());
@@ -1133,7 +1299,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(43, 1, 9, &spec, false, false, false, None)
+        mux.spawn(43, 1, 9, &spec, false, false, false, None, false)
             .unwrap();
         let exit = channels.exit_rx.blocking_recv().unwrap();
         assert!(find_subsequence(&exit.scrollback, b"xterm-256color,unset").is_some());
@@ -1191,7 +1357,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(45, 1, 11, &spec, false, false, true, None)
+        mux.spawn(45, 1, 11, &spec, false, false, true, None, false)
             .unwrap();
         assert_eq!(mux.current_size(45).unwrap(), (DEFAULT_COLS, DEFAULT_ROWS));
         mux.resize(45, 80, 24).unwrap();
@@ -1209,7 +1375,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(48, 1, 14, &spec, false, false, true, Some((152, 45)))
+        mux.spawn(48, 1, 14, &spec, false, false, true, Some((152, 45)), false)
             .unwrap();
         assert_eq!(mux.current_size(48).unwrap(), (152, 45));
         mux.kill(48).unwrap();
@@ -1225,7 +1391,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(47, 1, 13, &spec, false, false, true, None)
+        mux.spawn(47, 1, 13, &spec, false, false, true, None, false)
             .unwrap();
         assert_eq!(mux.current_size(47).unwrap(), (DEFAULT_COLS, DEFAULT_ROWS));
         mux.resize(47, DEFAULT_COLS, DEFAULT_ROWS).unwrap();
@@ -1247,7 +1413,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(46, 1, 12, &spec, false, false, true, None)
+        mux.spawn(46, 1, 12, &spec, false, false, true, None, false)
             .unwrap();
         mux.resize(46, 80, 24).unwrap();
         assert_eq!(mux.current_size(46).unwrap(), (80, 24));
@@ -1281,7 +1447,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(44, 1, 10, &spec, false, false, true, None)
+        mux.spawn(44, 1, 10, &spec, false, false, true, None, false)
             .unwrap();
         tokio::time::timeout(Duration::from_secs(10), channels.activity_rx.recv())
             .await
@@ -1352,7 +1518,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(51, 1, 21, &spec, false, false, true, None)
+        mux.spawn(51, 1, 21, &spec, false, false, true, None, false)
             .unwrap();
         let child = child_pid_from_output(&mux, 51);
 
@@ -1387,7 +1553,7 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(52, 1, 22, &spec, false, false, true, None)
+        mux.spawn(52, 1, 22, &spec, false, false, true, None, false)
             .unwrap();
         child_pid_from_output(&mux, 52);
 
@@ -1408,6 +1574,163 @@ mod tests {
         );
     }
 
+    /// A shell script that probes for Program Status the way an agent does,
+    /// prints the reply it read back in hex, then reports a state.
+    fn program_status_probe() -> CommandSpec {
+        CommandSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                concat!(
+                    "stty raw -echo; ",
+                    "printf 'before\\033]7501;?\\033\\\\after\\n'; ",
+                    "reply=$(head -c 10 | od -An -tx1 | tr -d ' \\n'); ",
+                    "printf 'REPLY %s\\n' \"$reply\"; ",
+                    "printf '\\033]7501;state=working:app=sh\\007'; ",
+                    "printf '\\033]7501;state=done:id=task\\033\\\\'; ",
+                    "printf 'end\\n'",
+                )
+                .into(),
+            ],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+        }
+    }
+
+    #[tokio::test]
+    async fn program_status_answers_the_query_on_input_and_removes_the_sequences() {
+        const TERMINAL_ID: u64 = 61;
+        let (mux, mut channels) = Mux::new();
+        mux.spawn(
+            TERMINAL_ID,
+            3,
+            31,
+            &program_status_probe(),
+            false,
+            false,
+            true,
+            None,
+            true,
+        )
+        .unwrap();
+        let exit = tokio::time::timeout(Duration::from_secs(10), channels.exit_rx.recv())
+            .await
+            .expect("the probe never read a reply")
+            .unwrap();
+        let output = String::from_utf8_lossy(&exit.scrollback);
+        assert!(output.contains("beforeafter"), "{output:?}");
+        assert!(
+            output.contains("REPLY 1b5d373530313b3f1b5c"),
+            "the child read back something other than the reply: {output:?}"
+        );
+        assert!(!output.contains("7501"), "{output:?}");
+
+        let mut updates = Vec::new();
+        while let Ok(update) = channels.program_status_rx.try_recv() {
+            updates.push(update);
+        }
+        assert!(updates
+            .iter()
+            .all(|u| u.terminal_id == TERMINAL_ID && u.generation == 3 && u.session_id == 31));
+        let reported: Vec<_> = updates
+            .iter()
+            .flat_map(|u| u.changes.records.iter().map(|r| (r.id.clone(), r.state)))
+            .collect();
+        assert_eq!(
+            reported,
+            vec![
+                (String::new(), ProgramStatusState::Working),
+                ("task".into(), ProgramStatusState::Done)
+            ]
+        );
+        let last = updates.last().unwrap();
+        assert_eq!(
+            last.changes.removed,
+            vec![String::new()],
+            "the working root ends with the process and the done record stays"
+        );
+    }
+
+    /// Off, the terminal is exactly what it was: nothing is answered, so
+    /// the PTY echoes nothing back, and every byte reaches viewers.
+    #[tokio::test]
+    async fn program_status_off_leaves_the_stream_untouched_and_answers_nothing() {
+        const TERMINAL_ID: u64 = 62;
+        let (mux, mut channels) = Mux::new();
+        let spec = CommandSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "printf 'a\\033]7501;?\\033\\\\b\\033]7501;state=working\\007c'; sleep 1; printf 'end'"
+                    .into(),
+            ],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+        };
+        mux.spawn(TERMINAL_ID, 1, 32, &spec, false, false, true, None, false)
+            .unwrap();
+        let exit = tokio::time::timeout(Duration::from_secs(10), channels.exit_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            &exit.scrollback[..],
+            b"a\x1b]7501;?\x1b\\b\x1b]7501;state=working\x07cend"
+        );
+        assert!(channels.program_status_rx.try_recv().is_err());
+    }
+
+    /// Attach replays a terminal serialized from its emulator state rather
+    /// than the raw bytes, so even with the setting off a replayed viewer
+    /// never receives a query its own terminal could answer into the agent.
+    #[test]
+    fn an_attach_replay_never_carries_program_status_sequences() {
+        let mut retained = Retained::new(SCROLLBACK_CAP_BYTES, DEFAULT_COLS, DEFAULT_ROWS);
+        retained.push(b"one\x1b]7501;?\x1b\\two\x1b]7501;state=working\x07three");
+        let replay = retained.model.snapshot();
+        assert!(find_subsequence(&replay, b"7501").is_none());
+        assert!(find_subsequence(&replay, b"onetwothree").is_some());
+    }
+
+    #[tokio::test]
+    async fn program_status_snapshots_list_terminals_that_hold_records() {
+        const TERMINAL_ID: u64 = 63;
+        let (mux, mut channels) = Mux::new();
+        let spec = CommandSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "printf '\\033]7501;state=blocked:kind=question\\007READY\\n'; sleep 30".into(),
+            ],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+        };
+        mux.spawn(TERMINAL_ID, 2, 33, &spec, false, false, true, None, true)
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), channels.program_status_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let snapshots = mux.program_status_snapshots();
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(
+            (snapshot.terminal_id, snapshot.generation),
+            (TERMINAL_ID, 2)
+        );
+        assert!(snapshot.changes.reset);
+        assert_eq!(snapshot.changes.records.len(), 1);
+        assert_eq!(
+            snapshot.changes.records[0].state,
+            ProgramStatusState::Blocked
+        );
+        mux.kill(TERMINAL_ID).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), channels.exit_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn tracked_terminal_emits_its_foreground_command_title() {
@@ -1418,7 +1741,8 @@ mod tests {
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
-        mux.spawn(41, 1, 7, &spec, false, true, true, None).unwrap();
+        mux.spawn(41, 1, 7, &spec, false, true, true, None, false)
+            .unwrap();
 
         let (_, _viewer) = mux.attach(41).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(1);

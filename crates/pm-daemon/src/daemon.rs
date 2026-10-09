@@ -262,6 +262,7 @@ pub struct Daemon {
     /// Terminal-id keyed because a session's agent terminal is stable while
     /// its generation increments on resume/recovery.
     generation_lifecycle: Mutex<std::collections::HashMap<u64, GenerationLifecycle>>,
+    program_status: crate::session_program_status::ProgramStatusSessions,
     /// Per-worker connection counter, bumped on each registration. A
     /// disconnect captures it so a grace-period fail only fires if no
     /// newer connection arrived.
@@ -566,6 +567,12 @@ pub const SETTING_SPAWN_TRUECOLOR: &str = "spawn.truecolor";
 /// screen. Off keeps their output in the PTY scrollback, which is what
 /// the web terminal and an attach both scroll.
 pub const SETTING_SPAWN_FULLSCREEN: &str = "spawn.fullscreen";
+
+/// Settings key: whether agent terminals consume the Program Status
+/// Protocol (OSC 7501): answer its query, remove its sequences from the
+/// output, and let the agent's root record drive the session state ahead
+/// of lifecycle hooks.
+pub const SETTING_SPAWN_PROGRAM_STATUS: &str = "spawn.program_status";
 
 /// Settings key: how many live sessions one supervisor session may
 /// have spawned at a time; further spawns are rejected until one ends.
@@ -984,6 +991,18 @@ pub const KNOWN_SETTINGS: &[(&str, &str, &str)] = &[
          its default alternate-screen TUI",
     ),
     (
+        SETTING_SPAWN_PROGRAM_STATUS,
+        "false",
+        "let spawned agents report their state through the Program Status \
+         Protocol (OSC 7501): the agent terminal answers the protocol's \
+         feature query, keeps the agent's records, and removes the \
+         sequences from what viewers, attach and transcripts receive. \
+         While the agent holds a root record its state decides the \
+         session state (working, blocked as needs input, idle, done or \
+         error as idle) and lifecycle hooks no longer change it. Off \
+         leaves the terminal and hook-driven state exactly as before",
+    ),
+    (
         SETTING_SUPERVISOR_MAX_CHILDREN,
         "8",
         "how many live sessions one supervisor session may have spawned \
@@ -1285,6 +1304,7 @@ impl Daemon {
             terminal_workers: Mutex::new(std::collections::HashMap::new()),
             pending_session_activity: Mutex::new(std::collections::HashMap::new()),
             generation_lifecycle: Mutex::new(std::collections::HashMap::new()),
+            program_status: Default::default(),
             worker_epochs: Mutex::new(std::collections::HashMap::new()),
             registry: config.registry,
             state_lock: Mutex::new(()),
@@ -1449,6 +1469,15 @@ impl Daemon {
 
     pub(crate) fn mux_is_running(&self, terminal_id: u64) -> bool {
         self.mux.is_running(terminal_id)
+    }
+
+    pub(crate) fn program_status(&self) -> &crate::session_program_status::ProgramStatusSessions {
+        &self.program_status
+    }
+
+    /// Held across a session state read, its write and the publish.
+    pub(crate) fn lock_session_state(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.state_lock.lock().unwrap()
     }
 
     pub(crate) fn stale_turn_quiet_ms(&self) -> i64 {
@@ -1715,6 +1744,9 @@ impl Daemon {
             }
         }
         drop(activity);
+        for session in &mut snapshot.sessions {
+            session.program_status = self.program_status_records(session.id);
+        }
         if !self.local_worker_enabled {
             snapshot
                 .workers
@@ -2082,13 +2114,29 @@ impl Daemon {
         }));
     }
 
+    pub(crate) fn send_session_alert(&self, alert: pm_protocol::domain::SessionAlert) {
+        let _ = self.events_tx.send(Event::SessionAlert(alert));
+    }
+
     pub(crate) fn publish(&self, mut event: Event) {
+        if let Event::SessionChanged(session) = &mut event {
+            session.program_status = self.program_status_records(session.id);
+        }
         let mut alert = None;
         let lifecycle_changed = match &event {
             Event::SessionChanged(session) => {
                 let transition = self.record_session_lifecycle(session);
                 if let Some(t) = &transition {
-                    if t.from != t.to {
+                    if t.from != t.to
+                        && !self.debounce_program_status_alert(
+                            session.id,
+                            t.bucket_id,
+                            t.generation,
+                            t.from,
+                            t.to,
+                            now_unix_ms(),
+                        )
+                    {
                         alert = self.observe_push_transition(
                             session,
                             t.bucket_id,
@@ -2101,6 +2149,7 @@ impl Daemon {
                 transition.is_some()
             }
             Event::SessionRemoved(session_id) => {
+                self.forget_program_status(*session_id);
                 self.supervisor_wake().forget_session(*session_id);
                 self.stale_turn().forget_session(*session_id);
                 let mut journal = self.session_wait_journal.lock().unwrap();
@@ -2390,6 +2439,9 @@ impl Daemon {
             return;
         }
         self.observe_agent_activity(terminal.session_id);
+        if self.program_status_decides(terminal.session_id) {
+            return;
+        }
         if !self.consume_terminal_fallback(&terminal) {
             return;
         }
@@ -3715,6 +3767,7 @@ impl Daemon {
                 "session {id} is still live, attach to it instead"
             )));
         }
+        self.forget_program_status(id);
         let transcript_path = self.storage.get_transcript_path(id)?;
         let has_recorded_path = transcript_path.as_ref().is_some_and(|p| !p.is_empty());
         let worker_reports_resumable = if session.worker_id == LOCAL_WORKER_ID && has_recorded_path
@@ -3814,6 +3867,7 @@ impl Daemon {
                 model_endpoint: model_endpoint.clone().map(Box::new),
                 initial_cols,
                 initial_rows,
+                program_status: self.spawn_program_status_on(&link),
             })?;
             let updated = self
                 .storage
@@ -3869,6 +3923,7 @@ impl Daemon {
             false,
             self.spawn_truecolor(),
             initial_size,
+            self.spawn_program_status(),
         ) {
             Ok(()) => {
                 let _guard = self.state_lock.lock().unwrap();
@@ -4005,6 +4060,7 @@ impl Daemon {
                 } else {
                     None
                 },
+                program_status: self.spawn_program_status_on(&link),
             };
             if let Err(e) = link.send(spawn) {
                 return Err(self.fail_session(session.id, e.into()));
@@ -4071,6 +4127,7 @@ impl Daemon {
             false,
             self.spawn_truecolor(),
             initial_size,
+            self.spawn_program_status(),
         ) {
             Ok(()) => {
                 let _guard = self.state_lock.lock().unwrap();
@@ -4185,11 +4242,16 @@ impl Daemon {
                 // nothing running, so it settles into idle; anything
                 // already working keeps its turn, since this hook also
                 // fires on `/clear` and `/compact` mid-turn.
-                let session = if session.state == SessionState::Starting {
-                    self.storage
-                        .update_session_state(session_id, SessionState::Idle, "")?
-                } else {
-                    session
+                let session = match self.deferred_hook_state(session_id) {
+                    Some((SessionState::Starting, _)) => {
+                        self.defer_hook_state(session_id, SessionState::Idle, "");
+                        session
+                    }
+                    Some(_) => session,
+                    None if session.state == SessionState::Starting => self
+                        .storage
+                        .update_session_state(session_id, SessionState::Idle, "")?,
+                    None => session,
                 };
                 info!(session = session_id, "session identity captured");
                 self.publish(Event::SessionChanged(session));
@@ -4198,7 +4260,12 @@ impl Daemon {
         };
         let _guard = self.state_lock.lock().unwrap();
         let current = self.storage.get_session(session_id)?;
-        let previous_state = current.state;
+        // A live Program Status root record decides the session state, so
+        // the hook's own state is kept aside and its bookkeeping runs on that.
+        let deferred = self.deferred_hook_state(session_id);
+        let (previous_state, previous_detail) = deferred
+            .clone()
+            .unwrap_or_else(|| (current.state, current.state_detail.clone()));
         if kind == HookKind::PromptSubmitted {
             self.storage.clear_supervision_completion(session_id)?;
         }
@@ -4209,8 +4276,22 @@ impl Daemon {
             self.storage.record_agent_turn(session_id, now_unix_ms())?;
         }
         let preserves_needs_input = matches!(kind, HookKind::TurnEnded | HookKind::TurnFailed)
-            && current.state == SessionState::NeedsInput;
-        let mut updated = if preserves_needs_input {
+            && previous_state == SessionState::NeedsInput;
+        let (hook_state, hook_detail) = if preserves_needs_input {
+            (previous_state, previous_detail)
+        } else {
+            (state, detail.to_string())
+        };
+        let mut updated = if deferred.is_some() {
+            self.defer_hook_state(session_id, hook_state, &hook_detail);
+            info!(
+                session = session_id,
+                kind = kind.as_str(),
+                deferred_state = hook_state.as_str(),
+                "program status decides the session state, hook state kept aside"
+            );
+            current
+        } else if preserves_needs_input {
             current
         } else {
             self.storage
@@ -4220,8 +4301,8 @@ impl Daemon {
             let generation = self.storage.agent_terminal(session_id)?.generation;
             let revision = self.storage.session_transition_marks(session_id)?.0;
             let clean_completion = kind == HookKind::TurnEnded
-                && updated.state == SessionState::Idle
-                && updated.state_detail.is_empty();
+                && hook_state == SessionState::Idle
+                && hook_detail.is_empty();
             let silent = self.storage.finish_supervision_turn(
                 session_id,
                 generation,
@@ -4244,19 +4325,21 @@ impl Daemon {
         // twice, so they say what they are while still logging that the
         // hook was received, which is the question a session that looks
         // stuck actually raises.
-        if updated.state == previous_state {
-            info!(
-                session = session_id,
-                kind = kind.as_str(),
-                state = updated.state.as_str(),
-                "hook event left the session state unchanged"
-            );
-        } else {
-            info!(
-                session = session_id,
-                state = updated.state.as_str(),
-                "hook transition"
-            );
+        if deferred.is_none() {
+            if updated.state == previous_state {
+                info!(
+                    session = session_id,
+                    kind = kind.as_str(),
+                    state = updated.state.as_str(),
+                    "hook event left the session state unchanged"
+                );
+            } else {
+                info!(
+                    session = session_id,
+                    state = updated.state.as_str(),
+                    "hook transition"
+                );
+            }
         }
         let nudge = (kind == HookKind::TurnEnded && updated.headline.trim().is_empty())
             .then(|| STOP_REPORT_NUDGE.to_string());
@@ -5667,6 +5750,31 @@ impl Daemon {
             .flatten()
             .map(|v| v != "false")
             .unwrap_or(true)
+    }
+
+    /// Whether agent terminals consume the Program Status Protocol; the
+    /// stored setting, else off.
+    fn spawn_program_status(&self) -> bool {
+        self.storage
+            .get_setting(SETTING_SPAWN_PROGRAM_STATUS)
+            .ok()
+            .flatten()
+            .is_some_and(|v| v == "true")
+    }
+
+    /// [`Self::spawn_program_status`] for a worker that can honor it.
+    fn spawn_program_status_on(&self, link: &crate::workers::WorkerLink) -> bool {
+        if !self.spawn_program_status() {
+            return false;
+        }
+        let supported = link.protocol_version() >= pm_protocol::WORKER_PROTOCOL_PROGRAM_STATUS;
+        if !supported {
+            info!(
+                worker_protocol = link.protocol_version(),
+                "worker predates program status, its agent keeps hook-driven state"
+            );
+        }
+        supported
     }
 
     /// Whether spawned agents may take over the alternate screen; the
@@ -8042,6 +8150,11 @@ impl Daemon {
         submitted: bool,
         input_state: SessionState,
     ) {
+        // An agent reporting through Program Status says when its turn
+        // starts, and a guess from input would only be overwritten.
+        if self.program_status_decides(terminal.session_id) {
+            return;
+        }
         let Ok(session) = self.storage.get_session(terminal.session_id) else {
             return;
         };
@@ -8300,6 +8413,7 @@ impl Daemon {
                 true,
                 self.spawn_truecolor(),
                 initial_size,
+                false,
             )?;
         } else {
             let link = self.worker_link(worker_id)?;
@@ -8491,6 +8605,7 @@ impl Daemon {
             return;
         }
         self.refresh_local_agent_resumability(terminal.session_id);
+        self.program_status_exited(terminal.session_id);
         let _guard = self.state_lock.lock().unwrap();
         match self.storage.set_session_ended(
             terminal.session_id,
@@ -9023,6 +9138,25 @@ impl Daemon {
                     self.handle_terminal_activity(terminal_id, generation);
                 }
             }
+            WorkerMsg::ProgramStatus {
+                terminal_id,
+                generation,
+                reset,
+                records,
+                removed,
+            } => {
+                if self.speaks_for_terminal(worker_id, terminal_id, "ProgramStatus") {
+                    self.handle_program_status(
+                        terminal_id,
+                        generation,
+                        &crate::program_status::Changes {
+                            reset,
+                            records,
+                            removed,
+                        },
+                    );
+                }
+            }
             WorkerMsg::SessionExit {
                 session_id,
                 exit_code,
@@ -9405,6 +9539,9 @@ impl Daemon {
         // exit, which can trail the real one and must not overwrite it.
         if !terminal.state.is_live() {
             return;
+        }
+        if terminal.kind == pm_protocol::domain::TerminalKind::Agent {
+            self.program_status_exited(terminal.session_id);
         }
         let updated_terminal = match self.storage.update_terminal_run(
             terminal_id,

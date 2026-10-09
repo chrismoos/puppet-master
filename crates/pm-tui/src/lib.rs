@@ -87,6 +87,7 @@ pub(crate) mod testutil {
             idle_unseen: false,
             model_profile_id: None,
             model_profile_source: None,
+            program_status: Vec::new(),
         }
     }
 
