@@ -131,11 +131,16 @@ test("ended, failed, and removed terminals release cached layers and sockets", a
   expect((await terminalSockets(page)).at(-1)?.url).not.toBe(exitedSocket);
 
   // A removed shell uses its terminal cache address and closes its own socket.
+  const terminalIdOf = (url: string) => url.match(/\/ws\/terminal\/(\d+)/)?.[1];
+  const terminalsBeforeShell = new Set((await terminalSockets(page)).map((record) => terminalIdOf(record.url)));
   await page.getByRole("button", { name: "+ Shell", exact: true }).click();
   await expect(page.getByRole("button", { name: /shell \d+/ })).toBeVisible();
-  const shellSocket = (await terminalSockets(page)).at(-1)?.url;
-  if (!shellSocket) throw new Error("missing shell terminal socket");
-  const shellId = shellSocket.match(/\/ws\/terminal\/(\d+)/)?.[1];
+  // The tab paints before the shell's socket opens, so the shell is the first socket for an unseen terminal.
+  const shellRecord = async () => (await terminalSockets(page))
+    .find((record) => !terminalsBeforeShell.has(terminalIdOf(record.url)));
+  await expect.poll(async () => (await shellRecord())?.url).toBeTruthy();
+  const shellSocket = (await shellRecord())!.url;
+  const shellId = terminalIdOf(shellSocket);
   if (!shellId) throw new Error(`missing terminal id in ${shellSocket}`);
   await expectTerminalOnline(page, `t:${shellId}`);
   const shellInput = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');

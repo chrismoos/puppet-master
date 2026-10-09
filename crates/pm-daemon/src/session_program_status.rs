@@ -22,9 +22,7 @@ use crate::program_status::{Changes, RecordStore};
 /// settles rather than one per flip.
 pub const PROGRAM_STATUS_ALERT_DEBOUNCE_MS: i64 = 2_000;
 
-/// An alert held until the session's state settles. `from` is the state
-/// before the first transition in the run, so a run that ends where it
-/// started alerts for nothing.
+/// `from` is the state before the first transition in a run, so a run that ends where it started raises nothing.
 struct PendingAlert {
     bucket_id: u64,
     generation: u64,
@@ -233,9 +231,7 @@ impl Daemon {
             .remove(&session_id);
     }
 
-    /// Holds the alert for a transition between states a root record
-    /// decides, and returns true. Returns false, dropping any held alert,
-    /// for every other transition, which alerts at once.
+    /// Returns true when the alert waits for the state to settle, false when the transition alerts at once.
     pub(crate) fn debounce_program_status_alert(
         &self,
         session_id: u64,
@@ -270,9 +266,6 @@ impl Daemon {
         self.flush_program_status_alerts_at(crate::daemon::now_unix_ms());
     }
 
-    /// Raises each held alert whose session has kept its state for the
-    /// debounce interval, judged from where the run started to where it
-    /// settled.
     pub fn flush_program_status_alerts_at(&self, now_unix_ms: i64) {
         let due: Vec<(u64, PendingAlert)> = {
             let mut sessions = self.program_status().sessions.lock().unwrap();

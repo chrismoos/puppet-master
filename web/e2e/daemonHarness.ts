@@ -5,6 +5,9 @@ import { join } from "node:path";
 
 const DAEMON_START_TIMEOUT_MS = 15_000;
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
+const DAEMON_BIND_ATTEMPTS = 5;
+const DAEMON_BIND_RETRY_MS = 250;
+const ADDRESS_IN_USE = "Address already in use";
 
 export interface DaemonHarness {
   baseUrl: string;
@@ -81,9 +84,31 @@ export async function startDaemon(
   const codexShim = join(binDir, "codex");
   await rm(codexShim, { force: true });
   await symlink(testAgent, codexShim);
-  const port = options.port ?? await freePort();
+  // A parallel lane or an outgoing connection can take a freePort port before the daemon binds it.
+  for (let attempt = 1; ; attempt += 1) {
+    const port = options.port ?? await freePort();
+    const workerPort = options.workerPort ?? await freePort();
+    const harness = launchDaemon(root, pmBinary, binDir, port, workerPort, options.publicUrl);
+    try {
+      await waitForDaemon(harness);
+      return harness;
+    } catch (error) {
+      if (attempt >= DAEMON_BIND_ATTEMPTS || !harness.logs().includes(ADDRESS_IN_USE)) throw error;
+      await stopDaemon(harness.child, { disposable: true });
+      await new Promise((resolve) => setTimeout(resolve, DAEMON_BIND_RETRY_MS));
+    }
+  }
+}
+
+function launchDaemon(
+  root: string,
+  pmBinary: string,
+  binDir: string,
+  port: number,
+  workerPort: number,
+  publicUrl: boolean | string | undefined,
+): DaemonHarness {
   const baseUrl = `http://127.0.0.1:${port}`;
-  const workerPort = options.workerPort ?? await freePort();
   const workerUrl = `wss://127.0.0.1:${workerPort}`;
   const socket = join(root, "pm.sock");
   const env = {
@@ -103,8 +128,8 @@ export async function startDaemon(
     "--scrollback-dir", join(root, "scrollback"),
     "--socket", socket,
     "--http", `127.0.0.1:${port}`,
-    ...(options.publicUrl
-      ? ["--public-url", typeof options.publicUrl === "string" ? options.publicUrl : baseUrl]
+    ...(publicUrl
+      ? ["--public-url", typeof publicUrl === "string" ? publicUrl : baseUrl]
       : []),
     // The worker plane's default port is fixed, so lane daemons running
     // side by side would fight over it.
@@ -116,7 +141,5 @@ export async function startDaemon(
   };
   child.stdout?.on("data", append);
   child.stderr?.on("data", append);
-  const harness = { baseUrl, workerUrl, child, env, logs: () => output, socket };
-  await waitForDaemon(harness);
-  return harness;
+  return { baseUrl, workerUrl, child, env, logs: () => output, socket };
 }

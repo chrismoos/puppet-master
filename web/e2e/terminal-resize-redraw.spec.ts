@@ -33,8 +33,8 @@ type Stage = {
 /** Lines of the visible terminal, scrollback and screen together. */
 async function visibleLines(page: Page): Promise<string[]> {
   return page.evaluate(() => {
-    const stage = (window as unknown as { __pmStage: Stage }).__pmStage;
-    const layer = stage.layers.get(stage.visibleId ?? "");
+    const stage = (window as unknown as { __pmStage?: Stage }).__pmStage;
+    const layer = stage?.layers.get(stage.visibleId ?? "");
     if (!layer) return [];
     const buffer = layer.term.buffer.active;
     const lines: string[] = [];

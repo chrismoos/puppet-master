@@ -66,6 +66,7 @@ test("spawn popover shows project and bucket agent defaults plus explicit overri
   await page.locator(".manage-project").first().locator(".catalog-name").click();
   await drawer.getByLabel("Default Agent").selectOption("");
   await drawer.getByRole("button", { name: "Save changes" }).click();
+  await expect(drawer).toBeHidden();
   await page.getByRole("button", { name: "Back to sessions" }).click();
   await openSpawn(page, projectName);
   await expect(pop.locator('[data-chip="agent"]')).toHaveText("Codex");
@@ -213,6 +214,8 @@ test("remote cwd override directs one Supervisor spawn and leaves the project de
   await pop.getByRole("button", { name: /permissions, profile, directory/ }).click();
   await expect(pop.locator(".dirpicker input")).toHaveValue(projectPath);
   await pop.getByLabel("title (optional)").fill("remote after override");
+  await pop.locator('[data-chip="agent"]').click();
+  await page.getByRole("menuitemradio", { name: "Codex", exact: true }).click();
   await pop.getByRole("button", { name: "spawn", exact: true }).click();
   await expect.poll(() => isolatedDaemon.session("remote after override")).toMatchObject({
     cwd: projectPath,
