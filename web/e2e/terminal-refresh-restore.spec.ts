@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 const HISTORY_LINES = 300;
 const FRAMES = 400;
@@ -87,6 +87,7 @@ async function verifyClaudeReload(page: Page, frames: number): Promise<void> {
   await expect(sessions.nth(0)).toBeVisible();
   await sessions.nth(0).click();
   await expect(page.locator(".xterm")).toBeVisible();
+  await expectTerminalRevealed(page, "s:");
 
   const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
   await textarea.focus();
@@ -177,6 +178,7 @@ test("syncout survives a reload without a window resize", async ({ page }) => {
   await expect(sessions.nth(0)).toBeVisible();
   await sessions.nth(0).click();
   await expect(page.locator(".xterm")).toBeVisible();
+  await expectTerminalRevealed(page, "s:");
 
   const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
   await textarea.focus();

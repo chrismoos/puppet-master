@@ -149,7 +149,10 @@ export function BoardPage({ bucketId, active, focusItemId, focusItem, onPmLink, 
       // Re-parsing the same route produces an equal but distinct object. Keep
       // the current one so it cannot re-query and discard already loaded pages.
       setRequestFilters((current) => itemFiltersEqual(current, filters) ? current : filters);
-      if (active && !focusItemId) history.replaceState(null, "", boardHash(bucketId, filters));
+      // The route can leave this board before a re-render clears the timer.
+      if (active && !focusItemId && location.hash.includes(`/bucket/${bucketId}/board`)) {
+        history.replaceState(null, "", boardHash(bucketId, filters));
+      }
     }, 300);
     return () => window.clearTimeout(timer);
   }, [active, bucketId, filters, focusItemId]);

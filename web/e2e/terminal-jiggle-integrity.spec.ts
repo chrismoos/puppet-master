@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 // The repaint kick shrinks the terminal by one row and grows it back. That is
 // meant to make a full-screen program redraw. What it must not do is move the
@@ -59,6 +59,7 @@ test("the repaint kick leaves the rows already on screen where they were", async
   await logIn(page);
   await page.locator(".sb-session").first().click();
   await expect(page.locator(".xterm")).toBeVisible();
+  await expectTerminalRevealed(page, "s:");
 
   // Fill past the screen so the cursor sits at the bottom, which is where a
   // row lost to a shrink cannot come back on its own.

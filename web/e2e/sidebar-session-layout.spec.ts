@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page, type TestInfo } from "./fixtures";
-import { computedColor, logIn } from "./support";
+import { computedColor, expectTerminalRevealed, logIn } from "./support";
 
 const TERMINAL_READY_TIMEOUT_MS = 20_000;
 
@@ -94,9 +94,9 @@ async function requestInput(page: Page, title: string, sessionId: number): Promi
     has: page.locator(".sb-session-title", { hasText: new RegExp(`^${title}$`) }),
   });
   await row.locator(".sb-session").click();
-  const terminal = page.locator(".term-layer:visible .xterm-helper-textarea");
-  await expect(terminal).toBeAttached();
+  await expectTerminalRevealed(page, `s:${sessionId}`);
   await expectVisibleTerminalOnline(page, sessionId);
+  const terminal = page.locator(".term-layer:visible .xterm-helper-textarea");
   await terminal.pressSequentially("needs");
   await terminal.press("Enter");
   await expect(row).toHaveClass(/is-needs-input/);

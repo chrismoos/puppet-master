@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 // Switching between agent sessions left the screen wrong: typed input drawn
 // above the input box, and lines overlapping each other. claudestream models
@@ -69,6 +69,7 @@ test("switching away from a streaming agent and back leaves the screen consisten
 
   await sessions.nth(0).click();
   await expect(page.locator(".xterm")).toBeVisible();
+  await expectTerminalRevealed(page, "s:");
 
   const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
   await textarea.focus();

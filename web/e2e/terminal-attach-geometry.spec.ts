@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page } from "./fixtures";
-import { apiHeaders, logIn } from "./support";
+import { apiHeaders, expectTerminalRevealed, logIn } from "./support";
 
 // gridtui (pm-testagent) lays out numbered rows exactly as wide as the PTY, a
 // rule, a prompt, and one status line, repaints on SIGWINCH, and otherwise
@@ -167,6 +167,7 @@ async function openViewer(browser: Browser, width: number): Promise<Page> {
 async function openSession(page: Page): Promise<void> {
   await page.locator(".sb-session").nth(0).click();
   await expect(page.locator('.term-layer[style*="visible"] .xterm')).toBeVisible();
+  await expectTerminalRevealed(page, "s:");
 }
 
 /** Opens the session in a viewer, starts gridtui, and returns the terminal
