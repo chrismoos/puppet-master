@@ -3006,7 +3006,7 @@ mod tests {
     /// The failure the keepalive is for: a controller whose machine went
     /// away holds a socket that delivers nothing and fails nothing, and
     /// the splice would wait on it forever.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_forward_stream_whose_controller_stops_answering_is_closed_within_the_deadline() {
         let (link, silent) = linked().await;
         let (target, _target_peer) = tokio::io::duplex(1024);
@@ -3025,7 +3025,7 @@ mod tests {
     /// An idle forward is not a dead one. The controller answers the
     /// pings this end sends, which is all the deadline asks of it, and
     /// the stream still carries bytes both ways afterwards.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_idle_forward_stream_whose_controller_answers_stays_open_and_still_carries_bytes() {
         let (link, controller) = linked().await;
         let (target, mut target_peer) = tokio::io::duplex(1024);

@@ -55,14 +55,9 @@ async fn an_idle_child_wakes_a_supervisor_whose_turn_ended() {
     assert_eq!(wakes[0].sessions, vec![child]);
     // The supervisor's PTY echoes what it was sent, so this proves the
     // notice reached the agent rather than only the delivery path.
-    let seen = await_output(
-        &mut rx,
-        replay.to_vec(),
-        format!("session {child} is idle").as_bytes(),
-    )
-    .await;
+    let seen = await_output(&mut rx, replay.to_vec(), b"wait_sessions").await;
     let seen = String::from_utf8_lossy(&seen);
-    assert!(seen.contains("wait_sessions"), "{seen}");
+    assert!(seen.contains(&format!("session {child} is idle")), "{seen}");
     assert!(
         item_notes(&env, item_id)
             .iter()
@@ -224,6 +219,10 @@ async fn a_quiet_supervisor_working_in_the_background_is_reminded() {
     assert_eq!(wakes[0].sessions, vec![child]);
 }
 
+/// How long both sides of a supervisor's PTY must be quiet before a notice
+/// is typed into it.
+const WAKE_TERMINAL_IDLE_MS: i64 = 5_000;
+
 #[tokio::test]
 async fn a_notice_waits_for_partial_user_input_and_then_for_a_quiet_pty() {
     let env = daemon_env();
@@ -249,20 +248,21 @@ async fn a_notice_waits_for_partial_user_input_and_then_for_a_quiet_pty() {
     // Submission clears the partial-input guard. The user's input makes the
     // hookless test agent working; ending that turn makes it eligible again,
     // but only after the PTY quiet window has elapsed.
+    let before_submit = unix_ms();
     env.daemon
         .pty_input(supervisor, bytes::Bytes::from_static(b"\r"));
     end_supervisor_turn(&env, supervisor);
-    let submitted_at = unix_ms();
+    let after_turn = unix_ms();
     assert!(
         env.daemon
-            .process_supervisor_wakes_at(submitted_at + 4_000)
+            .process_supervisor_wakes_at(before_submit + WAKE_TERMINAL_IDLE_MS - 1)
             .await
             .is_empty(),
         "recent submitted input must still get a quiet window"
     );
     let wakes = env
         .daemon
-        .process_supervisor_wakes_at(submitted_at + 6_000)
+        .process_supervisor_wakes_at(after_turn + WAKE_TERMINAL_IDLE_MS)
         .await;
     assert_eq!(
         wakes.len(),
@@ -579,9 +579,9 @@ async fn a_quiet_supervisor_with_live_children_is_reminded() {
     assert_eq!(wakes.len(), 1, "{wakes:?}");
     assert_eq!(wakes[0].sessions, vec![child]);
 
-    let seen = await_output(&mut rx, replay.to_vec(), b"have not supervised").await;
+    let seen = await_output(&mut rx, replay.to_vec(), b"wait_sessions").await;
     let seen = String::from_utf8_lossy(&seen);
-    assert!(seen.contains("wait_sessions"), "{seen}");
+    assert!(seen.contains("have not supervised"), "{seen}");
 }
 
 /// An exited child is nothing left to answer for.

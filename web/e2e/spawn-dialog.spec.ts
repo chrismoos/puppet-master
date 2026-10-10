@@ -179,6 +179,7 @@ test("remote cwd override directs one Supervisor spawn and leaves the project de
   });
   await expect.poll(() => isolatedDaemon.session("remote default cwd")?.workerId ?? 0)
     .toBeGreaterThan(0);
+  await expect(pop).toBeHidden();
 
   // Supervisor spawn from the bucket ＋ with an explicit directory override.
   await page.locator('.sb-bucket-row [title^="new session in "]').first().click();
@@ -198,6 +199,7 @@ test("remote cwd override directs one Supervisor spawn and leaves the project de
   });
   await expect.poll(() => isolatedDaemon.session("remote supervisor override")?.workerId ?? 0)
     .toBeGreaterThan(0);
+  await expect(pop).toBeHidden();
 
   // The successful supervisor spawn remembered its home project, so the
   // next bucket ＋ opens with that project as the quiet default.

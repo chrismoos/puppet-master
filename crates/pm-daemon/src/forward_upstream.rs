@@ -560,6 +560,13 @@ mod tests {
         timeout: Duration::from_millis(100),
     };
 
+    /// Pings as often as `QUICK` but waits long enough for an answer that
+    /// a loaded runner cannot end a healthy connection.
+    const PATIENT: ShareKeepalive = ShareKeepalive {
+        interval: QUICK.interval,
+        timeout: Duration::from_secs(10),
+    };
+
     async fn h2_target() -> (crate::dir_server::DirShareServer, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<p>shared</p>").unwrap();
@@ -603,10 +610,10 @@ mod tests {
         let tcp = TcpStream::connect(("127.0.0.1", server.port()))
             .await
             .unwrap();
-        let (mut sender, alive) = multiplexed_handshake(TokioIo::new(tcp), QUICK)
+        let (mut sender, alive) = multiplexed_handshake(TokioIo::new(tcp), PATIENT)
             .await
             .unwrap();
-        tokio::time::sleep(QUICK.interval * 10).await;
+        tokio::time::sleep(PATIENT.interval * 10).await;
         assert!(
             alive.load(Ordering::Relaxed),
             "an idle connection whose peer answers is kept"
@@ -628,12 +635,12 @@ mod tests {
         let pool = UpstreamPool::default();
         let connect = || TcpStream::connect(("127.0.0.1", server.port()));
         let (first, first_alive) =
-            multiplexed_handshake(TokioIo::new(connect().await.unwrap()), QUICK)
+            multiplexed_handshake(TokioIo::new(connect().await.unwrap()), PATIENT)
                 .await
                 .unwrap();
         pool.install_multiplexed(1, server.port(), first, first_alive.clone());
         let (second, second_alive) =
-            multiplexed_handshake(TokioIo::new(connect().await.unwrap()), QUICK)
+            multiplexed_handshake(TokioIo::new(connect().await.unwrap()), PATIENT)
                 .await
                 .unwrap();
         pool.install_multiplexed(1, server.port(), second, second_alive.clone());

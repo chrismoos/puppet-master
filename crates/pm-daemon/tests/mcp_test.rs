@@ -2819,17 +2819,18 @@ async fn supervisor_long_prompt_submits_through_a_real_codex_like_pty_tui() {
 /// somewhere take turns.
 static INBOX_ENV_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Waits briefly for a frame containing `needle`. The socket is read by
-/// a task of its own, so a write that has returned has not necessarily
-/// been collected yet.
+const FRAME_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// The socket is read by a task of its own, so a write that has returned has
+/// not necessarily been collected yet.
 async fn await_frame(frames: &Arc<std::sync::Mutex<Vec<String>>>, needle: &str) -> bool {
-    for _ in 0..100 {
-        if frames.lock().unwrap().iter().any(|f| f.contains(needle)) {
-            return true;
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        while !frames.lock().unwrap().iter().any(|f| f.contains(needle)) {
+            tokio::time::sleep(FRAME_POLL).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    false
+    })
+    .await
+    .is_ok()
 }
 
 #[tokio::test]
@@ -3654,7 +3655,7 @@ async fn wait_sessions_baseline_and_cursor_close_the_status_to_wait_race() {
         .handle_hook_event(&child_token, HookKind::TurnEnded, "", "", "", false)
         .unwrap();
     let raced = tokio::time::timeout(
-        std::time::Duration::from_millis(250),
+        TEST_TIMEOUT,
         call(
             &app,
             &token,
@@ -4568,72 +4569,64 @@ async fn snooze_supervision_after_flag_blocked_preserves_the_question_and_alert(
     assert!(!session.idle_unseen);
 }
 
-/// A report that repeats a headline the dashboard has shown for a while is
-/// answered with a request to update it, once per stale window, and a goal
-/// the same way on its own longer window. A changed line is simply recorded.
+/// A threshold any elapsed time reaches, so a repeated line is stale on the
+/// next report without the test depending on how fast the runner is.
+const STALE_AT_ONCE_MS: i64 = 1;
+const NEVER_STALE_MS: i64 = i64::MAX;
+
+/// A report that repeats a stale headline or goal is answered with a request
+/// to update that line, and a changed line is simply recorded.
 #[tokio::test]
 async fn a_report_repeating_a_stale_headline_or_goal_is_asked_to_update_it() {
     let env = daemon_env();
     let id = spawn_test_session(&env, "p");
     let token = env.daemon.session_token(id).unwrap().unwrap();
     let app = pm_daemon::http::router(Arc::clone(&env.daemon));
-    env.daemon.set_report_freshness_thresholds(40, 120);
+    let report = |args: serde_json::Value| {
+        let app = app.clone();
+        let token = token.clone();
+        async move { call(&app, &token, "report", args).await }
+    };
+    let same = || json!({"goal": "Moving auth", "headline": "building"});
+    env.daemon
+        .set_report_freshness_thresholds(NEVER_STALE_MS, NEVER_STALE_MS);
 
-    let first = call(
-        &app,
-        &token,
-        "report",
-        json!({"goal": "Moving auth", "headline": "building"}),
-    )
-    .await;
-    assert_eq!(call_text(&first), "recorded");
-    let soon = call(
-        &app,
-        &token,
-        "report",
-        json!({"goal": "Moving auth", "headline": "building"}),
-    )
-    .await;
-    assert_eq!(call_text(&soon), "recorded");
+    assert_eq!(call_text(&report(same()).await), "recorded");
+    assert_eq!(call_text(&report(same()).await), "recorded");
 
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let stale = call(
-        &app,
-        &token,
-        "report",
-        json!({"goal": "Moving auth", "headline": "building"}),
-    )
+    tokio::time::sleep(std::time::Duration::from_millis(
+        2 * STALE_AT_ONCE_MS as u64,
+    ))
     .await;
-    assert_eq!(stale["isError"], false, "{stale}");
-    let text = call_text(&stale);
+    env.daemon
+        .set_report_freshness_thresholds(STALE_AT_ONCE_MS, NEVER_STALE_MS);
+    let stale_headline = report(same()).await;
+    assert_eq!(stale_headline["isError"], false, "{stale_headline}");
+    let text = call_text(&stale_headline);
     assert!(
         text.starts_with("headline has been \"building\" for"),
         "{text}"
     );
     assert!(!text.contains("goal has been"), "{text}");
-    // Asked once per window, not on every report.
-    let again = call(&app, &token, "report", json!({"headline": "building"})).await;
-    assert_eq!(call_text(&again), "recorded");
 
-    tokio::time::sleep(std::time::Duration::from_millis(90)).await;
-    let both = call(
-        &app,
-        &token,
-        "report",
-        json!({"goal": "Moving auth", "headline": "building"}),
-    )
-    .await;
-    let text = call_text(&both);
-    assert!(text.contains("headline has been \"building\""), "{text}");
-    assert!(text.contains("goal has been \"Moving auth\""), "{text}");
+    env.daemon
+        .set_report_freshness_thresholds(NEVER_STALE_MS, STALE_AT_ONCE_MS);
+    let stale_goal = report(same()).await;
+    let text = call_text(&stale_goal);
+    assert!(
+        text.starts_with("goal has been \"Moving auth\" for"),
+        "{text}"
+    );
+    assert!(!text.contains("headline has been"), "{text}");
 
-    let moved = call(
-        &app,
-        &token,
-        "report",
-        json!({"goal": "Moving auth", "headline": "testing"}),
-    )
-    .await;
+    env.daemon
+        .set_report_freshness_thresholds(STALE_AT_ONCE_MS, NEVER_STALE_MS);
+    let moved = report(json!({"goal": "Moving auth", "headline": "testing"})).await;
     assert_eq!(call_text(&moved), "recorded");
     assert_eq!(session_of(&env, id).headline, "testing");
+
+    env.daemon
+        .set_report_freshness_thresholds(NEVER_STALE_MS, STALE_AT_ONCE_MS);
+    let regoaled = report(json!({"goal": "Moving storage", "headline": "testing"})).await;
+    assert_eq!(call_text(&regoaled), "recorded");
 }

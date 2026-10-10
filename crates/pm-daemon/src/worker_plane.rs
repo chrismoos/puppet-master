@@ -699,7 +699,7 @@ mod tests {
 
     /// The failure this exists for: a peer whose machine went away holds a
     /// socket that delivers nothing and fails nothing.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_link_whose_peer_stops_answering_ends() {
         let (host, silent) = linked().await;
         let (mut frames, _pumps) = pumps(
@@ -717,7 +717,7 @@ mod tests {
         drop(silent);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_peer_that_answers_keeps_its_link() {
         let (host, mut peer) = linked().await;
         let (mut frames, _pumps) = pumps(
@@ -749,7 +749,7 @@ mod tests {
     /// A forward stream whose peer went away half-open delivers nothing and
     /// fails nothing, so only the keepalive deadline can end it. An idle
     /// one whose peer still answers pings is left alone.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_forward_stream_whose_peer_stops_answering_ends_within_the_deadline() {
         let (host, silent) = linked().await;
         let keepalive = Keepalive::On {
@@ -767,7 +767,7 @@ mod tests {
         drop(silent);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_idle_forward_stream_whose_peer_answers_pings_stays_open() {
         let (host, mut peer) = linked().await;
         let (mut frames, _pumps) = pumps(
@@ -922,7 +922,7 @@ mod tests {
 
     /// Keepalive traffic is what makes "is the link healthy" answerable
     /// at all, and it has to stay at trace so a default run is unchanged.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn keepalive_traffic_is_visible_at_trace() {
         capture_logs();
         let peer = "keepalive-traffic-case";

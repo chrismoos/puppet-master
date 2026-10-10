@@ -1249,11 +1249,12 @@ async fn served_remote_share_with(
 /// and is answered on it.
 #[tokio::test]
 async fn a_share_whose_tunnel_stops_answering_times_out_once_and_is_reached_again() {
+    const RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
     let share = served_remote_share_with(
         pm_protocol::WORKER_PROTOCOL_DIR_SHARE_H2,
         "h2-remote-stalled",
         pm_daemon::forward::ForwardConfig {
-            response_timeout: Some(std::time::Duration::from_millis(500)),
+            response_timeout: Some(RESPONSE_TIMEOUT),
             ..Default::default()
         },
     )

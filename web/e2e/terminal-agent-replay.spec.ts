@@ -1,6 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
+
+const STREAM_DONE_MARKER = "CLAUDE-STREAM-DONE";
+const STREAM_DONE_TIMEOUT_MS = 60_000;
+const MIN_TRANSCRIPT_BASE_Y = 700;
+const RESIZE_WIDTH_STEP_PX = 80;
+const TRANSCRIPT_RESTORED = { firstHistoryLinePresent: true, deepScrollback: true };
 
 // The self-rendering agent erases the terminal scrollback on every repaint,
 // which would corrupt the shared seeded sessions other specs depend on.
@@ -142,6 +148,28 @@ async function bufferReport(page: Page): Promise<BufferReport> {
   });
 }
 
+function transcriptState(report: BufferReport): typeof TRANSCRIPT_RESTORED {
+  return {
+    firstHistoryLinePresent: report.firstHistoryLinePresent,
+    deepScrollback: report.baseY > MIN_TRANSCRIPT_BASE_Y,
+  };
+}
+
+async function layerContains(page: Page, key: string, text: string): Promise<boolean> {
+  return page.evaluate(({ layerKey, needle }) => {
+    const stage = (window as unknown as { __pmStage?: { layers: Map<string, { term: { buffer: { active: {
+      length: number;
+      getLine(index: number): { translateToString(trim?: boolean): string } | undefined;
+    } } } }> } }).__pmStage;
+    const buffer = stage?.layers.get(layerKey)?.term.buffer.active;
+    if (!buffer) return false;
+    for (let index = 0; index < buffer.length; index += 1) {
+      if (buffer.getLine(index)?.translateToString(true).includes(needle)) return true;
+    }
+    return false;
+  }, { layerKey: key, needle: text });
+}
+
 test("claude-style self-rendered transcript survives an away-and-return without a resize", async ({ page }) => {
   test.setTimeout(240_000);
   await logInWithProbe(page);
@@ -153,7 +181,7 @@ test("claude-style self-rendered transcript survives an away-and-return without 
   await expect(rowB).toHaveCount(1);
 
   await rowA.click();
-  await expect(page.locator('.term-layer[style*="visible"]')).toBeVisible();
+  const keyA = await expectTerminalRevealed(page, "s:");
   // e2e-real-time-wait: allow the self-rendering agent's initial paint cadence to settle
   await page.waitForTimeout(300);
 
@@ -167,40 +195,40 @@ test("claude-style self-rendered transcript survives an away-and-return without 
 
   const streaming = await bufferReport(page);
   expect(streaming.firstHistoryLinePresent, "transcript top must be in scrollback while watching").toBe(true);
-  expect(streaming.baseY).toBeGreaterThan(700);
+  expect(streaming.baseY).toBeGreaterThan(MIN_TRANSCRIPT_BASE_Y);
 
   await rowB.click();
   await expect(page).toHaveURL(/#\/session\/\d+$/);
 
-  // Let the stream finish so the agent is idle, like a Claude turn ending.
-  // e2e-real-time-wait: claudestream intentionally models a 700-frame paced agent turn
-  await page.waitForTimeout(6_000);
+  // The away layer stays attached, so it shows when the agent turn has ended.
+  await expect.poll(() => layerContains(page, keyA, STREAM_DONE_MARKER), {
+    message: "waiting for the paced agent turn to finish",
+    timeout: STREAM_DONE_TIMEOUT_MS,
+  }).toBe(true);
 
-  // Return. The fresh layer replays the daemon ring tail, which contains
-  // only incremental frames — no full render.
+  // Return. The layer replays the daemon ring tail, which contains only
+  // incremental frames — no full render.
   await rowA.click();
-  await expect(page.locator('.term-layer[style*="visible"]')).toBeVisible();
-  // e2e-real-time-wait: allow the high-volume daemon replay to finish before inspecting xterm
-  await page.waitForTimeout(1_000);
+  await expectTerminalRevealed(page, keyA);
 
-  const returned = await bufferReport(page);
+  // The contract under test: returning must show the transcript without a
+  // resize. On the broken build the replay tail cannot reconstruct it.
+  let returned = await bufferReport(page);
+  await expect.poll(async () => {
+    returned = await bufferReport(page);
+    return transcriptState(returned);
+  }, { message: "transcript top must survive away-and-return" }).toEqual(TRANSCRIPT_RESTORED);
 
   // Prove the data is recoverable: a browser resize sends SIGWINCH and the
   // agent full-renders, exactly the user's manual workaround.
   const viewport = page.viewportSize()!;
-  await page.setViewportSize({ width: viewport.width + 80, height: viewport.height });
-  // e2e-real-time-wait: allow the simulated agent's SIGWINCH repaint to complete
-  await page.waitForTimeout(2_500);
-  const resized = await bufferReport(page);
+  await page.setViewportSize({ width: viewport.width + RESIZE_WIDTH_STEP_PX, height: viewport.height });
+  let resized = await bufferReport(page);
+  await expect.poll(async () => {
+    resized = await bufferReport(page);
+    return transcriptState(resized);
+  }, { message: "resize must restore the transcript" }).toEqual(TRANSCRIPT_RESTORED);
 
   const socketSummary = await page.evaluate(() => (window as ProbeWindow).__claudeProbe.sockets);
   console.log(`CLAUDE_REPLAY_METRICS ${JSON.stringify({ streaming, returned, resized, socketSummary })}`);
-
-  expect(resized.firstHistoryLinePresent, "resize must restore the transcript").toBe(true);
-  expect(resized.baseY).toBeGreaterThan(700);
-
-  // The contract under test: returning must show the transcript without a
-  // resize. On the broken build the replay tail cannot reconstruct it.
-  expect(returned.firstHistoryLinePresent, "transcript top must survive away-and-return").toBe(true);
-  expect(returned.baseY).toBeGreaterThan(700);
 });

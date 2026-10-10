@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 // A program that answers every resize the way Claude Code does: home the
 // cursor, erase each row, and repaint its whole screen at the new size.
@@ -52,7 +52,7 @@ async function headerCopies(page: Page): Promise<number> {
 /** Waits for one header, then checks it stays one once the repaint is in. */
 async function expectOneHeader(page: Page, step: string): Promise<void> {
   const describe = async () => `${step}: ${JSON.stringify((await visibleLines(page)).filter(Boolean))}`;
-  await expect.poll(() => headerCopies(page), { message: step, timeout: 5_000 }).toBe(1);
+  await expect.poll(() => headerCopies(page), { message: step }).toBe(1);
   // e2e-real-time-wait: the program repaints up to half a second after a resize, and a stale copy would appear only then
   await page.waitForTimeout(1_200);
   expect(await headerCopies(page), await describe()).toBe(1);
@@ -85,8 +85,8 @@ test("a program that repaints on resize leaves one copy of its screen in every v
   await expect(page.locator(".terminal-tabs")).toContainText("shell");
   const cwd = isolatedDaemon.session("browser-e2e")!.cwd;
   await writeFile(join(cwd, "redraw.sh"), REDRAWING_PROGRAM);
-  // e2e-real-time-wait: the shell has no observable ready signal before its first prompt
-  await page.waitForTimeout(1500);
+  await expectTerminalRevealed(page, "t:");
+  await page.locator('.term-layer[style*="visibility: visible"] .xterm-helper-textarea').focus();
   await page.keyboard.type("bash redraw.sh\n");
   await expect.poll(() => headerCopies(page)).toBe(1);
   const socketsBefore = await countTerminalSockets(page);

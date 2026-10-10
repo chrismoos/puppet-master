@@ -142,10 +142,14 @@ impl Agent {
 
     async fn probe(&mut self, env: &TestEnv) -> String {
         self.send(env, "pstatus-probe");
-        let output = await_output(&mut self.output, Vec::new(), b"OUT PSTATUS ").await;
-        let output = await_output(&mut self.output, output, b"\n").await;
-        let text = String::from_utf8_lossy(&output).into_owned();
-        text[text.find("OUT PSTATUS ").unwrap()..]
+        const ANSWER: &[u8] = b"OUT PSTATUS ";
+        let output = await_output(&mut self.output, Vec::new(), ANSWER).await;
+        let start = output
+            .windows(ANSWER.len())
+            .position(|window| window == ANSWER)
+            .unwrap();
+        let answer = await_output(&mut self.output, output[start..].to_vec(), b"\n").await;
+        String::from_utf8_lossy(&answer)
             .lines()
             .next()
             .unwrap()

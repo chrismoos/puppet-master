@@ -85,8 +85,8 @@ test("Settings restores the session from Back and the wordmark without recreatin
 test("Settings entered from Home restores the previously open live session", async ({ page }) => {
   await logIn(page);
   await page.locator(".sb-scroll .sb-session").first().click();
-  const sessionUrl = page.url();
   await expect(page).toHaveURL(/#\/session\/\d+$/);
+  const sessionUrl = page.url();
 
   await page.getByRole("link", { name: "Home" }).click();
   await expect(page.getByText("select a session", { exact: true })).toBeVisible();

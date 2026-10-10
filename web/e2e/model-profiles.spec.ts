@@ -74,8 +74,10 @@ test("a model profile is configured, attached, and previewed before a spawn", as
   // it against the bucket's resolved agent is refused.
   await expect(page.locator(".catalog-error")).toContainText("no endpoint the codex agent can use");
 
-  // The refused save already applied the agent change, so the drawer has
-  // reloaded from the bucket and the profile has to be picked again.
+  // The refused save already applied the agent change, so the drawer
+  // reloads from the bucket and the profile has to be picked again.
+  await expect(bucket.locator('[data-label="Default Agent"]')).toHaveText("Codex");
+  await expect(drawer.getByLabel("Model Profile")).toHaveValue("");
   await drawer.getByLabel("Default Agent").selectOption("claude");
   await drawer.getByLabel("Model Profile").selectOption({ index: 1 });
   await drawer.getByRole("button", { name: "Save changes" }).click();

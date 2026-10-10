@@ -100,3 +100,30 @@ export async function apiHeaders(page: Page): Promise<Record<string, string>> {
     Origin: new URL(process.env.PM_E2E_BASE_URL as string).origin,
   };
 }
+
+const TERMINAL_REVEAL_TIMEOUT_MS = 20_000;
+
+/**
+ * A switch keeps the previous layer on screen and focused until the new one
+ * paints, so typing before this resolves reaches the previous terminal.
+ */
+export async function expectTerminalRevealed(page: Page, keyOrKind: string): Promise<string> {
+  let revealed = "";
+  await expect.poll(async () => {
+    revealed = await page.evaluate((wanted) => {
+      const stage = (window as unknown as { __pmStage?: {
+        debugSnapshot(): Array<{ key: string; visible: boolean; socket: { phase: string } | null }>;
+        layers: Map<string, { el: HTMLElement }>;
+      } }).__pmStage;
+      const selected = stage?.debugSnapshot().find((entry) => entry.visible);
+      const matches = wanted.endsWith(":") ? selected?.key.startsWith(wanted) : selected?.key === wanted;
+      if (!selected || !matches || selected.socket?.phase !== "online") return "";
+      return stage?.layers.get(selected.key)?.el.style.visibility === "visible" ? selected.key : "";
+    }, keyOrKind);
+    return revealed;
+  }, {
+    message: `waiting for terminal ${keyOrKind} to be on screen and online`,
+    timeout: TERMINAL_REVEAL_TIMEOUT_MS,
+  }).not.toBe("");
+  return revealed;
+}

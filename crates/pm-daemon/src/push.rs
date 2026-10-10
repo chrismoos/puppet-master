@@ -1370,13 +1370,13 @@ mod tests {
     fn the_stored_threshold_decides_how_long_web_use_suppresses() {
         let d = daemon();
         let (user_id, _) = enrolled_device(&d);
-        let now = now_unix_ms();
         assert!(
-            !d.web_activity_suppressed(user_id, now),
+            !d.web_activity_suppressed(user_id, now_unix_ms()),
             "no interaction yet"
         );
 
         d.note_web_activity(user_id);
+        let now = now_unix_ms();
         assert!(d.web_activity_suppressed(user_id, now));
         assert!(
             !d.web_activity_suppressed(

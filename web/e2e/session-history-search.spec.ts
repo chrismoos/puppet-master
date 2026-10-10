@@ -71,6 +71,7 @@ test("bounded history pages, grouped metadata search, and deep retention", async
   const oldRow = rows.first();
   await expect(oldRow).toContainText("ended ·");
   await oldRow.click();
+  await expect(page).toHaveURL(/#\/session\/\d+/);
   const oldRoute = page.url();
 
   await page.reload();

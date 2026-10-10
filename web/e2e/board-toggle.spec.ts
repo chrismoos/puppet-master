@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 function cli(args: string[]): string {
   return execFileSync(process.env.PM_E2E_PM_BIN!, args, {
@@ -21,6 +21,7 @@ test("active Board control toggles back with terminal state intact", async ({ pa
   await page.getByRole("button", { name: "+ Shell" }).click();
   const shellTab = page.locator(".terminal-tab").last();
   await expect(shellTab).toHaveClass(/active/);
+  await expectTerminalRevealed(page, "t:");
   const visibleTerminal = page.locator('.term-layer[style*="visibility: visible"]');
   await visibleTerminal.locator(".xterm-helper-textarea").pressSequentially("seq 1 300");
   await page.keyboard.press("Enter");

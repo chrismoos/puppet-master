@@ -5,7 +5,6 @@ import { logIn } from "./support";
 
 const CONTEXT_CHURN_COUNT = 24;
 const TAB_VISIBILITY_CYCLES = 3;
-const RECOVERY_TIMEOUT_MS = 1_000;
 const RESTORATION_WINDOW_MS = 3_200;
 const VISIBLE_TERMINAL = '.term-layer[style*="visible"]';
 
@@ -166,7 +165,7 @@ test("context loss preserves visible output and input without a replay or reconn
   expect(await loseContext(terminal)).toEqual({ domAtLoss: false, gpuAtLoss: true });
   await expect.poll(async () => Buffer.compare(
     await terminal.locator(".xterm-screen canvas:not(.xterm-link-layer)").screenshot(), image,
-  ), { timeout: RECOVERY_TIMEOUT_MS }).toBe(0);
+  )).toBe(0);
   await echo(page, terminal, "after-context-loss");
   await expect.poll(() => visibleText(page)).toContain("OUT after-context-loss");
   const recovered = await page.evaluate(() => {

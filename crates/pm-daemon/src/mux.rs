@@ -975,12 +975,21 @@ fn foreground_process_changed(
 }
 
 fn command_for_process_group(process_group: i32) -> Option<String> {
+    static OWN_COMMAND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let command = process_command(process_group)?;
+    // A child that has forked but not yet exec'd already leads the foreground
+    // group and still carries this process's command line.
+    let own = OWN_COMMAND.get_or_init(|| process_command(std::process::id() as i32));
+    (own.as_ref() != Some(&command)).then_some(command)
+}
+
+fn process_command(pid: i32) -> Option<String> {
     #[cfg(target_os = "linux")]
-    let cmdline = std::fs::read(format!("/proc/{process_group}/cmdline")).ok()?;
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     #[cfg(all(unix, not(target_os = "linux")))]
     let cmdline = {
         let output = std::process::Command::new("ps")
-            .args(["-o", "command=", "-p", &process_group.to_string()])
+            .args(["-o", "command=", "-p", &pid.to_string()])
             .output()
             .ok()?;
         output.stdout
@@ -994,47 +1003,51 @@ mod flow_tests {
     use super::*;
     use std::time::Duration;
 
-    /// Whether `acquire` returns within a short wait, run on its own thread
-    /// because a reader over budget is meant to block.
-    fn acquires_promptly(flow: &Arc<OutputFlow>, bytes: usize) -> bool {
+    const ADMITTED_WITHIN: Duration = Duration::from_secs(5);
+    const HELD_FOR: Duration = Duration::from_millis(200);
+
+    /// Runs on its own thread because a reader over budget is meant to block.
+    fn acquires_within(flow: &Arc<OutputFlow>, bytes: usize, wait: Duration) -> bool {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let flow = flow.clone();
         std::thread::spawn(move || {
             flow.acquire(bytes);
             let _ = done_tx.send(());
         });
-        done_rx.recv_timeout(Duration::from_millis(200)).is_ok()
+        done_rx.recv_timeout(wait).is_ok()
+    }
+
+    fn is_admitted(flow: &Arc<OutputFlow>, bytes: usize) -> bool {
+        acquires_within(flow, bytes, ADMITTED_WITHIN)
+    }
+
+    fn is_held(flow: &Arc<OutputFlow>, bytes: usize) -> bool {
+        !acquires_within(flow, bytes, HELD_FOR)
     }
 
     #[test]
     fn a_reader_over_budget_waits_until_the_consumer_credits_or_detaches() {
         let flow = Arc::new(OutputFlow::default());
         assert!(
-            acquires_promptly(&flow, PRIMARY_CONSUMER_BUDGET_BYTES * 4),
+            is_admitted(&flow, PRIMARY_CONSUMER_BUDGET_BYTES * 4),
             "nothing waits while no consumer is attached"
         );
         flow.enable();
         assert!(
-            acquires_promptly(&flow, PRIMARY_CONSUMER_BUDGET_BYTES + 1),
+            is_admitted(&flow, PRIMARY_CONSUMER_BUDGET_BYTES + 1),
             "the first read past the budget is admitted"
         );
-        assert!(
-            !acquires_promptly(&flow, 1),
-            "the next read waits on the consumer"
-        );
+        assert!(is_held(&flow, 1), "the next read waits on the consumer");
         flow.release(PRIMARY_CONSUMER_BUDGET_BYTES);
         assert!(
-            acquires_promptly(&flow, 1),
+            is_admitted(&flow, 1),
             "credit from the consumer admits the waiting read"
         );
-        assert!(acquires_promptly(&flow, PRIMARY_CONSUMER_BUDGET_BYTES));
-        assert!(
-            !acquires_promptly(&flow, 1),
-            "over budget again, the reader waits"
-        );
+        assert!(is_admitted(&flow, PRIMARY_CONSUMER_BUDGET_BYTES));
+        assert!(is_held(&flow, 1), "over budget again, the reader waits");
         flow.disable();
         assert!(
-            acquires_promptly(&flow, PRIMARY_CONSUMER_BUDGET_BYTES * 4),
+            is_admitted(&flow, PRIMARY_CONSUMER_BUDGET_BYTES * 4),
             "a detached consumer never holds the reader"
         );
     }
@@ -1316,6 +1329,12 @@ mod tests {
             Some("sh -c echo bad]0;title".into())
         );
         assert_eq!(command_from_cmdline(b""), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_has_not_exec_d_yet_has_no_command() {
+        assert_eq!(command_for_process_group(std::process::id() as i32), None);
     }
 
     #[test]
@@ -1735,9 +1754,11 @@ mod tests {
     #[test]
     fn tracked_terminal_emits_its_foreground_command_title() {
         let (mux, mut channels) = Mux::new();
+        const TITLE_DEADLINE: Duration = Duration::from_secs(10);
+        const REPLAY_POLL: Duration = Duration::from_millis(20);
         let spec = CommandSpec {
             program: "/bin/sleep".into(),
-            args: vec!["2".into()],
+            args: vec!["600".into()],
             env: Vec::new(),
             cwd: std::env::temp_dir(),
         };
@@ -1745,8 +1766,8 @@ mod tests {
             .unwrap();
 
         let (_, _viewer) = mux.attach(41).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(1);
-        let expected = b"\x1b]777;pm-command;sleep 2\x07";
+        let deadline = std::time::Instant::now() + TITLE_DEADLINE;
+        let expected = b"\x1b]777;pm-command;sleep 600\x07";
         loop {
             let (replay, _) = mux.attach(41).unwrap();
             if find_subsequence(&replay, expected).is_some() {
@@ -1754,9 +1775,10 @@ mod tests {
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "foreground command title was not emitted"
+                "foreground command title was not emitted, replay: {:?}",
+                String::from_utf8_lossy(&replay)
             );
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(REPLAY_POLL);
         }
 
         mux.kill(41).unwrap();

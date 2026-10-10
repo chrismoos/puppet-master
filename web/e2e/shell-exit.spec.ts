@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 async function openSession(page: Page): Promise<void> {
   await logIn(page);
@@ -13,6 +13,7 @@ async function createShell(page: Page): Promise<void> {
   await page.getByRole("button", { name: "+ Shell", exact: true }).click();
   await expect(tabs).toHaveCount(before + 1);
   await expect(tabs.last()).toHaveClass(/active/);
+  await expectTerminalRevealed(page, "t:");
 }
 
 async function typeInVisibleTerminal(page: Page, command: string, host?: Locator): Promise<void> {
