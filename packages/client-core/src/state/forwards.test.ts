@@ -7,7 +7,7 @@ import {
   type Session,
   type SessionForward,
 } from "../gen/pm/v1/pm_pb";
-import { forwardsForSession, forwardsNewestFirst, visibleForwards } from "./forwards";
+import { forwardForUrl, forwardsForSession, forwardsNewestFirst, visibleForwards } from "./forwards";
 
 function session(id: bigint, overrides: Partial<Omit<Session, "$typeName" | "$unknown">> = {}) {
   return create(SessionSchema, { id, goal: `session ${id} goal`, ...overrides });
@@ -204,5 +204,45 @@ describe("visibleForwards", () => {
   it("does not hide a single entry behind a control that would take its place", () => {
     expect(visibleForwards(list.slice(0, 5), false, 4)).toEqual({ shown: list.slice(0, 5), hidden: 0 });
     expect(visibleForwards(list.slice(0, 4), false, 4)).toEqual({ shown: list.slice(0, 4), hidden: 0 });
+  });
+});
+
+describe("forwardForUrl", () => {
+  const at = (id: bigint, url: string) => create(SessionForwardSchema, { id, sessionId: 1n, url });
+  const forwards = [
+    at(1n, "https://pm.example/forwards/1/"),
+    at(12n, "https://pm.example/forwards/12/"),
+    at(3n, "https://preview.share.pm.example/"),
+    at(4n, "http://pm.example:8123/"),
+    at(5n, ""),
+  ];
+  const idFor = (url: string) => forwardForUrl(forwards, url)?.id;
+
+  it("matches a URL under a forward's root, deep paths, queries and fragments included", () => {
+    expect(idFor("https://pm.example/forwards/1/")).toBe(1n);
+    expect(idFor("https://pm.example/forwards/1/docs/index.html?x=1#top")).toBe(1n);
+    expect(idFor("https://pm.example/forwards/1")).toBe(1n);
+    expect(idFor("https://preview.share.pm.example/app")).toBe(3n);
+    expect(idFor("https://preview.share.pm.example")).toBe(3n);
+  });
+
+  it("tells forwards with a shared path prefix apart", () => {
+    expect(idFor("https://pm.example/forwards/12/x")).toBe(12n);
+    expect(idFor("https://pm.example/forwards/123/")).toBeUndefined();
+  });
+
+  it("normalizes case and default ports but keeps other ports distinct", () => {
+    expect(idFor("HTTPS://PM.Example:443/forwards/1/a")).toBe(1n);
+    expect(idFor("http://pm.example:8123/page")).toBe(4n);
+    expect(idFor("http://pm.example/page")).toBeUndefined();
+    expect(idFor("https://pm.example:8443/forwards/1/")).toBeUndefined();
+  });
+
+  it("ignores other origins, other schemes, userinfo and inactive forwards", () => {
+    expect(idFor("https://other.example/forwards/1/")).toBeUndefined();
+    expect(idFor("http://pm.example/forwards/1/")).toBeUndefined();
+    expect(idFor("https://user@pm.example/forwards/1/")).toBeUndefined();
+    expect(idFor("ftp://pm.example/forwards/1/")).toBeUndefined();
+    expect(idFor("not a url")).toBeUndefined();
   });
 });

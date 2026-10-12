@@ -105,3 +105,53 @@ export function visibleForwards<T>(
   if (expanded || forwards.length <= limit + 1) return { shown: forwards, hidden: 0 };
   return { shown: forwards.slice(0, limit), hidden: forwards.length - limit };
 }
+
+interface HttpUrlParts {
+  origin: string;
+  path: string;
+}
+
+const DEFAULT_PORTS: Record<string, string> = { http: "80", https: "443" };
+
+/**
+ * Splits an http(s) URL into a normalized origin and path without relying
+ * on a full URL implementation, which React Native does not ship. A URL with
+ * userinfo is refused: it never names a forward, and the server refuses it
+ * as a destination too.
+ */
+function splitHttpUrl(url: string): HttpUrlParts | null {
+  const match = /^(https?):\/\/([^/?#]*)([^?#]*)/i.exec(url.trim());
+  if (!match) return null;
+  const scheme = match[1].toLowerCase();
+  const authority = match[2].toLowerCase();
+  if (!authority || authority.includes("@")) return null;
+  const portAt = authority.lastIndexOf(":");
+  const host = portAt > authority.lastIndexOf("]") && portAt !== -1 ? authority.slice(0, portAt) : authority;
+  const port = host === authority ? "" : authority.slice(portAt + 1);
+  const origin = `${scheme}://${host}${port && port !== DEFAULT_PORTS[scheme] ? `:${port}` : ""}`;
+  return { origin, path: match[3] || "/" };
+}
+
+/**
+ * The published forward a URL points into, if any: same origin as the
+ * forward's URL and a path under its root. A link tapped outside the
+ * browser that holds the dashboard session can then be opened with a token
+ * scoped to that forward. The server checks the destination again when it
+ * mints the token, so a loose match here can never send a token elsewhere.
+ */
+export function forwardForUrl(forwards: Iterable<SessionForward>, url: string): SessionForward | undefined {
+  const target = splitHttpUrl(url);
+  if (!target) return undefined;
+  let best: { forward: SessionForward; rootLength: number } | undefined;
+  for (const forward of forwards) {
+    if (!forward.url) continue;
+    const root = splitHttpUrl(forward.url);
+    if (!root || root.origin !== target.origin) continue;
+    const rootPath = root.path.endsWith("/") ? root.path : `${root.path}/`;
+    const under = target.path === rootPath.slice(0, -1) || target.path.startsWith(rootPath);
+    if (under && (!best || rootPath.length > best.rootLength)) {
+      best = { forward, rootLength: rootPath.length };
+    }
+  }
+  return best?.forward;
+}

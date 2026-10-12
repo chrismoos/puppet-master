@@ -19,7 +19,7 @@ import {
   SessionRole,
 } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
 import { LOCAL_WORKER_ID } from "@puppet-master/client-core/format";
-import { agentLabel, resolveAgent } from "@puppet-master/client-core/state/agent";
+import { AGENTS, agentLabel, resolveAgent } from "@puppet-master/client-core/state/agent";
 import { resolveModelProfile } from "@puppet-master/client-core/state/modelProfile";
 import {
   resolveProjectWorkerId,
@@ -118,7 +118,9 @@ function PickerField({
         <View style={fieldStyles.chevron} />
       </Pressable>
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={fieldStyles.backdrop} onPress={() => setOpen(false)}>
+        {/* Not an accessibility element itself, or it would merge every
+            option into one and VoiceOver could not pick between them. */}
+        <Pressable style={fieldStyles.backdrop} onPress={() => setOpen(false)} accessible={false}>
           <SafeAreaView style={fieldStyles.listAnchor}>
             <View style={fieldStyles.list}>
               <Text style={fieldStyles.listTitle}>{label}</Text>
@@ -225,10 +227,13 @@ export function SpawnSheet({
   visible,
   client,
   onClose,
+  onSpawned,
 }: {
   visible: boolean;
   client: PmClient;
   onClose: () => void;
+  /** Called with the new session's id once the controller has created it. */
+  onSpawned?: (sessionId: bigint) => void;
 }) {
   const state = useMemo(() => client.getState(), [visible]);
 
@@ -318,8 +323,8 @@ export function SpawnSheet({
     const opts: { id: string; name: string }[] = [
       { id: INHERIT, name: inheritLabel },
     ];
-    for (const kind of [AgentKind.CLAUDE_CODE, AgentKind.CODEX]) {
-      opts.push({ id: String(kind), name: agentLabel(kind) });
+    for (const agent of AGENTS) {
+      opts.push({ id: String(agent.kind), name: agent.label });
     }
     return opts;
   }, [resolvedAgent]);
@@ -366,7 +371,7 @@ export function SpawnSheet({
         ? undefined
         : BigInt(form.modelProfileId);
 
-      await client.spawnSession(
+      const outcome = await client.spawnSession(
         BigInt(form.projectId),
         agent,
         "", // taskTitle
@@ -390,6 +395,7 @@ export function SpawnSheet({
         prompt: "",
       });
       onClose();
+      if (outcome.createdId !== undefined) onSpawned?.(outcome.createdId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);

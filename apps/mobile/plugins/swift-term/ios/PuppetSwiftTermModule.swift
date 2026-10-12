@@ -66,7 +66,10 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
     }
 
     public override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        gestureRecognizer !== dismissKeyboardTap || terminalView.isFirstResponder
+        guard gestureRecognizer === dismissKeyboardTap else { return true }
+        // A tap on a link opens it and must not also drop the keyboard.
+        return terminalView.isFirstResponder
+            && terminalView.openableLink(at: gestureRecognizer.location(in: terminalView)) == nil
     }
 
     public func gestureRecognizer(
@@ -283,6 +286,38 @@ final class PuppetTerminalView: TerminalView {
     private var dragStarted = false
 
     private static let longPressSec: TimeInterval = 0.5
+
+    // MARK: Link taps
+
+    /// The link under a point, if tapping it should open it.
+    ///
+    /// SwiftTerm opens a tapped link only once hovering has highlighted it,
+    /// and a finger never hovers, so the link is looked up directly here. An
+    /// explicit OSC 8 hyperlink always counts. Text that merely looks like a
+    /// link counts only with a web scheme, so a tap on a file path keeps its
+    /// ordinary meaning.
+    func openableLink(at point: CGPoint) -> String? {
+        let position = calculateTapHit(point: point).grid
+        guard let match = terminal.linkMatch(at: .buffer(position), mode: .explicitAndImplicit) else {
+            return nil
+        }
+        if match.isExplicit {
+            guard let payload = payloadString(at: position),
+                  let (url, _) = urlAndParamsFrom(payload: payload) else { return nil }
+            return url
+        }
+        let lower = match.text.lowercased()
+        return lower.hasPrefix("https://") || lower.hasPrefix("http://") ? match.text : nil
+    }
+
+    @objc override func singleTap(_ gestureRecognizer: UITapGestureRecognizer) {
+        if gestureRecognizer.state == .ended,
+           let url = openableLink(at: gestureRecognizer.location(in: self)) {
+            terminalDelegate?.requestOpenLink(source: self, link: url, params: [:])
+            return
+        }
+        super.singleTap(gestureRecognizer)
+    }
 
     // MARK: Mouse-mode lifecycle
 

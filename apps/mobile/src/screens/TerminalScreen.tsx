@@ -59,6 +59,16 @@ import { OverflowButton, OverflowMenu, type OverflowMenuItem } from "./OverflowM
 import { SessionSheet } from "./SessionSheet";
 import { TerminalsSheet } from "./TerminalsSheet";
 import { canResumeSession, endedSummary, resumeLabel } from "./endedSession";
+import {
+  ACCESSORY_KEYS,
+  CTRL_LETTER_KEYS,
+  accessoryKeyBytes,
+  afterKeyPress,
+  ctrlLetterBytes,
+  cycleModifier,
+  type AccessoryKey,
+  type ModifierState,
+} from "../terminal/accessoryKeys";
 
 const TERMINAL_FONT_SIZE = 13;
 
@@ -71,100 +81,6 @@ const BRACKETED_PASTE_END = "\x1b[201~";
 // Approximates UIKit's keyboard animation curve; the keyboard event carries
 // a duration but no curve Animated can consume directly.
 const KEYBOARD_EASING = Easing.bezier(0.38, 0.7, 0.125, 1);
-
-// ---------------------------------------------------------------------------
-// Sticky modifier state: off → armed (one-shot) → locked → off.
-// Tap once to arm; the next non-modifier key sends the modified sequence
-// and disarms. Tap twice to lock (stays on until tapped again).
-// ---------------------------------------------------------------------------
-
-type ModifierState = "off" | "armed" | "locked";
-
-function cycleModifier(state: ModifierState): ModifierState {
-  switch (state) {
-    case "off": return "armed";
-    case "armed": return "locked";
-    case "locked": return "off";
-  }
-}
-
-// ---------------------------------------------------------------------------
-// (modifier, key) → byte-sequence table. Terminals do NOT simply apply a
-// modifier bit to the byte: shift-tab is CSI Z (0x1b 0x5b 0x5a), not
-// 0x09 with a flag. Ctrl-letter is byte minus 0x40 by convention. Arrows
-// with modifiers use CSI 1;N notation.
-// ---------------------------------------------------------------------------
-
-interface AccessoryKey {
-  label: string;
-  /** What a bare press of this key sends. */
-  bytes: number[];
-  /** Shift variant. If absent, shift has no effect. */
-  shiftBytes?: number[];
-  /** Ctrl variant. If absent, ctrl has no effect. */
-  ctrlBytes?: number[];
-}
-
-// Ctrl + letter sends byte = charCode - 0x40. Rather than hardcoding ^C,
-// common control targets appear as keys whose ctrl variant is computed.
-function ctrlLetterBytes(letter: string): number[] {
-  return [letter.toUpperCase().charCodeAt(0) - 0x40];
-}
-
-const ACCESSORY_KEYS: AccessoryKey[] = [
-  { label: "Esc", bytes: [0x1b] },
-  {
-    label: "Tab",
-    bytes: [0x09],
-    shiftBytes: [0x1b, 0x5b, 0x5a], // CSI Z = backtab
-  },
-  {
-    label: "◀",
-    bytes: [0x1b, 0x5b, 0x44],
-    shiftBytes: [0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x44],  // CSI 1;2D
-    ctrlBytes:  [0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x44],  // CSI 1;5D
-  },
-  {
-    label: "▼",
-    bytes: [0x1b, 0x5b, 0x42],
-    shiftBytes: [0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x42],  // CSI 1;2B
-    ctrlBytes:  [0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x42],  // CSI 1;5B
-  },
-  {
-    label: "▲",
-    bytes: [0x1b, 0x5b, 0x41],
-    shiftBytes: [0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x41],  // CSI 1;2A
-    ctrlBytes:  [0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x41],  // CSI 1;5A
-  },
-  {
-    label: "▶",
-    bytes: [0x1b, 0x5b, 0x43],
-    shiftBytes: [0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x43],  // CSI 1;2C
-    ctrlBytes:  [0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x43],  // CSI 1;5C
-  },
-  { label: "Enter", bytes: [0x0d] },
-];
-
-// Letters that appear in the accessory row when Ctrl is armed or locked.
-// Ctrl + letter = byte value minus 0x40 (e.g. C → 0x03). This replaces
-// the old hardcoded ^C key and extends to every common control character.
-const CTRL_LETTER_KEYS = ["C", "D", "Z", "A", "E", "L", "R", "W", "U", "K"] as const;
-
-/** Resolves the byte sequence to send for a key given the active modifiers. */
-function resolveBytes(
-  key: AccessoryKey,
-  shift: ModifierState,
-  ctrl: ModifierState,
-): number[] {
-  const shiftActive = shift !== "off";
-  const ctrlActive = ctrl !== "off";
-
-  // Ctrl takes precedence when both are active
-  if (ctrlActive && key.ctrlBytes) return key.ctrlBytes;
-  if (shiftActive && key.shiftBytes) return key.shiftBytes;
-
-  return key.bytes;
-}
 
 function formatMetrics(msg: {
   renderer: string;
@@ -1037,7 +953,9 @@ export function TerminalScreen({
     }
   }, [keyboardInsetPx, requestDiag]);
 
+  const [keyRowWidths, setKeyRowWidths] = useState({ row: 0, content: 0 });
   const [shiftState, setShiftState] = useState<ModifierState>("off");
+  const [altState, setAltState] = useState<ModifierState>("off");
   const [ctrlState, setCtrlState] = useState<ModifierState>("off");
 
   const pressModifier = (
@@ -1047,17 +965,23 @@ export function TerminalScreen({
     setState(cycleModifier(state));
   };
 
-  const pressKey = (key: AccessoryKey) => {
-    const bytes = resolveBytes(key, shiftState, ctrlState);
+  const sendKeyBytes = (bytes: number[]) => {
     send({ type: "write", dataBase64: bytesToBase64(new Uint8Array(bytes)) });
-    // Disarm one-shot modifiers after a key press
-    if (shiftState === "armed") setShiftState("off");
-    if (ctrlState === "armed") setCtrlState("off");
+    setShiftState(afterKeyPress);
+    setAltState(afterKeyPress);
+    setCtrlState(afterKeyPress);
+  };
+
+  const pressKey = (key: AccessoryKey) => {
+    sendKeyBytes(accessoryKeyBytes(key.id, {
+      shift: shiftState !== "off",
+      alt: altState !== "off",
+      ctrl: ctrlState !== "off",
+    }));
   };
 
   const pressCtrlLetter = (letter: string) => {
-    send({ type: "write", dataBase64: bytesToBase64(new Uint8Array(ctrlLetterBytes(letter))) });
-    if (ctrlState === "armed") setCtrlState("off");
+    sendKeyBytes(ctrlLetterBytes(letter, { alt: altState !== "off" }));
   };
 
   // WKWebView does not reliably relayout its page when the hosting view
@@ -1155,6 +1079,7 @@ export function TerminalScreen({
           <View style={styles.terminalArea}>
             <View
               ref={frameRef}
+              testID="terminal-frame"
               style={styles.webviewFrame}
               onLayout={onFrameLayout}
               {...(Platform.OS === "ios" ? {} : touchHandlers)}
@@ -1207,69 +1132,104 @@ export function TerminalScreen({
               </View>
             ) : null}
           </View>
-          {accessoryVisible ? (
-            <ScrollView
-              horizontal
-              keyboardShouldPersistTaps="always"
-              style={styles.accessoryBar}
-              contentContainerStyle={styles.accessoryContent}
+          <ScrollView
+            horizontal
+            // React Native pads a ScrollView by the keyboard overlap when the
+            // keyboard appears while its content is no wider than the view,
+            // and that padding lets the row scroll its keys out of sight.
+            // Staying mounted keeps the content wider than the row, which
+            // skips the adjustment.
+            alwaysBounceVertical={false}
+            directionalLockEnabled
+            scrollEnabled={keyRowWidths.content > keyRowWidths.row}
+            onLayout={(e) => {
+              const row = e.nativeEvent.layout.width;
+              setKeyRowWidths((w) => (w.row === row ? w : { ...w, row }));
+            }}
+            onContentSizeChange={(content) => {
+              setKeyRowWidths((w) => (w.content === content ? w : { ...w, content }));
+            }}
+            showsVerticalScrollIndicator={false}
+            pointerEvents={accessoryVisible ? "auto" : "none"}
+            accessibilityElementsHidden={!accessoryVisible}
+            keyboardShouldPersistTaps="always"
+            testID="key-row"
+            style={[styles.accessoryBar, !accessoryVisible && styles.accessoryHidden]}
+            contentContainerStyle={styles.accessoryContent}
+          >
+            <Pressable
+              style={[
+                styles.key,
+                styles.modifierKey,
+                shiftState === "armed" && styles.modifierArmed,
+                shiftState === "locked" && styles.modifierLocked,
+              ]}
+              onPress={() => pressModifier(shiftState, setShiftState)}
             >
-              <Pressable
+              <Text
                 style={[
-                  styles.key,
-                  styles.modifierKey,
-                  shiftState === "armed" && styles.modifierArmed,
-                  shiftState === "locked" && styles.modifierLocked,
+                  styles.keyText,
+                  shiftState !== "off" && styles.modifierKeyTextActive,
                 ]}
-                onPress={() => pressModifier(shiftState, setShiftState)}
               >
-                <Text
-                  style={[
-                    styles.keyText,
-                    shiftState !== "off" && styles.modifierKeyTextActive,
-                  ]}
-                >
-                  {shiftState === "locked" ? "⇧⇧" : "⇧"}
-                </Text>
-              </Pressable>
-              <Pressable
+                {shiftState === "locked" ? "⇧⇧" : "⇧"}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.key,
+                styles.modifierKey,
+                ctrlState === "armed" && styles.modifierArmed,
+                ctrlState === "locked" && styles.modifierLocked,
+              ]}
+              onPress={() => pressModifier(ctrlState, setCtrlState)}
+            >
+              <Text
                 style={[
-                  styles.key,
-                  styles.modifierKey,
-                  ctrlState === "armed" && styles.modifierArmed,
-                  ctrlState === "locked" && styles.modifierLocked,
+                  styles.keyText,
+                  ctrlState !== "off" && styles.modifierKeyTextActive,
                 ]}
-                onPress={() => pressModifier(ctrlState, setCtrlState)}
               >
-                <Text
-                  style={[
-                    styles.keyText,
-                    ctrlState !== "off" && styles.modifierKeyTextActive,
-                  ]}
-                >
-                  {ctrlState === "locked" ? "Ctrl⁺" : "Ctrl"}
-                </Text>
+                {ctrlState === "locked" ? "Ctrl⁺" : "Ctrl"}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.key,
+                styles.modifierKey,
+                altState === "armed" && styles.modifierArmed,
+                altState === "locked" && styles.modifierLocked,
+              ]}
+              onPress={() => pressModifier(altState, setAltState)}
+            >
+              <Text
+                style={[
+                  styles.keyText,
+                  altState !== "off" && styles.modifierKeyTextActive,
+                ]}
+              >
+                {altState === "locked" ? "Alt⁺" : "Alt"}
+              </Text>
+            </Pressable>
+            {hasSelection ? (
+              <Pressable style={styles.actionKey} onPress={handleCopy}>
+                <Text style={styles.actionKeyText}>Copy</Text>
               </Pressable>
-              {hasSelection ? (
-                <Pressable style={styles.actionKey} onPress={handleCopy}>
-                  <Text style={styles.actionKeyText}>Copy</Text>
-                </Pressable>
-              ) : null}
-              <Pressable style={styles.actionKey} onPress={() => void handlePaste()}>
-                <Text style={styles.actionKeyText}>Paste</Text>
+            ) : null}
+            <Pressable style={styles.actionKey} onPress={() => void handlePaste()}>
+              <Text style={styles.actionKeyText}>Paste</Text>
+            </Pressable>
+            {ACCESSORY_KEYS.map((key) => (
+              <Pressable key={key.id} style={styles.key} onPress={() => pressKey(key)}>
+                <Text style={styles.keyText}>{key.label}</Text>
               </Pressable>
-              {ACCESSORY_KEYS.map((key) => (
-                <Pressable key={key.label} style={styles.key} onPress={() => pressKey(key)}>
-                  <Text style={styles.keyText}>{key.label}</Text>
-                </Pressable>
-              ))}
-              {ctrlState !== "off" ? CTRL_LETTER_KEYS.map((letter) => (
-                <Pressable key={`ctrl-${letter}`} style={styles.key} onPress={() => pressCtrlLetter(letter)}>
-                  <Text style={styles.keyText}>^{letter}</Text>
-                </Pressable>
-              )) : null}
-            </ScrollView>
-          ) : null}
+            ))}
+            {ctrlState !== "off" ? CTRL_LETTER_KEYS.map((letter) => (
+              <Pressable key={`ctrl-${letter}`} style={styles.key} onPress={() => pressCtrlLetter(letter)}>
+                <Text style={styles.keyText}>^{letter}</Text>
+              </Pressable>
+            )) : null}
+          </ScrollView>
           {metrics ? <Text style={styles.metrics}>{metrics}</Text> : null}
         </Animated.View>
       </View>
@@ -1374,6 +1334,7 @@ const styles = StyleSheet.create({
   webviewFrame: { flex: 1 },
   webview: { flex: 1, backgroundColor: colors.bg },
   accessoryBar: { flexGrow: 0, backgroundColor: colors.panel },
+  accessoryHidden: { height: 0 },
   accessoryContent: { paddingHorizontal: 8, paddingVertical: 6, gap: 6 },
   actionKey: {
     backgroundColor: colors.blue,

@@ -7,6 +7,9 @@
 
 - Switching terminals waits for the destination to render at the pane size before showing it.
 - Browser tests select the installed test agent and verify scrollbar timers independently of runner speed.
+- [iOS] Tapping a link in terminal output opens it, the key row keeps its keys in reach, and a sticky Alt modifier joins Shift and Ctrl.
+- [iOS] The spawn sheet offers every agent and opens the session it creates, and clearing filters closes the filter bar.
+- [iOS] A tapped forward link opens signed in for that forward, at any path under it, instead of on the sign-in page.
 - Killing a session in the iOS app returns to the session list, where a session that just ended stays listed and can be resumed.
 - The iOS session menu no longer offers Interrupt.
 

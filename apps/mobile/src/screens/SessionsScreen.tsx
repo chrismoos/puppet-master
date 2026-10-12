@@ -33,8 +33,8 @@ export interface TerminalTarget {
 const EXPANSION_STORAGE_KEY = "pm:session-expansion";
 const FILTER_STORAGE_KEY = "pm:session-filter";
 const SHOW_ENDED_STORAGE_KEY = "pm:show-ended";
-/** How long a resumed session may take to appear before it is no longer
- *  opened automatically, so a late arrival never yanks the user away. */
+/** How long a newly spawned session may take to appear before it is no
+ *  longer opened automatically, so a late arrival never yanks the user away. */
 const PENDING_OPEN_TIMEOUT_MS = 15_000;
 
 // ---------------------------------------------------------------------------
@@ -499,11 +499,22 @@ export function SessionsScreen({
         </View>
       ) : null}
       <OverflowMenu visible={menuOpen} items={menuItems} onClose={() => setMenuOpen(false)} />
-      <SpawnSheet visible={spawnOpen} client={client} onClose={() => setSpawnOpen(false)} />
+      <SpawnSheet
+        visible={spawnOpen}
+        client={client}
+        onClose={() => setSpawnOpen(false)}
+        onSpawned={(sessionId) => setPendingOpen({ sessionId, since: Date.now() })}
+      />
       {filterOpen ? (
         <View style={styles.filterBar}>
           {filterCount > 0 ? (
-            <Pressable style={styles.clearFilters} onPress={() => updateFilter({})}>
+            <Pressable
+              style={styles.clearFilters}
+              onPress={() => {
+                updateFilter({});
+                setFilterOpen(false);
+              }}
+            >
               <Text style={styles.clearFiltersText}>Clear filters</Text>
             </Pressable>
           ) : null}

@@ -13,6 +13,9 @@ import { bindClientToForeground, isForeground, watchForeground } from "./src/ada
 import { createSocketConnector, reactNativeWebSocketFactory } from "./src/adapters/socket";
 import { CachedSecureStorage } from "./src/adapters/storage";
 import { ALL_AUTH_KEYS, AuthRejectedError, DeviceAuthSession, type DeviceAuthStatus } from "./src/auth/session";
+import { bearerJsonFetch } from "./src/auth/api";
+import { setLinkResolver } from "./src/adapters/openLink";
+import { resolveTappedUrl } from "./src/forwardLinks";
 import {
   configureForegroundNotifications,
   listenForTokenChanges,
@@ -190,6 +193,19 @@ export default function App() {
       auth.stopProactiveRefresh();
     };
   }, [auth, config]);
+
+  // Safari holds no dashboard session, so a link into a published forward
+  // goes out signed for that forward.
+  useEffect(() => {
+    if (!auth || !config) return;
+    const baseUrl = config.baseUrl;
+    return setLinkResolver((url) =>
+      resolveTappedUrl(url, {
+        forwards: () => client.getState().forwards.values(),
+        withFetch: (call) => auth.withAccessToken(baseUrl, (token) => call(bearerJsonFetch(baseUrl, token, fetch))),
+      }),
+    );
+  }, [auth, client, config]);
 
   const authStatus = useSyncExternalStore(
     auth?.subscribe ?? (() => () => {}),
