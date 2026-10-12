@@ -481,7 +481,10 @@ export class TerminalStage {
           if (layer.initialReplayPending || (layer.swapPending && frame.replay)) {
             this.revealPendingLayer(layer);
           }
-          if (!frame.replay) this.acknowledgeParsed(layer, frame.data.byteLength);
+          if (!frame.replay) {
+            this.acknowledgeParsed(layer, frame.data.byteLength);
+            if (layer.viewport.linesFromBottom > 0) this.rememberViewport(layer.key, layer);
+          }
         },
         () => layer.viewportRevision === revision,
       );

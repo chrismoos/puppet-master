@@ -51,14 +51,17 @@ export class WorkspaceTerminal {
     this.terminal.open(host);
     const viewportKey = `t:${terminalId}`;
     this.viewport = loadTerminalViewport(viewportKey) ?? captureTerminalViewport(this.terminal);
+    const rememberViewport = () => {
+      this.viewport = captureTerminalViewport(this.terminal);
+      saveTerminalViewport(viewportKey, this.viewport);
+    };
     const scrollbarDispose = wireTransientTerminalScrollbar(host);
     const pmLinks = registerPmTerminalLinkProvider(this.terminal, client, {
       kind: "terminal",
       id: terminalId.toString(),
     }, () => {
       this.viewportRevision += 1;
-      this.viewport = captureTerminalViewport(this.terminal);
-      saveTerminalViewport(viewportKey, this.viewport);
+      rememberViewport();
     });
     this.webgl = attachWebglRenderer(this.terminal, onIssue);
 
@@ -94,19 +97,18 @@ export class WorkspaceTerminal {
         viewport,
         () => {
           this.pendingWrites -= 1;
+          if (!frame.replay && this.viewport.linesFromBottom > 0) rememberViewport();
         },
         () => this.viewportRevision === revision,
       );
     });
     const scroll = this.terminal.onScroll(() => {
       if (this.pendingWrites > 0) return;
-      this.viewport = captureTerminalViewport(this.terminal);
-      saveTerminalViewport(viewportKey, this.viewport);
+      rememberViewport();
     });
     const rememberUserViewport = () => {
       this.viewportRevision += 1;
-      this.viewport = captureTerminalViewport(this.terminal);
-      saveTerminalViewport(viewportKey, this.viewport);
+      rememberViewport();
     };
     const rememberKeyboardViewport = (event: KeyboardEvent) => {
       if (!["PageUp", "PageDown", "Home", "End"].includes(event.key)) return;

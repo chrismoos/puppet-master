@@ -20,7 +20,11 @@ export function writeTerminalFrame(
     terminal,
     frame,
     viewport,
-    (bookmark) => restoreTerminalViewport(terminal, bookmark),
+    (bookmark) => {
+      // Scrolled up, xterm keeps the text under the reader still as live
+      // output arrives, scrollback trimming included.
+      if (frame.replay || bookmark.linesFromBottom === 0) restoreTerminalViewport(terminal, bookmark);
+    },
     onParsed,
     shouldRestore,
   );

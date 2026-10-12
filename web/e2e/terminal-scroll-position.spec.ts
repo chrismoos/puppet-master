@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 interface ViewportState {
   baseY: number;
@@ -189,4 +189,65 @@ test("codex-style output preserves bottom following and scrolled markers across 
   await page.reload();
   await readyState(page);
   await expect.poll(() => state(page).then((viewport) => viewport?.marker)).toBe(marker);
+});
+
+/** Lines that must arrive while the reader is scrolled up. */
+const LINES_WHILE_READING = 300;
+
+async function topRowText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const stage = (window as unknown as StageWindow).__pmStage;
+    const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
+    const buffer = debug ? stage?.layers.get(debug.key)?.term.buffer.active : undefined;
+    return buffer?.getLine(buffer.viewportY)?.translateToString(true) ?? "";
+  });
+}
+
+/** The highest CODEX-SYNC index printed so far, from the buffer tail. */
+async function lastSyncIndex(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const stage = (window as unknown as StageWindow).__pmStage;
+    const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
+    const buffer = debug ? stage?.layers.get(debug.key)?.term.buffer.active : undefined;
+    if (!buffer) return -1;
+    for (let row = buffer.baseY + 40; row >= Math.max(0, buffer.baseY - 120); row -= 1) {
+      const index = buffer.getLine(row)?.translateToString(true).match(/CODEX-SYNC-(\d+)/)?.[1];
+      if (index) return Number(index);
+    }
+    return -1;
+  });
+}
+
+test("live output leaves the text a scrolled-up reader is on in place", async ({ page }) => {
+  await logIn(page, { minimumSessions: 1 });
+  await page.locator(".sb-session").nth(0).click();
+  await expectTerminalRevealed(page, "s:");
+
+  // Past the 5,000-line cap, every new line also trims the oldest one.
+  await typeCommand(page, "syncout 5200 0");
+  await expect.poll(() => state(page).then((viewport) => viewport?.baseY), {
+    timeout: TERMINAL_READY_TIMEOUT_MS,
+  }).toBe(5_000);
+  await expectAtBottom(page);
+
+  await typeCommand(page, "syncout 2000 100");
+  await expect.poll(() => lastSyncIndex(page), { timeout: TERMINAL_READY_TIMEOUT_MS })
+    .toBeLessThan(LINES_WHILE_READING);
+
+  const layer = page.locator('.term-layer[style*="visibility: visible"]');
+  const box = await layer.boundingBox();
+  if (!box) throw new Error("visible terminal has no box");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -2_000);
+  await expect.poll(async () => {
+    const viewport = await state(page);
+    return viewport ? viewport.baseY - viewport.viewportY : 0;
+  }).toBeGreaterThan(20);
+  const reading = await topRowText(page);
+  expect(reading).toMatch(/CODEX-SYNC-\d+/);
+
+  const arrived = await lastSyncIndex(page);
+  await expect.poll(() => lastSyncIndex(page), { timeout: TERMINAL_READY_TIMEOUT_MS })
+    .toBeGreaterThan(arrived + LINES_WHILE_READING);
+  expect(await topRowText(page)).toBe(reading);
 });

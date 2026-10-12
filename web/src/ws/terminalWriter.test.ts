@@ -59,6 +59,23 @@ describe("terminal frame writes", () => {
     expect(terminal.scrollToBottom).toHaveBeenCalledOnce();
   });
 
+  it("leaves a scrolled-up viewport where xterm kept it after live output", () => {
+    let parsed: (() => void) | undefined;
+    const terminal = {
+      buffer: { active: { baseY: 20, viewportY: 8, type: "normal" } },
+      write: vi.fn((_data: Uint8Array, callback?: () => void) => { parsed = callback; }),
+      scrollToLine: vi.fn(),
+      scrollToBottom: vi.fn(),
+    } as unknown as Terminal;
+
+    writeTerminalFrame(terminal, { data: new Uint8Array([1]), replay: false });
+    (terminal.buffer.active as { baseY: number }).baseY = 30;
+    parsed?.();
+
+    expect(terminal.scrollToLine).not.toHaveBeenCalled();
+    expect(terminal.scrollToBottom).not.toHaveBeenCalled();
+  });
+
   it("does not overwrite a real user scroll that occurs while a write parses", () => {
     let parsed: (() => void) | undefined;
     const terminal = {

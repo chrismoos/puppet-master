@@ -88,9 +88,16 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
         // so new arrivals do not yank it away.
         let maxY = max(0, terminalView.contentSize.height - terminalView.bounds.height)
         let atBottom = maxY <= 0 || terminalView.contentOffset.y >= maxY - 1
-        let savedOffset = terminalView.contentOffset
+        var savedOffset = terminalView.contentOffset
+        let buffer = terminalView.getTerminal().buffer
+        let trimmedBefore = buffer.totalLinesTrimmed
         terminalView.feed(byteArray: [UInt8](data)[...])
         if !atBottom {
+            // A full scrollback drops lines off the top without growing, so
+            // the same pixel offset would show later text.
+            let trimmed = terminalView.getTerminal().buffer === buffer
+                ? max(0, buffer.totalLinesTrimmed - trimmedBefore) : 0
+            savedOffset.y = max(0, savedOffset.y - CGFloat(trimmed) * terminalView.cellDimension.height)
             terminalView.setContentOffset(savedOffset, animated: false)
         }
     }
