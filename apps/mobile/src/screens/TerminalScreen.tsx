@@ -26,6 +26,7 @@ import type { Plan, SessionForward, Terminal } from "@puppet-master/client-core/
 import { PlanState, TerminalKind } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
 import { openableForwardUrl } from "@puppet-master/client-core/api/forwards";
 import { forwardsForSession } from "@puppet-master/client-core/state/forwards";
+import { sessionEnded } from "@puppet-master/client-core/format";
 
 import { websocketBaseUrl } from "../adapters/socket";
 import { bearerJsonFetch, mintTerminalAttachTicket } from "../auth/api";
@@ -57,6 +58,7 @@ import type { PlanTarget } from "./PlanScreen";
 import { OverflowButton, OverflowMenu, type OverflowMenuItem } from "./OverflowMenu";
 import { SessionSheet } from "./SessionSheet";
 import { TerminalsSheet } from "./TerminalsSheet";
+import { canResumeSession, endedSummary, resumeLabel } from "./endedSession";
 
 const TERMINAL_FONT_SIZE = 13;
 
@@ -378,32 +380,43 @@ export function TerminalScreen({
     }
   }, [auth, config.baseUrl]);
 
-  const handleInterrupt = useCallback(async () => {
-    try {
-      await client.interruptSession(target.sessionId);
-    } catch (err) {
-      Alert.alert("Interrupt failed", err instanceof Error ? err.message : String(err));
-    }
-  }, [client, target.sessionId]);
-
+  // A killed session stays in the list through the recent-ended grace
+  // window, where it can be reopened and resumed.
   const handleKill = useCallback(async () => {
     try {
       await client.killSession(target.sessionId);
+      onBack();
     } catch (err) {
       Alert.alert("Kill failed", err instanceof Error ? err.message : String(err));
     }
-  }, [client, target.sessionId]);
+  }, [client, target.sessionId, onBack]);
 
   const confirmKill = useCallback(() => {
     Alert.alert(
       `Kill "${target.title}"?`,
-      "Stops the agent process and ends the session. This cannot be undone.",
+      "Stops the agent process and ends the session. A saved conversation can be resumed later.",
       [
         { text: "Cancel", style: "cancel" },
         { text: "Kill", style: "destructive", onPress: handleKill },
       ],
     );
   }, [target.title, handleKill]);
+
+  const session = appState.sessions.get(target.sessionId.toString());
+  const ended = session !== undefined && sessionEnded(session);
+  const [resuming, setResuming] = useState(false);
+  // The resumed agent restarts this same terminal under a new generation,
+  // which the attach path below already follows.
+  const handleResume = useCallback(async () => {
+    setResuming(true);
+    try {
+      await client.resumeSession(target.sessionId);
+    } catch (err) {
+      Alert.alert("Resume failed", err instanceof Error ? err.message : String(err));
+    } finally {
+      setResuming(false);
+    }
+  }, [client, target.sessionId]);
 
   const handleOpenPlan = useCallback((plan: Plan) => {
     onOpenPlan?.({
@@ -444,11 +457,10 @@ export function TerminalScreen({
       { key: "copyId", label: "Copy session id", icon: "copy", onPress: () => {
         Clipboard.setString(target.sessionId.toString());
       } },
-      { key: "interrupt", label: "Interrupt", icon: "warning", color: colors.amber, onPress: handleInterrupt },
-      { key: "kill", label: "Kill session", icon: "x", color: colors.red, onPress: confirmKill },
     );
+    if (!ended) items.push({ key: "kill", label: "Kill session", icon: "x", color: colors.red, onPress: confirmKill });
     return items;
-  }, [target.sessionId, handleInterrupt, confirmKill, sessionPlans, activeDecisionPlan, handleOpenPlan]);
+  }, [target.sessionId, ended, confirmKill, sessionPlans, activeDecisionPlan, handleOpenPlan]);
 
   // The accessory row follows the software keyboard, which appears for
   // WebView focus without resizing the RN layout on iOS. Android resizes
@@ -1111,6 +1123,24 @@ export function TerminalScreen({
         onClose={() => setSheetTab(null)}
         onCloseTerminal={handleCloseTerminal}
       />
+      {ended && session ? (
+        <View style={styles.endedBanner} testID="session-ended-banner">
+          <Text style={styles.endedText} numberOfLines={2}>
+            {endedSummary(session)}
+            {canResumeSession(session) ? "" : " · no saved conversation to resume"}
+          </Text>
+          {canResumeSession(session) ? (
+            <Pressable
+              style={[styles.endedButton, resuming ? styles.endedButtonBusy : null]}
+              disabled={resuming}
+              onPress={() => void handleResume()}
+              accessibilityRole="button"
+            >
+              <Text style={styles.endedButtonText}>{resuming ? "Resuming…" : resumeLabel(session)}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       {detail ? <Text style={styles.detail}>{detail}</Text> : null}
       {mintFailed ? (
         <Pressable style={styles.retry} onPress={() => {
@@ -1323,6 +1353,21 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   retryText: { color: colors.blue, fontSize: 13 },
+  endedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginHorizontal: 16,
+    marginBottom: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: colors.panelAlt,
+  },
+  endedText: { flex: 1, color: colors.textMuted, fontSize: 12 },
+  endedButton: { backgroundColor: colors.blue, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 6 },
+  endedButtonBusy: { opacity: 0.6 },
+  endedButtonText: { color: colors.bg, fontSize: 13, fontWeight: "600" },
   shiftClip: { flex: 1, overflow: "hidden", backgroundColor: colors.bg },
   shifted: { flex: 1 },
   terminalArea: { flex: 1 },

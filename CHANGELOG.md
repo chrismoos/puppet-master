@@ -7,6 +7,8 @@
 
 - Switching terminals waits for the destination to render at the pane size before showing it.
 - Browser tests select the installed test agent and verify scrollbar timers independently of runner speed.
+- Killing a session in the iOS app returns to the session list, where a session that just ended stays listed and can be resumed.
+- The iOS session menu no longer offers Interrupt.
 
 ## 0.10.0 — 2026-10-06
 

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSyncExternalStore } from "react";
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { KeyboardAwareFlatList } from "../components/KeyboardAwareScrollables";
 
 import type { PmClient } from "@puppet-master/client-core/ws/client";
 import { SessionState, TerminalKind, type Session } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
-import { sessionEnded, sessionLastActive, sessionDisplayName, sessionMatchesSearch } from "@puppet-master/client-core/format";
+import { sessionDisplayName, sessionMatchesSearch } from "@puppet-master/client-core/format";
 import { sessionRowSubtitle } from "./sessionRow";
+import { canResumeSession, endedSummary, resumeLabel, sessionListed, sessionRowTime } from "./endedSession";
 import { beginRefresh, endRefresh, idleRefresh, isRefreshing } from "./manualRefresh";
 import type { KeyValueStorage } from "@puppet-master/client-core/platform";
 import {
@@ -32,6 +33,9 @@ export interface TerminalTarget {
 const EXPANSION_STORAGE_KEY = "pm:session-expansion";
 const FILTER_STORAGE_KEY = "pm:session-filter";
 const SHOW_ENDED_STORAGE_KEY = "pm:show-ended";
+/** How long a resumed session may take to appear before it is no longer
+ *  opened automatically, so a late arrival never yanks the user away. */
+const PENDING_OPEN_TIMEOUT_MS = 15_000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -195,9 +199,8 @@ export function SessionsScreen({
         : null;
       sessions = filterSessions(state.sessions.values(), filter, projectsInBucket);
     }
-    if (!showEnded) sessions = sessions.filter((s) => !sessionEnded(s));
-    return sessions;
-  }, [state.sessions, state.projects, filter, showEnded]);
+    return sessions.filter((s) => sessionListed(state, s, showEnded));
+  }, [state, filter, showEnded]);
 
   const entries = useMemo(
     () => buildMobileSessionList(filteredSessions),
@@ -237,11 +240,31 @@ export function SessionsScreen({
     });
   }, [storage]);
 
+  // A session spawned or resumed from here opens as soon as the controller
+  // reports it and its agent terminal, which arrive just after the command.
+  const [pendingOpen, setPendingOpen] = useState<{ sessionId: bigint; since: number } | null>(null);
+  const resumeSession = useCallback((session: Session) => {
+    client.resumeSession(session.id).then(
+      (outcome) => setPendingOpen({ sessionId: outcome.createdId ?? session.id, since: Date.now() }),
+      (err: unknown) => Alert.alert("Resume failed", err instanceof Error ? err.message : String(err)),
+    );
+  }, [client]);
+
   const openSession = useCallback((session: Session) => {
     const terminal = [...state.terminals.values()].find(
       (t) => t.sessionId === session.id && t.kind === TerminalKind.AGENT,
     );
-    if (!terminal) return;
+    if (!terminal) {
+      // An ended session whose agent terminal is gone can still resume, as
+      // the terminal screen offers for one it can show.
+      if (canResumeSession(session)) {
+        Alert.alert(sessionDisplayName(session), endedSummary(session), [
+          { text: "Cancel", style: "cancel" },
+          { text: resumeLabel(session), onPress: () => resumeSession(session) },
+        ]);
+      }
+      return;
+    }
     if (session.needsInputUnseen || session.idleUnseen) {
       void client.markSessionSeen(session.id).catch(() => {});
     }
@@ -251,7 +274,22 @@ export function SessionsScreen({
       generation: terminal.generation,
       title: sessionDisplayName(session),
     });
-  }, [state.terminals, client, onOpenTerminal]);
+  }, [state.terminals, client, onOpenTerminal, resumeSession]);
+
+  useEffect(() => {
+    if (!pendingOpen) return;
+    const session = state.sessions.get(pendingOpen.sessionId.toString());
+    const hasTerminal = [...state.terminals.values()].some(
+      (t) => t.sessionId === pendingOpen.sessionId && t.kind === TerminalKind.AGENT,
+    );
+    if (session && hasTerminal) {
+      setPendingOpen(null);
+      openSession(session);
+      return;
+    }
+    const timer = setTimeout(() => setPendingOpen(null), PENDING_OPEN_TIMEOUT_MS - (Date.now() - pendingOpen.since));
+    return () => clearTimeout(timer);
+  }, [pendingOpen, state.sessions, state.terminals, openSession]);
 
   // Flatten entries for FlatList: groups expand to show children
   const flatItems = useMemo(() => {
@@ -315,7 +353,7 @@ export function SessionsScreen({
               )}
               <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} />
             </View>
-            <Text style={styles.rowTimestamp}>{sessionLastActive(item.session, now)}</Text>
+            <Text style={styles.rowTimestamp}>{sessionRowTime(item.session, now)}</Text>
           </Pressable>
         );
 
@@ -357,7 +395,7 @@ export function SessionsScreen({
                 </Text>
               </View>
             </Pressable>
-            <Text style={styles.rowTimestamp}>{sessionLastActive(item.session, now)}</Text>
+            <Text style={styles.rowTimestamp}>{sessionRowTime(item.session, now)}</Text>
           </Pressable>
         );
 
@@ -376,7 +414,7 @@ export function SessionsScreen({
               )}
               <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} />
             </View>
-            <Text style={styles.rowTimestamp}>{sessionLastActive(item.session, now)}</Text>
+            <Text style={styles.rowTimestamp}>{sessionRowTime(item.session, now)}</Text>
           </Pressable>
         );
 
