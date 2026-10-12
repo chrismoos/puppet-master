@@ -8,6 +8,22 @@ use pm_daemon::daemon::WebTerminalReplay;
 use pm_protocol::domain::{AgentKind, SessionState};
 use support::*;
 
+/// Long enough for the delay the daemon holds the first resume back by.
+const RESUME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Comfortably past that delay, so a resume that was coming has arrived.
+const NO_RESUME_WINDOW: std::time::Duration = std::time::Duration::from_secs(8);
+
+fn session_of(daemon: &pm_daemon::Daemon, id: u64) -> pm_protocol::domain::Session {
+    daemon
+        .subscribe()
+        .0
+        .sessions
+        .into_iter()
+        .find(|session| session.id == id)
+        .unwrap()
+}
+
 #[tokio::test]
 async fn spawn_marks_session_working_and_agent_starts() {
     let env = daemon_env();
@@ -372,4 +388,78 @@ async fn a_shell_opens_on_a_session_whose_agent_failed_to_spawn() {
     let opened = daemon.terminal(terminal).unwrap();
     assert_eq!(opened.session_id, session.id);
     assert_eq!(opened.kind, pm_protocol::domain::TerminalKind::Shell);
+}
+
+/// Whatever on the host killed the agent is not a decision to end the
+/// session.
+#[tokio::test]
+async fn a_session_killed_from_outside_is_brought_back() {
+    let mut env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let terminal = env.daemon.agent_terminal(id).unwrap();
+    let (r, mut rx) = env.daemon.mux.attach(id).unwrap();
+    await_output(&mut rx, r.to_vec(), b"READY p").await;
+
+    let pid = env.daemon.mux.child_pid(terminal.id).expect("agent pid");
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    let exit = tokio::time::timeout(TEST_TIMEOUT, env.exit_rx.recv())
+        .await
+        .expect("the killed agent did not exit")
+        .unwrap();
+    assert_eq!(exit.killed_by_signal, Some(libc::SIGKILL));
+    env.daemon.handle_session_exit(exit);
+
+    let ended = session_of(&env.daemon, id);
+    assert_eq!(ended.state, SessionState::Exited);
+    assert_eq!(ended.exit_code, Some(137));
+    assert_eq!(
+        ended.state_detail,
+        "terminated by signal 9, not by a request from here"
+    );
+
+    let resumed = tokio::time::timeout(RESUME_TIMEOUT, async {
+        loop {
+            let session = session_of(&env.daemon, id);
+            if session.state.is_live() {
+                return session;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the session was not resumed");
+    assert_eq!(
+        resumed.state_detail,
+        "resumed after it was terminated from outside"
+    );
+    assert!(env.daemon.agent_terminal(id).unwrap().generation > terminal.generation);
+}
+
+/// The same signal, after a request to end the session, is that request
+/// being carried out.
+#[tokio::test]
+async fn a_session_ended_on_request_stays_ended() {
+    let mut env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let terminal = env.daemon.agent_terminal(id).unwrap();
+    let (r, mut rx) = env.daemon.mux.attach(id).unwrap();
+    await_output(&mut rx, r.to_vec(), b"READY p").await;
+
+    env.daemon.kill_session(id).unwrap();
+    let exit = tokio::time::timeout(TEST_TIMEOUT, env.exit_rx.recv())
+        .await
+        .expect("the killed agent did not exit")
+        .unwrap();
+    env.daemon.handle_session_exit(exit);
+
+    let ended = session_of(&env.daemon, id);
+    assert_eq!(ended.state, SessionState::Exited);
+    assert_eq!(ended.state_detail, "");
+
+    tokio::time::sleep(NO_RESUME_WINDOW).await;
+    assert_eq!(session_of(&env.daemon, id).state, SessionState::Exited);
+    assert_eq!(
+        env.daemon.agent_terminal(id).unwrap().generation,
+        terminal.generation
+    );
 }

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pm_adapters::{select_endpoint, AdapterRegistry, Integration, SpawnCtx};
 use pm_protocol::domain::{
@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
-use crate::mux::{Mux, SessionExit};
+use crate::mux::{Mux, SessionExit, SIGNAL_EXIT_BASE};
 use crate::project_host::ProjectHostState;
 use crate::storage::{
     ActivityReport, ItemNote, ItemOutcome, ItemQueryCounts, ItemUpsert, SessionActivityUpdate,
@@ -65,6 +65,21 @@ const MAX_WEB_TERMINAL_STREAMS_PER_USER: usize = 128;
 /// still making the sidebar feel immediate.
 const ACTIVITY_PUBLISH_INTERVAL_MS: i64 = 1_000;
 const RECOVERED_STATE_DETAIL: &str = "recovered after daemon restart";
+const UNSOLICITED_RESUME_STATE_DETAIL: &str = "resumed after it was terminated from outside";
+
+/// How many times in a row a session is resumed after an exit nobody asked
+/// for, since a host short of memory kills the agent it just resumed.
+const UNSOLICITED_RESUME_ATTEMPTS: u32 = 3;
+
+/// How long a resume is held back, doubled per attempt, so the new agent
+/// does not land in whatever killed the last one.
+const UNSOLICITED_RESUME_DELAY: Duration = Duration::from_secs(5);
+
+/// Signals a terminal sends on a keypress, which are the person asking.
+const KEYSTROKE_SIGNALS: [i32; 2] = [libc::SIGINT, libc::SIGQUIT];
+
+/// The highest signal a `128 + signal` exit status can carry.
+const MAX_STANDARD_SIGNAL: i32 = 31;
 const ORPHANED_SESSION_DETAIL: &str = "worker reconnected without this session";
 const AWAITING_WORKER_STATE_DETAIL: &str = "worker offline, resumes when it reconnects";
 /// Substring of the notification Claude sends once its prompt has gone
@@ -297,6 +312,8 @@ pub struct Daemon {
     public_url: Option<String>,
     worker_plane_bound: std::sync::OnceLock<std::net::SocketAddr>,
     shutdown_terminals: Mutex<std::collections::HashSet<u64>>,
+    /// Consecutive resumes after exits nobody asked for, per session.
+    unsolicited_resumes: Mutex<HashMap<u64, u32>>,
     web_terminal_streams: Mutex<std::collections::HashMap<u64, usize>>,
     pub(crate) viewer_owners: crate::viewer_ownership::ViewerOwners,
     pub(crate) terminal_streams: std::sync::Arc<crate::workers::TerminalStreamPool>,
@@ -1191,6 +1208,30 @@ fn remote_exit_detail(failed: bool, detail: &str) -> &str {
     }
 }
 
+/// The signal that ended a run, from the kernel's report or from the
+/// conventional 128 + signal status an agent reports for itself.
+fn ending_signal(exit_code: Option<i32>, killed_by_signal: Option<i32>) -> Option<i32> {
+    killed_by_signal.or_else(|| {
+        exit_code
+            .and_then(|code| code.checked_sub(SIGNAL_EXIT_BASE))
+            .filter(|signal| (1..=MAX_STANDARD_SIGNAL).contains(signal))
+    })
+}
+
+/// Whether a run nobody asked to end was killed rather than finishing.
+/// Keystroke signals are excluded: Ctrl-C is the person asking.
+fn terminated_from_outside(exit_code: Option<i32>, killed_by_signal: Option<i32>) -> bool {
+    ending_signal(exit_code, killed_by_signal)
+        .is_some_and(|signal| !KEYSTROKE_SIGNALS.contains(&signal))
+}
+
+fn unsolicited_exit_detail(exit_code: Option<i32>, killed_by_signal: Option<i32>) -> String {
+    match ending_signal(exit_code, killed_by_signal) {
+        Some(signal) => format!("terminated by signal {signal}, not by a request from here"),
+        None => "ended unexpectedly".into(),
+    }
+}
+
 pub fn now_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1322,6 +1363,7 @@ impl Daemon {
             http_tls_config: std::sync::OnceLock::new(),
             worker_plane_bound: std::sync::OnceLock::new(),
             shutdown_terminals: Mutex::new(std::collections::HashSet::new()),
+            unsolicited_resumes: Mutex::new(HashMap::new()),
             web_terminal_streams: Mutex::new(std::collections::HashMap::new()),
             viewer_owners: crate::viewer_ownership::ViewerOwners::default(),
             terminal_streams: std::sync::Arc::new(crate::workers::TerminalStreamPool::default()),
@@ -3746,6 +3788,7 @@ impl Daemon {
     /// the session's own entry rather than spawning a successor, so the
     /// session list does not grow an extra row on every resume.
     pub fn resume_session(&self, id: u64) -> Result<u64, DaemonError> {
+        self.forget_unsolicited_attempts(id);
         // A resume replays the conversation without submitting a prompt,
         // so the agent comes back waiting for input rather than working.
         self.resume_session_with_state(id, SessionState::Starting, "")
@@ -7781,6 +7824,7 @@ impl Daemon {
     pub fn kill_session(&self, id: u64) -> Result<(), DaemonError> {
         let session = self.storage.get_session(id)?;
         let terminal = self.storage.agent_terminal(id)?;
+        self.forget_unsolicited_attempts(id);
         self.storage
             .set_agent_desired_running(id, terminal.id, false)?;
         if session.worker_id == LOCAL_WORKER_ID && !self.local_worker_enabled {
@@ -8532,7 +8576,7 @@ impl Daemon {
 
     /// Consumes mux exit notifications: persists the transcript, marks
     /// the session ended, and publishes the change.
-    pub fn handle_session_exit(&self, exit: SessionExit) {
+    pub fn handle_session_exit(self: &std::sync::Arc<Self>, exit: SessionExit) {
         self.report_freshness.forget(exit.semantic_session_id);
         let terminal = match self.storage.get_terminal(exit.terminal_id) {
             Ok(t) => t,
@@ -8576,8 +8620,22 @@ impl Daemon {
             .lock()
             .unwrap()
             .remove(&exit.terminal_id);
-        if !paused_for_shutdown {
-            if terminal.kind == pm_protocol::domain::TerminalKind::Agent {
+        let is_agent = terminal.kind == pm_protocol::domain::TerminalKind::Agent;
+        // Nothing clears this before signalling but a request to end the
+        // session.
+        let wanted = !paused_for_shutdown
+            && is_agent
+            && self
+                .storage
+                .terminal_desired_running(exit.terminal_id)
+                .unwrap_or(false);
+        let unsolicited = wanted && terminated_from_outside(exit.exit_code, exit.killed_by_signal);
+        let resume_attempt = (unsolicited && self.agent_session_recorded(terminal.session_id))
+            .then(|| self.next_unsolicited_attempt(terminal.session_id));
+        let keep_wanted = paused_for_shutdown
+            || resume_attempt.is_some_and(|attempt| attempt <= UNSOLICITED_RESUME_ATTEMPTS);
+        if !keep_wanted {
+            if is_agent {
                 let _ = self.storage.set_agent_desired_running(
                     terminal.session_id,
                     exit.terminal_id,
@@ -8606,26 +8664,120 @@ impl Daemon {
         }
         self.refresh_local_agent_resumability(terminal.session_id);
         self.program_status_exited(terminal.session_id);
-        let _guard = self.state_lock.lock().unwrap();
-        match self.storage.set_session_ended(
-            terminal.session_id,
-            SessionState::Exited,
-            "",
-            exit.exit_code,
-            now_unix_ms(),
-        ) {
-            Ok(updated) => {
-                info!(
-                    session = terminal.session_id,
-                    code = ?exit.exit_code,
-                    "session exited"
-                );
-                self.publish(Event::SessionChanged(updated));
+        let detail = if unsolicited {
+            unsolicited_exit_detail(exit.exit_code, exit.killed_by_signal)
+        } else {
+            String::new()
+        };
+        {
+            let _guard = self.state_lock.lock().unwrap();
+            match self.storage.set_session_ended(
+                terminal.session_id,
+                SessionState::Exited,
+                &detail,
+                exit.exit_code,
+                now_unix_ms(),
+            ) {
+                Ok(updated) => {
+                    info!(
+                        session = terminal.session_id,
+                        code = ?exit.exit_code,
+                        signal = ?exit.killed_by_signal,
+                        unsolicited,
+                        "session exited"
+                    );
+                    self.publish(Event::SessionChanged(updated));
+                }
+                Err(e) => {
+                    error!(session = terminal.session_id, error = %e, "failed to persist exit")
+                }
             }
-            Err(e) => error!(session = terminal.session_id, error = %e, "failed to persist exit"),
         }
         self.mux.remove(exit.terminal_id);
         self.forget_terminal_worker(exit.terminal_id);
+        if keep_wanted && !paused_for_shutdown {
+            self.schedule_unsolicited_resume(
+                terminal.session_id,
+                resume_attempt.unwrap_or(1),
+                &detail,
+            );
+        }
+    }
+
+    /// A session killed before its agent reported an id has nothing to
+    /// resume from.
+    fn agent_session_recorded(&self, session_id: u64) -> bool {
+        self.storage
+            .get_session(session_id)
+            .is_ok_and(|session| session.agent_session_id.is_some())
+    }
+
+    fn next_unsolicited_attempt(&self, session_id: u64) -> u32 {
+        let mut attempts = self.unsolicited_resumes.lock().unwrap();
+        let attempt = attempts.entry(session_id).or_insert(0);
+        *attempt += 1;
+        *attempt
+    }
+
+    fn forget_unsolicited_attempts(&self, session_id: u64) {
+        self.unsolicited_resumes.lock().unwrap().remove(&session_id);
+    }
+
+    /// The session stays wanted while this is pending, so a resume that
+    /// cannot run yet is left to the reconnect and startup recovery paths.
+    fn schedule_unsolicited_resume(
+        self: &std::sync::Arc<Self>,
+        session_id: u64,
+        attempt: u32,
+        detail: &str,
+    ) {
+        let delay = UNSOLICITED_RESUME_DELAY * 2u32.pow(attempt - 1);
+        warn!(
+            session = session_id,
+            attempt,
+            delay_ms = delay.as_millis(),
+            detail,
+            "session was terminated from outside, resuming it"
+        );
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            self.resume_after_unsolicited_exit(session_id);
+            return;
+        };
+        let daemon = self.clone();
+        handle.spawn(async move {
+            tokio::time::sleep(delay).await;
+            tokio::task::spawn_blocking(move || daemon.resume_after_unsolicited_exit(session_id))
+                .await
+                .ok();
+        });
+    }
+
+    fn resume_after_unsolicited_exit(&self, session_id: u64) {
+        let Ok(session) = self.storage.get_session(session_id) else {
+            return;
+        };
+        // A kill or resume from the user in the meantime wins.
+        if session.state.is_live()
+            || !self
+                .storage
+                .session_desired_running(session_id)
+                .unwrap_or(false)
+        {
+            return;
+        }
+        match self.resume_session_with_state(
+            session_id,
+            SessionState::Idle,
+            UNSOLICITED_RESUME_STATE_DETAIL,
+        ) {
+            Ok(_) => info!(
+                session = session_id,
+                "resumed a session terminated from outside"
+            ),
+            Err(e) => {
+                warn!(session = session_id, error = %e, "could not resume a session terminated from outside")
+            }
+        }
     }
 
     fn refresh_local_agent_resumability(&self, session_id: u64) {
@@ -9165,6 +9317,7 @@ impl Daemon {
                 terminal_id,
                 generation,
                 exit_code,
+                killed_by_signal,
                 state,
                 transcript_available,
                 transcript_size,
@@ -9175,6 +9328,7 @@ impl Daemon {
                     terminal_id,
                     generation,
                     exit_code,
+                    killed_by_signal,
                     state,
                     &detail,
                     false,
@@ -9496,7 +9650,12 @@ impl Daemon {
         }
     }
 
-    fn handle_remote_exit(&self, worker_id: u64, session_id: u64, exit_code: Option<i32>) {
+    fn handle_remote_exit(
+        self: &std::sync::Arc<Self>,
+        worker_id: u64,
+        session_id: u64,
+        exit_code: Option<i32>,
+    ) {
         let Ok(terminal) = self.storage.agent_terminal(session_id) else {
             return;
         };
@@ -9505,6 +9664,7 @@ impl Daemon {
             terminal.id,
             terminal.generation,
             exit_code,
+            None,
             pm_protocol::domain::TerminalRunState::Exited,
             "",
             false,
@@ -9513,11 +9673,12 @@ impl Daemon {
 
     #[allow(clippy::too_many_arguments)]
     fn handle_remote_terminal_exit(
-        &self,
+        self: &std::sync::Arc<Self>,
         worker_id: u64,
         terminal_id: u64,
         generation: u64,
         exit_code: Option<i32>,
+        killed_by_signal: Option<i32>,
         state: pm_protocol::domain::TerminalRunState,
         detail: &str,
         transcript_available: bool,
@@ -9557,13 +9718,31 @@ impl Daemon {
                 return;
             }
         };
-        let _ = self
-            .storage
-            .set_terminal_desired_running(terminal_id, false);
+        let failed = state == pm_protocol::domain::TerminalRunState::Failed;
+        let is_agent = terminal.kind == pm_protocol::domain::TerminalKind::Agent;
+        // A worker that ends a run itself says why, and a request from here
+        // clears the flag before the kill goes out.
+        let unsolicited = is_agent
+            && !failed
+            && detail.is_empty()
+            && self
+                .storage
+                .terminal_desired_running(terminal_id)
+                .unwrap_or(false)
+            && terminated_from_outside(exit_code, killed_by_signal);
+        let resume_attempt = (unsolicited && self.agent_session_recorded(terminal.session_id))
+            .then(|| self.next_unsolicited_attempt(terminal.session_id));
+        let keep_wanted =
+            resume_attempt.is_some_and(|attempt| attempt <= UNSOLICITED_RESUME_ATTEMPTS);
+        if !keep_wanted {
+            let _ = self
+                .storage
+                .set_terminal_desired_running(terminal_id, false);
+        }
         if let Some(link) = self.workers.get(worker_id) {
             link.remove_session(terminal_id);
         }
-        if terminal.kind != pm_protocol::domain::TerminalKind::Agent {
+        if !is_agent {
             if state == pm_protocol::domain::TerminalRunState::Exited && exit_code == Some(0) {
                 if let Err(error) = self.remove_shell_terminal(terminal_id) {
                     error!(terminal = terminal_id, error = %error, "failed to remove exited remote shell");
@@ -9576,29 +9755,49 @@ impl Daemon {
         }
         self.publish(Event::TerminalChanged(updated_terminal));
         self.forget_terminal_worker(terminal_id);
-        let _ = self
-            .storage
-            .set_session_desired_running(terminal.session_id, false);
-        let _guard = self.state_lock.lock().unwrap();
-        let failed = state == pm_protocol::domain::TerminalRunState::Failed;
-        match self.storage.set_session_ended(
-            terminal.session_id,
-            if failed {
-                SessionState::Failed
-            } else {
-                SessionState::Exited
-            },
-            remote_exit_detail(failed, detail),
-            exit_code,
-            now_unix_ms(),
-        ) {
-            Ok(updated) => {
-                info!(session = terminal.session_id, code = ?exit_code, "remote session exited");
-                self.publish(Event::SessionChanged(updated));
+        if !keep_wanted {
+            let _ = self
+                .storage
+                .set_session_desired_running(terminal.session_id, false);
+        }
+        let unsolicited_detail =
+            unsolicited.then(|| unsolicited_exit_detail(exit_code, killed_by_signal));
+        {
+            let _guard = self.state_lock.lock().unwrap();
+            match self.storage.set_session_ended(
+                terminal.session_id,
+                if failed {
+                    SessionState::Failed
+                } else {
+                    SessionState::Exited
+                },
+                unsolicited_detail
+                    .as_deref()
+                    .unwrap_or_else(|| remote_exit_detail(failed, detail)),
+                exit_code,
+                now_unix_ms(),
+            ) {
+                Ok(updated) => {
+                    info!(
+                        session = terminal.session_id,
+                        code = ?exit_code,
+                        signal = ?killed_by_signal,
+                        unsolicited,
+                        "remote session exited"
+                    );
+                    self.publish(Event::SessionChanged(updated));
+                }
+                Err(e) => {
+                    error!(session = terminal.session_id, error = %e, "failed to persist remote exit")
+                }
             }
-            Err(e) => {
-                error!(session = terminal.session_id, error = %e, "failed to persist remote exit")
-            }
+        }
+        if let Some(attempt) = resume_attempt.filter(|_| keep_wanted) {
+            self.schedule_unsolicited_resume(
+                terminal.session_id,
+                attempt,
+                unsolicited_detail.as_deref().unwrap_or_default(),
+            );
         }
     }
 
@@ -9872,6 +10071,81 @@ async fn handle_forward_stream(
     // passes (a served stream was already claimed, so this is a no-op).
     tokio::time::sleep(crate::forward::STREAM_DIAL_TIMEOUT).await;
     daemon.forwards.claim_stream(&token_hash);
+}
+
+#[cfg(test)]
+mod exit_cause_tests {
+    use super::*;
+
+    #[test]
+    fn a_signal_the_kernel_reports_is_a_termination_from_outside() {
+        assert!(terminated_from_outside(
+            Some(SIGNAL_EXIT_BASE + libc::SIGKILL),
+            Some(libc::SIGKILL)
+        ));
+        assert_eq!(
+            unsolicited_exit_detail(Some(137), Some(libc::SIGKILL)),
+            "terminated by signal 9, not by a request from here"
+        );
+    }
+
+    /// All an older worker reports, since the agent chose the status.
+    #[test]
+    fn a_conventional_signal_exit_code_is_a_termination_from_outside() {
+        assert!(terminated_from_outside(Some(143), None));
+        assert!(terminated_from_outside(Some(129), None));
+    }
+
+    #[test]
+    fn an_agent_that_finishes_or_fails_on_its_own_is_not() {
+        assert!(!terminated_from_outside(Some(0), None));
+        assert!(!terminated_from_outside(Some(1), None));
+        assert!(!terminated_from_outside(None, None));
+        // Above the signal range, so the agent's own status.
+        assert!(!terminated_from_outside(Some(160), None));
+    }
+
+    #[test]
+    fn the_resume_budget_counts_up_and_a_user_action_restores_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let daemon = Daemon::new(DaemonConfig {
+            stale_turn_quiet_ms: None,
+            hook_silence_grace_ms: None,
+            forward: Default::default(),
+            db_path: None,
+            socket_path: temp.path().join("unused.sock"),
+            http_addr: None,
+            http_tls: None,
+            worker_addr: None,
+            public_url: None,
+            scrollback_dir: temp.path().join("scrollback"),
+            registry: AdapterRegistry::standard(),
+            local_worker_enabled: true,
+            release_channel: None,
+        })
+        .unwrap()
+        .0;
+
+        let attempts: Vec<u32> = (0..UNSOLICITED_RESUME_ATTEMPTS + 1)
+            .map(|_| daemon.next_unsolicited_attempt(7))
+            .collect();
+        assert_eq!(attempts, vec![1, 2, 3, 4]);
+        assert!(attempts.last().unwrap() > &UNSOLICITED_RESUME_ATTEMPTS);
+        assert_eq!(daemon.next_unsolicited_attempt(8), 1);
+
+        daemon.forget_unsolicited_attempts(7);
+        assert_eq!(daemon.next_unsolicited_attempt(7), 1);
+    }
+
+    #[test]
+    fn a_keystroke_signal_is_not_a_termination_from_outside() {
+        assert!(!terminated_from_outside(Some(130), None));
+        assert!(!terminated_from_outside(Some(131), None));
+        assert!(!terminated_from_outside(
+            Some(SIGNAL_EXIT_BASE + libc::SIGINT),
+            Some(libc::SIGINT)
+        ));
+    }
 }
 
 #[cfg(test)]

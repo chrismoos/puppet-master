@@ -1852,6 +1852,9 @@ message WorkerTerminalExit {
   // Why the worker itself ended a run it reports as failed, shown on the
   // session. Empty for a plain exit.
   string detail = 8;
+  // The signal the agent was killed by, when it died from one it did not
+  // handle. Absent when it exited on its own, signal or not.
+  optional int32 killed_by_signal = 9;
 }
 
 message WorkerNeedsInput {

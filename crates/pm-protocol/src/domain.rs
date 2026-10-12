@@ -2090,6 +2090,10 @@ pub enum WorkerMsg {
         terminal_id: u64,
         generation: u64,
         exit_code: Option<i32>,
+        /// The signal the agent was killed by, when it died from one it
+        /// did not handle. An agent that handles a termination signal
+        /// exits on its own instead, and only its exit code says so.
+        killed_by_signal: Option<i32>,
         state: TerminalRunState,
         transcript_available: bool,
         transcript_size: u64,

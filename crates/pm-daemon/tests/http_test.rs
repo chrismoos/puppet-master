@@ -2553,6 +2553,7 @@ async fn worker_transcript_upload_is_separate_and_acknowledged_after_persistence
             terminal_id,
             generation: 1,
             exit_code: Some(0),
+            killed_by_signal: None,
             state: TerminalRunState::Exited,
             transcript_available: true,
             transcript_size: transcript.len() as u64,

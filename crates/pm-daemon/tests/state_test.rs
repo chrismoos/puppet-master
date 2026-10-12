@@ -162,6 +162,7 @@ async fn disabled_local_worker_does_not_recover_desired_sessions() {
         forward: Default::default(),
     };
     let (enabled, mut channels) = pm_daemon::Daemon::new(config(true)).unwrap();
+    let enabled = std::sync::Arc::new(enabled);
     let bucket = enabled.create_bucket("bucket").unwrap();
     let project = enabled
         .create_project(bucket, "project", tmp.path().to_str().unwrap())
@@ -1015,6 +1016,7 @@ async fn stale_local_terminal_exit_cannot_end_the_current_generation() {
         generation: terminal.generation + 1,
         semantic_session_id: id,
         exit_code: Some(1),
+        killed_by_signal: None,
         scrollback: bytes::Bytes::from_static(b"stale"),
     });
 
@@ -1623,6 +1625,7 @@ async fn startup_repairs_resumability_when_a_transcript_appeared_after_exit() {
         release_channel: None,
     };
     let (daemon, mut channels) = pm_daemon::Daemon::new(config()).unwrap();
+    let daemon = std::sync::Arc::new(daemon);
     let bucket = daemon.create_bucket("bucket").unwrap();
     let project = daemon
         .create_project(bucket, "project", tmp.path().to_str().unwrap())
@@ -1694,6 +1697,7 @@ async fn explicit_kill_does_not_auto_resume_but_manual_resume_still_works() {
         release_channel: None,
     };
     let (daemon, mut channels) = pm_daemon::Daemon::new(config()).unwrap();
+    let daemon = std::sync::Arc::new(daemon);
     let bucket = daemon.create_bucket("bucket").unwrap();
     let project = daemon
         .create_project(bucket, "project", tmp.path().to_str().unwrap())
@@ -1751,6 +1755,7 @@ async fn crash_recovers_a_desired_session_idle_until_agent_output() {
         release_channel: None,
     };
     let (daemon, mut channels) = pm_daemon::Daemon::new(config()).unwrap();
+    let daemon = std::sync::Arc::new(daemon);
     let bucket = daemon.create_bucket("bucket").unwrap();
     let project = daemon
         .create_project(bucket, "project", tmp.path().to_str().unwrap())
@@ -1844,6 +1849,7 @@ async fn graceful_shutdown_restores_agent_and_shell_generations() {
         release_channel: None,
     };
     let (daemon, mut channels) = pm_daemon::Daemon::new(config()).unwrap();
+    let daemon = std::sync::Arc::new(daemon);
     let bucket = daemon.create_bucket("bucket").unwrap();
     let project = daemon
         .create_project(bucket, "project", tmp.path().to_str().unwrap())

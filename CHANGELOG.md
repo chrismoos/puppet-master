@@ -4,6 +4,8 @@
 
 - New `spawn.program_status` setting, off by default: agent terminals answer the Program Status Protocol (OSC 7501), and an agent that reports through it drives its session state ahead of lifecycle hooks, with its message and progress in the state detail.
 - Interrupting a Codex turn immediately marks the session idle with an interruption reason.
+- A session whose agent is killed on its host is resumed instead of left ended, up to three times, and says which signal ended it.
+- A session ended by a signal reports 128 plus the signal, so a killed agent reads 137 rather than 1.
 
 - Switching terminals waits for the destination to render at the pane size before showing it.
 - Browser tests select the installed test agent and verify scrollbar timers independently of runner speed.

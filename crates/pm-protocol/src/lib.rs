@@ -8,7 +8,7 @@ pub mod worker_frame;
 /// capabilities a peer may use, not a compatibility boundary: a controller
 /// registers a worker announcing any version and adapts to what that
 /// version supports.
-pub const WORKER_PROTOCOL_VERSION: u32 = 21;
+pub const WORKER_PROTOCOL_VERSION: u32 = 22;
 
 /// First protocol in which a worker serves a published directory from a
 /// loopback server it owns. An older worker cannot be asked to, so
@@ -70,6 +70,16 @@ pub const WORKER_PROTOCOL_PROGRAM_STATUS: u32 = 21;
 
 const _: () = assert!(WORKER_PROTOCOL_PROGRAM_STATUS <= WORKER_PROTOCOL_VERSION);
 const _: () = assert!(WORKER_PROTOCOL_PROGRAM_STATUS > WORKER_PROTOCOL_WORKER_RUNTIME);
+
+/// First protocol in which a worker reports the signal an agent was killed
+/// by. A worker below this reports only an exit code, which identifies a
+/// signal the agent handled but not one that killed it outright, so such a
+/// session is left ended as it always was. The field needs no send-side
+/// gate, for the reason `WORKER_PROTOCOL_HOOK_BACKGROUND_WORK` records.
+pub const WORKER_PROTOCOL_EXIT_SIGNAL: u32 = 22;
+
+const _: () = assert!(WORKER_PROTOCOL_EXIT_SIGNAL <= WORKER_PROTOCOL_VERSION);
+const _: () = assert!(WORKER_PROTOCOL_EXIT_SIGNAL > WORKER_PROTOCOL_PROGRAM_STATUS);
 
 /// First protocol in which a worker sizes the PTY to the requested
 /// initial geometry on spawn. An older worker ignores the fields and

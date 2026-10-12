@@ -124,6 +124,10 @@ const NO_COLOR_ENV: &str = "NO_COLOR";
 /// PTY so the agent sees exactly a user keypress.
 const INTERRUPT_BYTE: u8 = 0x03;
 
+/// What a signal death is reported as, following the shell convention of
+/// 128 + the signal.
+pub const SIGNAL_EXIT_BASE: i32 = 128;
+
 /// How long a killed agent has to exit after SIGTERM before it is
 /// SIGKILLed. Long enough for an agent to flush its conversation.
 const KILL_GRACE_PERIOD: Duration = Duration::from_secs(5);
@@ -151,6 +155,9 @@ pub struct SessionExit {
     pub generation: u64,
     pub semantic_session_id: u64,
     pub exit_code: Option<i32>,
+    /// The signal the child was killed by, when it died from one it did
+    /// not handle.
+    pub killed_by_signal: Option<i32>,
     /// Scrollback contents at exit, for the transcript file.
     pub scrollback: Bytes,
 }
@@ -523,11 +530,17 @@ impl Mux {
             // without reaping leaves the child a zombie, which holds the
             // pid until the reaping wait below collects it, so the claim
             // drops while the pid is still unusable by anyone else.
-            if let Some(pid) = pid {
-                await_exit_leaving_zombie(pid);
-                pid_held.store(false, Ordering::SeqCst);
-            }
-            let status = child.wait();
+            let end = match pid {
+                Some(pid) => {
+                    await_exit_leaving_zombie(pid);
+                    pid_held.store(false, Ordering::SeqCst);
+                    reap(pid)
+                }
+                None => child
+                    .wait()
+                    .map(|status| ChildEnd::Exited(status.exit_code() as i32))
+                    .unwrap_or(ChildEnd::Unknown),
+            };
             let _ = drained_rx.recv_timeout(READER_DRAIN_TIMEOUT);
             if let Some(store) = &program_status {
                 let changes = store.lock().unwrap().drop_transient();
@@ -541,13 +554,18 @@ impl Mux {
                 }
             }
             exited.store(true, Ordering::SeqCst);
-            let exit_code = status.ok().map(|s| s.exit_code() as i32);
+            let (exit_code, killed_by_signal) = match end {
+                ChildEnd::Exited(code) => (Some(code), None),
+                ChildEnd::Killed(signal) => (Some(SIGNAL_EXIT_BASE + signal), Some(signal)),
+                ChildEnd::Unknown => (None, None),
+            };
             let scrollback = ring.lock().unwrap().ring.snapshot();
             let _ = exit_tx.send(SessionExit {
                 terminal_id,
                 generation,
                 semantic_session_id,
                 exit_code,
+                killed_by_signal,
                 scrollback,
             });
         });
@@ -825,6 +843,36 @@ fn await_exit_leaving_zombie(pid: u32) {
         if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
             return;
         }
+    }
+}
+
+/// How a PTY child's life ended.
+#[derive(Debug, Clone, Copy)]
+enum ChildEnd {
+    Exited(i32),
+    Killed(i32),
+    Unknown,
+}
+
+/// Collects a child `await_exit_leaving_zombie` has proven dead. This
+/// replaces `Child::wait` rather than joining it: the pty reports a signal
+/// death as code 1, and waiting twice on one pid can collect a recycled one.
+fn reap(pid: u32) -> ChildEnd {
+    let mut status: libc::c_int = 0;
+    loop {
+        if unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) } >= 0 {
+            break;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return ChildEnd::Unknown;
+        }
+    }
+    if libc::WIFSIGNALED(status) {
+        ChildEnd::Killed(libc::WTERMSIG(status))
+    } else if libc::WIFEXITED(status) {
+        ChildEnd::Exited(libc::WEXITSTATUS(status))
+    } else {
+        ChildEnd::Unknown
     }
 }
 
@@ -1365,6 +1413,69 @@ mod tests {
         assert!(foreground_process_changed(&mut previous, Some(8), true));
         assert!(!foreground_process_changed(&mut previous, Some(8), false));
         assert_eq!(previous, None);
+    }
+
+    #[test]
+    fn a_child_killed_by_a_signal_reports_which_one() {
+        let (mux, mut channels) = Mux::new();
+        let spec = CommandSpec {
+            program: "/bin/sleep".into(),
+            args: vec!["30".into()],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+        };
+        mux.spawn(70, 1, 31, &spec, false, false, true, None, false)
+            .unwrap();
+        let pid = loop {
+            if let Some(pid) = mux.child_pid(70) {
+                break pid;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        let exit = channels.exit_rx.blocking_recv().unwrap();
+        assert_eq!(exit.terminal_id, 70);
+        assert_eq!(exit.killed_by_signal, Some(libc::SIGKILL));
+        assert_eq!(exit.exit_code, Some(SIGNAL_EXIT_BASE + libc::SIGKILL));
+    }
+
+    #[test]
+    fn a_child_that_exits_itself_reports_its_own_status() {
+        let (mux, mut channels) = Mux::new();
+        let spec = CommandSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "exit 7".into()],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+        };
+        mux.spawn(71, 1, 32, &spec, false, false, true, None, false)
+            .unwrap();
+        let exit = channels.exit_rx.blocking_recv().unwrap();
+        assert_eq!(exit.terminal_id, 71);
+        assert_eq!(exit.exit_code, Some(7));
+        assert_eq!(exit.killed_by_signal, None);
+    }
+
+    #[test]
+    fn a_child_that_handles_the_signal_reports_only_its_exit_code() {
+        let (mux, mut channels) = Mux::new();
+        let spec = CommandSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "trap 'exit 143' TERM; while :; do sleep 0.05; done".into(),
+            ],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+        };
+        mux.spawn(72, 1, 33, &spec, false, false, true, None, false)
+            .unwrap();
+        // The trap is only installed once the shell has read the script.
+        std::thread::sleep(Duration::from_millis(250));
+        mux.kill(72).unwrap();
+        let exit = channels.exit_rx.blocking_recv().unwrap();
+        assert_eq!(exit.exit_code, Some(SIGNAL_EXIT_BASE + libc::SIGTERM));
+        assert_eq!(exit.killed_by_signal, None);
     }
 
     #[test]

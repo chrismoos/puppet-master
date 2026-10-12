@@ -23,6 +23,12 @@ fn session_state(env: &TestEnv, id: u64) -> SessionState {
         .state
 }
 
+/// Long enough for the delay the daemon holds a resume back by.
+const REMOTE_RESUME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Comfortably past that delay, so a resume that was coming has arrived.
+const REMOTE_NO_RESUME_WINDOW: std::time::Duration = std::time::Duration::from_secs(8);
+
 fn session(env: &TestEnv, id: u64) -> pm_protocol::domain::Session {
     env.daemon
         .subscribe()
@@ -1339,6 +1345,7 @@ async fn a_remote_session_spawns_relays_pty_and_ends() {
             terminal_id,
             generation: 1,
             exit_code: Some(0),
+            killed_by_signal: None,
             state: TerminalRunState::Exited,
             transcript_available: false,
             transcript_size: 0,
@@ -1368,6 +1375,7 @@ async fn a_failed_remote_exit_carries_the_workers_reason() {
             terminal_id,
             generation: 1,
             exit_code: None,
+            killed_by_signal: None,
             state: TerminalRunState::Failed,
             transcript_available: false,
             transcript_size: 0,
@@ -1392,6 +1400,7 @@ async fn a_failed_remote_exit_carries_the_workers_reason() {
             terminal_id,
             generation: 1,
             exit_code: None,
+            killed_by_signal: None,
             state: TerminalRunState::Failed,
             transcript_available: false,
             transcript_size: 0,
@@ -1421,6 +1430,7 @@ async fn a_remote_shell_exit_persists_its_generation_and_can_restart() {
             terminal_id,
             generation: 1,
             exit_code: Some(7),
+            killed_by_signal: None,
             state: TerminalRunState::Exited,
             transcript_available: false,
             transcript_size: 0,
@@ -1448,6 +1458,7 @@ async fn a_remote_shell_exit_persists_its_generation_and_can_restart() {
             terminal_id,
             generation: 2,
             exit_code: None,
+            killed_by_signal: None,
             state: TerminalRunState::Failed,
             transcript_available: false,
             transcript_size: 0,
@@ -1468,6 +1479,7 @@ async fn a_remote_shell_exit_persists_its_generation_and_can_restart() {
             terminal_id,
             generation: 3,
             exit_code: Some(0),
+            killed_by_signal: None,
             state: TerminalRunState::Exited,
             transcript_available: false,
             transcript_size: 0,
@@ -2159,6 +2171,135 @@ async fn a_reconnect_ends_a_killed_session_the_worker_no_longer_has() {
     );
 }
 
+/// The worker reports the signal, and nothing here asked for the session
+/// to end.
+#[tokio::test]
+async fn a_remote_session_killed_from_outside_is_resumed_on_its_worker() {
+    let env = daemon_env();
+    let mut reg = enroll(&env);
+    let worker_id = reg.worker_id;
+    let sid = spawn_remote(&env, worker_id);
+    let terminal_id = spawned_terminal(&mut reg);
+    let token = env.daemon.session_token(sid).unwrap().unwrap();
+    env.daemon.apply_worker_message(
+        worker_id,
+        WorkerMsg::HookReport {
+            session_token: token,
+            kind: pm_protocol::domain::HookKind::Started,
+            detail: String::new(),
+            agent_session_id: "native-session".into(),
+            transcript_path: String::new(),
+            req_id: 0,
+            background_work: false,
+        },
+    );
+
+    env.daemon.apply_worker_message(
+        worker_id,
+        WorkerMsg::TerminalExit {
+            terminal_id,
+            generation: 1,
+            exit_code: Some(137),
+            killed_by_signal: Some(9),
+            state: TerminalRunState::Exited,
+            transcript_available: false,
+            transcript_size: 0,
+            detail: String::new(),
+        },
+    );
+    let ended = session(&env, sid);
+    assert_eq!(ended.state, SessionState::Exited);
+    assert_eq!(
+        ended.state_detail,
+        "terminated by signal 9, not by a request from here"
+    );
+
+    match tokio::time::timeout(REMOTE_RESUME_TIMEOUT, reg.rx.recv())
+        .await
+        .expect("the session was not resumed on its worker")
+        .unwrap()
+    {
+        ControllerMsg::Spawn {
+            session_id,
+            generation: 2,
+            resume_agent_session_id,
+            ..
+        } => {
+            assert_eq!(session_id, sid);
+            assert_eq!(resume_agent_session_id, "native-session");
+        }
+        other => panic!("expected a resume for the killed session, got {other:?}"),
+    }
+}
+
+/// A kill from here reaches the agent as the same signal.
+#[tokio::test]
+async fn a_remote_session_killed_on_request_stays_ended() {
+    let env = daemon_env();
+    let mut reg = enroll(&env);
+    let worker_id = reg.worker_id;
+    let sid = spawn_remote(&env, worker_id);
+    let terminal_id = spawned_terminal(&mut reg);
+
+    env.daemon.kill_session(sid).unwrap();
+    assert!(matches!(
+        reg.rx.recv().await,
+        Some(ControllerMsg::TerminalKill { .. })
+    ));
+    env.daemon.apply_worker_message(
+        worker_id,
+        WorkerMsg::TerminalExit {
+            terminal_id,
+            generation: 1,
+            exit_code: Some(143),
+            killed_by_signal: None,
+            state: TerminalRunState::Exited,
+            transcript_available: false,
+            transcript_size: 0,
+            detail: String::new(),
+        },
+    );
+
+    let ended = session(&env, sid);
+    assert_eq!(ended.state, SessionState::Exited);
+    assert_eq!(ended.state_detail, "");
+    tokio::time::sleep(REMOTE_NO_RESUME_WINDOW).await;
+    assert!(reg.rx.try_recv().is_err(), "nothing should be resumed");
+}
+
+/// A worker that ends a run itself says why, which is not a loss.
+#[tokio::test]
+async fn a_run_the_worker_failed_itself_is_not_treated_as_a_loss() {
+    let env = daemon_env();
+    let mut reg = enroll(&env);
+    let worker_id = reg.worker_id;
+    let sid = spawn_remote(&env, worker_id);
+    let terminal_id = spawned_terminal(&mut reg);
+
+    env.daemon.apply_worker_message(
+        worker_id,
+        WorkerMsg::TerminalExit {
+            terminal_id,
+            generation: 1,
+            exit_code: Some(143),
+            killed_by_signal: None,
+            state: TerminalRunState::Failed,
+            transcript_available: false,
+            transcript_size: 0,
+            detail: "agent cannot reach its puppet-master tools".into(),
+        },
+    );
+
+    let ended = session(&env, sid);
+    assert_eq!(ended.state, SessionState::Failed);
+    assert_eq!(
+        ended.state_detail,
+        "agent cannot reach its puppet-master tools"
+    );
+    tokio::time::sleep(REMOTE_NO_RESUME_WINDOW).await;
+    assert!(reg.rx.try_recv().is_err(), "nothing should be resumed");
+}
+
 /// A worker answers a kill for a terminal it no longer has with an exit,
 /// and that answer can arrive after the terminal's real exit was recorded.
 #[tokio::test]
@@ -2172,6 +2313,7 @@ async fn a_trailing_exit_does_not_overwrite_the_recorded_one() {
         terminal_id,
         generation: 1,
         exit_code,
+        killed_by_signal: None,
         state: TerminalRunState::Exited,
         transcript_available: false,
         transcript_size: 0,
@@ -3221,6 +3363,7 @@ async fn remote_supervisor_snooze_and_prompt_hooks_control_completion_notificati
             terminal_id,
             generation,
             exit_code: Some(1),
+            killed_by_signal: None,
             state: TerminalRunState::Failed,
             transcript_available: false,
             transcript_size: 0,
