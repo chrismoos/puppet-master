@@ -3033,6 +3033,17 @@ impl From<WorkerMsg> for wire::WorkerMessage {
                 content,
                 filename,
             }),
+            WorkerMsg::SessionDropped {
+                req_id,
+                ok,
+                error,
+                path,
+            } => Msg::SessionDropped(wire::WorkerSessionDropped {
+                req_id,
+                ok,
+                error,
+                path,
+            }),
             WorkerMsg::McpRequest {
                 req_id,
                 bearer,
@@ -3222,6 +3233,12 @@ impl TryFrom<wire::WorkerMessage> for WorkerMsg {
                     content: m.content,
                     filename: m.filename,
                 },
+                Msg::SessionDropped(m) => WorkerMsg::SessionDropped {
+                    req_id: m.req_id,
+                    ok: m.ok,
+                    error: m.error,
+                    path: m.path,
+                },
                 Msg::McpRequest(m) => WorkerMsg::McpRequest {
                     req_id: m.req_id,
                     bearer: m.bearer,
@@ -3389,6 +3406,17 @@ impl From<ControllerMsg> for wire::ControllerMessage {
                 root,
                 path,
                 max_bytes,
+            }),
+            ControllerMsg::SessionDrop {
+                req_id,
+                session_id,
+                filename,
+                content,
+            } => Msg::SessionDrop(wire::ControllerSessionDrop {
+                req_id,
+                session_id,
+                filename,
+                content,
             }),
             ControllerMsg::McpResponse {
                 req_id,
@@ -3567,6 +3595,12 @@ impl TryFrom<wire::ControllerMessage> for ControllerMsg {
                     root: m.root,
                     path: m.path,
                     max_bytes: m.max_bytes,
+                },
+                Msg::SessionDrop(m) => ControllerMsg::SessionDrop {
+                    req_id: m.req_id,
+                    session_id: m.session_id,
+                    filename: m.filename,
+                    content: m.content,
                 },
                 Msg::McpResponse(m) => ControllerMsg::McpResponse {
                     req_id: m.req_id,

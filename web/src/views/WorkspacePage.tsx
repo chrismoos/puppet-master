@@ -9,6 +9,7 @@ import { WorkspaceTerminal } from "../ws/workspaceTerminal";
 import type { TerminalStreamStatus } from "@puppet-master/client-core/ws/terminalSocket";
 import type { RendererIssue } from "../ws/webglBudget";
 import { useTerminalThemeController } from "../theme/context";
+import { SessionDropOverlay, useSessionDrop } from "./SessionDropZone";
 
 const SAVE_DELAY_MS = 350;
 const MAX_TRACKED_SAVED_LAYOUTS = 8;
@@ -379,12 +380,20 @@ function WorkspacePaneView({ pane, root, terminalEntries, terminalById, sessions
   useEffect(() => () => dragGhost.current?.remove(), []);
   const terminal = pane.terminalId ? terminalById.get(pane.terminalId) : undefined;
   const session = terminal ? sessions.get(terminal.sessionId.toString()) : undefined;
+  const fileDrop = useSessionDrop(
+    terminal ? terminal.sessionId.toString() : null,
+    terminal ? terminal.id.toString() : null,
+  );
   const terminalLive = terminal?.state === TerminalRunState.RUNNING || terminal?.state === TerminalRunState.STARTING;
   return (
     <article
       className={`workspace-pane ${focused ? "is-focused" : ""} ${dropPosition ? "is-drop-target" : ""} ${dragSource ? "is-drag-source" : ""}`}
       onPointerDown={() => onFocus(pane.paneId)}
       onDragOver={(event) => {
+        if (fileDrop.claims(event)) {
+          fileDrop.handlers.onDragOver(event);
+          return;
+        }
         if (!event.dataTransfer.types.includes(SESSION_DRAG_TYPE) && !event.dataTransfer.types.includes(WORKSPACE_PANE_DRAG_TYPE)) return;
         event.preventDefault();
         const paneMove = event.dataTransfer.types.includes(WORKSPACE_PANE_DRAG_TYPE);
@@ -392,11 +401,17 @@ function WorkspacePaneView({ pane, root, terminalEntries, terminalById, sessions
         setDropPosition(paneDropPosition(event, paneMove));
       }}
       onDragLeave={(event) => {
+        fileDrop.handlers.onDragLeave(event);
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
           setDropPosition(null);
         }
       }}
       onDrop={(event) => {
+        if (fileDrop.claims(event)) {
+          fileDrop.handlers.onDrop(event);
+          setDropPosition(null);
+          return;
+        }
         const sourcePaneId = event.dataTransfer.getData(WORKSPACE_PANE_DRAG_TYPE);
         const sessionId = event.dataTransfer.getData(SESSION_DRAG_TYPE);
         if (!sourcePaneId && !sessionId) return;
@@ -448,6 +463,7 @@ function WorkspacePaneView({ pane, root, terminalEntries, terminalById, sessions
       </header>
       {terminal && terminalLive ? <TerminalViewport terminal={terminal} focused={focused} active={active} onIssue={setRendererIssue} onCommand={onTerminalCommand} /> : <div className="workspace-empty-pane"><span>{terminal ? "Terminal is not running" : "Choose any terminal"}</span><small>{terminal ? "Its place in this layout is preserved." : "Live agents and shells from every session are available here."}</small></div>}
       {dropPosition && <PaneDropOverlay active={dropPosition} />}
+      <SessionDropOverlay state={fileDrop.state} />
     </article>
   );
 }

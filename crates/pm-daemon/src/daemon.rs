@@ -300,6 +300,7 @@ pub struct Daemon {
         Mutex<std::collections::HashMap<u64, broadcast::Sender<UserSettingChanged>>>,
     scrollback_dir: PathBuf,
     session_files_dir: PathBuf,
+    session_drops_dir: PathBuf,
     socket_path: PathBuf,
     pm_exe: PathBuf,
     /// Bound HTTP address, set once the listener is up; sessions
@@ -953,6 +954,14 @@ impl TerminalInputFailure {
             Self::Transport => "transport_failure",
         }
     }
+
+    pub(crate) fn detail(self) -> &'static str {
+        match self {
+            Self::Busy => "the terminal was busy",
+            Self::MissingPty => "the session has no running terminal",
+            Self::Transport => "the session's host could not be reached",
+        }
+    }
 }
 
 fn supervisor_input_failure_details(
@@ -1316,6 +1325,13 @@ impl Daemon {
         crate::fsperm::create_private_dir(&config.scrollback_dir)?;
         let session_files_dir = config.scrollback_dir.join("session-files");
         crate::fsperm::create_private_dir(&session_files_dir)?;
+        let session_drops_dir = config.scrollback_dir.join("session-drops");
+        crate::fsperm::create_private_dir(&session_drops_dir)?;
+        crate::drops::sweep(
+            &session_drops_dir,
+            std::time::SystemTime::now(),
+            crate::drops::DROP_RETENTION,
+        );
         let (mux, channels) = Mux::new();
         let mux = std::sync::Arc::new(mux);
         let local_worker = crate::workers::WorkerLink::local(mux.clone());
@@ -1356,6 +1372,7 @@ impl Daemon {
             user_setting_channels: Mutex::new(std::collections::HashMap::new()),
             scrollback_dir: config.scrollback_dir,
             session_files_dir,
+            session_drops_dir,
             socket_path: config.socket_path,
             pm_exe,
             http_bound: std::sync::OnceLock::new(),
@@ -7190,6 +7207,38 @@ impl Daemon {
         }
     }
 
+    /// Writes `text` to a terminal as though the viewer typed it: plain
+    /// bytes, no paste markers and no Enter, so an agent TUI treats it as
+    /// ordinary composer input the viewer can keep editing.
+    ///
+    /// Nothing streams a terminal until a viewer attaches, so this
+    /// attaches the way `deliver_supervisor_input` does and holds the
+    /// stream until the write lands.
+    pub(crate) async fn type_into_terminal(
+        &self,
+        terminal: &pm_protocol::domain::Terminal,
+        text: &str,
+    ) -> Result<(), TerminalInputFailure> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        let input_state = self
+            .storage
+            .get_session(terminal.session_id)
+            .map(|session| session.state)
+            .ok();
+        let mut viewer = None;
+        self.deliver_supervisor_input(terminal, bytes::Bytes::from(text.to_owned()), &mut viewer)
+            .await?;
+        if terminal.kind == pm_protocol::domain::TerminalKind::Agent {
+            self.observe_user_interaction(terminal.session_id, false);
+            if let Some(input_state) = input_state {
+                self.acknowledge_user_input(terminal, false, input_state);
+            }
+        }
+        Ok(())
+    }
+
     /// Puts `text` into a session's agent as one message.
     ///
     /// The agent's own inbox takes it when there is a reachable one.
@@ -9512,6 +9561,19 @@ impl Daemon {
                     );
                 }
             }
+            WorkerMsg::SessionDropped {
+                req_id,
+                ok,
+                error,
+                path,
+            } => {
+                if let Some(link) = self.workers.get(worker_id) {
+                    link.resolve_session_drop(
+                        req_id,
+                        crate::workers::SessionDropResult { ok, error, path },
+                    );
+                }
+            }
             WorkerMsg::ForwardOpened { req_id, ok, error } => {
                 if let Some(link) = self.workers.get(worker_id) {
                     link.resolve_forward_open(
@@ -9628,6 +9690,31 @@ impl Daemon {
             Ok(Ok(result)) => Ok(result),
             _ => Err(DaemonError::Rejected(
                 "worker did not answer the directory listing".into(),
+            )),
+        }
+    }
+
+    pub(crate) fn session_drops_dir(&self) -> &std::path::Path {
+        &self.session_drops_dir
+    }
+
+    /// Hands a dropped file to a remote worker and waits for the path it
+    /// wrote. The timeout is the inbox's rather than the directory
+    /// listing's, because this carries up to the drop size limit.
+    pub(crate) async fn worker_session_drop(
+        &self,
+        worker_id: u64,
+        session_id: u64,
+        filename: String,
+        content: Vec<u8>,
+    ) -> Result<crate::workers::SessionDropResult, DaemonError> {
+        let rx = self
+            .worker_link(worker_id)?
+            .request_session_drop(session_id, filename, content)?;
+        match tokio::time::timeout(AGENT_INBOX_TIMEOUT, rx).await {
+            Ok(Ok(result)) => Ok(result),
+            _ => Err(DaemonError::Rejected(
+                "the session's host did not answer the dropped file".into(),
             )),
         }
     }

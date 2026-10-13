@@ -348,6 +348,7 @@ fn dashboard_router(daemon: Arc<Daemon>) -> Router {
         .route("/api/project-host", get(project_host))
         .route("/api/harness", post(harness_status))
         .route("/api/sessions/{id}/reports", get(session_reports))
+        .route("/api/sessions/{id}/drops", post(drop_session_file))
         .route("/api/items/{id}", get(get_legacy_item))
         .route(
             "/api/buckets/{bucket_id}/items/{id}/attachments",
@@ -1113,6 +1114,74 @@ async fn item_attachments(
 struct AttachmentUploadQuery {
     filename: String,
     media_type: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionDropQuery {
+    filename: String,
+    /// The terminal to type the path into, for a session showing more
+    /// than one. Defaults to the agent's own terminal.
+    terminal: Option<u64>,
+}
+
+/// Takes a file dropped onto a session, stores it on the host running
+/// that session, and types the path it wrote into the session's composer.
+///
+/// Only the dashboard's own user may call this: it writes a file on a
+/// host, and the path it writes is never the caller's to choose.
+async fn drop_session_file(
+    State(daemon): State<Arc<Daemon>>,
+    headers: HeaderMap,
+    Path(session_id): Path<u64>,
+    Query(query): Query<SessionDropQuery>,
+    body: Body,
+) -> Response {
+    if authed_user(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let too_large = || {
+        (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "error": format!(
+                    "the dropped file exceeds the {}-byte limit",
+                    crate::drops::SESSION_DROP_FILE_MAX
+                )
+            })),
+        )
+            .into_response()
+    };
+    if headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|length| length > crate::drops::SESSION_DROP_FILE_MAX)
+    {
+        return too_large();
+    }
+    let content = match axum::body::to_bytes(body, crate::drops::SESSION_DROP_FILE_MAX + 1).await {
+        Ok(content) if content.len() <= crate::drops::SESSION_DROP_FILE_MAX => content,
+        Ok(_) | Err(_) => return too_large(),
+    };
+    match daemon
+        .drop_session_file(session_id, query.terminal, &query.filename, &content)
+        .await
+    {
+        Ok(drop) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "path": drop.path,
+                "typed": drop.typed,
+                "detail": drop.detail,
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn upload_item_attachment(

@@ -2162,6 +2162,13 @@ pub enum WorkerMsg {
         content: Vec<u8>,
         filename: String,
     },
+    /// Where a dropped file landed on this host.
+    SessionDropped {
+        req_id: u64,
+        ok: bool,
+        error: String,
+        path: String,
+    },
     /// An agent's report, relayed because this host cannot reach the
     /// controller's browser plane directly.
     /// A repository read's answer. The payload is an encoded
@@ -2377,6 +2384,15 @@ pub enum ControllerMsg {
         root: String,
         path: String,
         max_bytes: u64,
+    },
+    /// A file dropped onto a session, for the host running it to store.
+    /// `filename` is a bare name the controller has already sanitized,
+    /// and the worker writes it inside a directory of its own choosing.
+    SessionDrop {
+        req_id: u64,
+        session_id: u64,
+        filename: String,
+        content: Vec<u8>,
     },
     McpResponse {
         req_id: u64,

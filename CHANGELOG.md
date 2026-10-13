@@ -6,6 +6,9 @@
 - Interrupting a Codex turn immediately marks the session idle with an interruption reason.
 - A session whose agent is killed on its host is resumed instead of left ended, up to three times, and says which signal ended it.
 - A session ended by a signal reports 128 plus the signal, so a killed agent reads 137 rather than 1.
+- [Web] Dropping a file on a session's terminal stores it on the host that runs that session and types the path into the composer, so an agent can open it whether it runs locally or on a remote host.
+- [Web] A file dropped anywhere else in the dashboard is ignored instead of replacing the dashboard with the file.
+- [Daemon] A host keeps files dropped onto its sessions for seven days. A host running a pm that predates this refuses a drop and says so.
 
 - Switching terminals waits for the destination to render at the pane size before showing it.
 - Browser tests select the installed test agent and verify scrollbar timers independently of runner speed.

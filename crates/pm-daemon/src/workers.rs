@@ -72,6 +72,13 @@ pub struct FileReadResult {
     pub filename: String,
 }
 
+/// Where a worker put a file dropped onto one of its sessions.
+pub struct SessionDropResult {
+    pub ok: bool,
+    pub error: String,
+    pub path: String,
+}
+
 /// Outcome of a worker's local dial for one forwarded stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardOpenResult {
@@ -307,6 +314,8 @@ pub struct WorkerLink {
     agent_inbox_pending: Mutex<HashMap<u64, oneshot::Sender<AgentInboxResult>>>,
     file_seq: AtomicU64,
     file_pending: Mutex<HashMap<u64, oneshot::Sender<FileReadResult>>>,
+    drop_seq: AtomicU64,
+    drop_pending: Mutex<HashMap<u64, oneshot::Sender<SessionDropResult>>>,
     forward_seq: AtomicU64,
     forward_pending: Mutex<HashMap<u64, oneshot::Sender<ForwardOpenResult>>>,
     /// Keyed by share id rather than a request sequence: a share has one
@@ -345,6 +354,8 @@ impl WorkerLink {
             agent_inbox_pending: Mutex::new(HashMap::new()),
             file_seq: AtomicU64::new(0),
             file_pending: Mutex::new(HashMap::new()),
+            drop_seq: AtomicU64::new(0),
+            drop_pending: Mutex::new(HashMap::new()),
             forward_seq: AtomicU64::new(0),
             forward_pending: Mutex::new(HashMap::new()),
             dir_share_pending: Mutex::new(HashMap::new()),
@@ -550,6 +561,36 @@ impl WorkerLink {
 
     pub fn resolve_file(&self, req_id: u64, result: FileReadResult) {
         if let Some(tx) = self.file_pending.lock().unwrap().remove(&req_id) {
+            let _ = tx.send(result);
+        }
+    }
+
+    /// Hands a dropped file to the worker for storage. Gated on
+    /// `WORKER_PROTOCOL_SESSION_DROP` by the caller: an older worker has
+    /// no directory for it and would ignore the message.
+    pub fn request_session_drop(
+        &self,
+        session_id: u64,
+        filename: String,
+        content: Vec<u8>,
+    ) -> Result<oneshot::Receiver<SessionDropResult>, WorkerError> {
+        let req_id = self.drop_seq.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.drop_pending.lock().unwrap().insert(req_id, tx);
+        if let Err(error) = self.send(ControllerMsg::SessionDrop {
+            req_id,
+            session_id,
+            filename,
+            content,
+        }) {
+            self.drop_pending.lock().unwrap().remove(&req_id);
+            return Err(error);
+        }
+        Ok(rx)
+    }
+
+    pub fn resolve_session_drop(&self, req_id: u64, result: SessionDropResult) {
+        if let Some(tx) = self.drop_pending.lock().unwrap().remove(&req_id) {
             let _ = tx.send(result);
         }
     }
@@ -1455,6 +1496,8 @@ impl WorkerRegistry {
             agent_inbox_pending: Mutex::new(HashMap::new()),
             file_seq: AtomicU64::new(0),
             file_pending: Mutex::new(HashMap::new()),
+            drop_seq: AtomicU64::new(0),
+            drop_pending: Mutex::new(HashMap::new()),
             forward_seq: AtomicU64::new(0),
             forward_pending: Mutex::new(HashMap::new()),
             dir_share_pending: Mutex::new(HashMap::new()),
@@ -1655,6 +1698,8 @@ mod tests {
             agent_inbox_pending: Mutex::new(HashMap::new()),
             file_seq: AtomicU64::new(0),
             file_pending: Mutex::new(HashMap::new()),
+            drop_seq: AtomicU64::new(0),
+            drop_pending: Mutex::new(HashMap::new()),
             forward_seq: AtomicU64::new(0),
             forward_pending: Mutex::new(HashMap::new()),
             dir_share_pending: Mutex::new(HashMap::new()),

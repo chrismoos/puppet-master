@@ -8,7 +8,7 @@ pub mod worker_frame;
 /// capabilities a peer may use, not a compatibility boundary: a controller
 /// registers a worker announcing any version and adapts to what that
 /// version supports.
-pub const WORKER_PROTOCOL_VERSION: u32 = 22;
+pub const WORKER_PROTOCOL_VERSION: u32 = 23;
 
 /// First protocol in which a worker serves a published directory from a
 /// loopback server it owns. An older worker cannot be asked to, so
@@ -80,6 +80,15 @@ pub const WORKER_PROTOCOL_EXIT_SIGNAL: u32 = 22;
 
 const _: () = assert!(WORKER_PROTOCOL_EXIT_SIGNAL <= WORKER_PROTOCOL_VERSION);
 const _: () = assert!(WORKER_PROTOCOL_EXIT_SIGNAL > WORKER_PROTOCOL_PROGRAM_STATUS);
+
+/// First protocol in which a worker stores a file dropped onto one of its
+/// sessions and answers with the path it wrote. A worker below this has
+/// nowhere to put the bytes, so a drop on its sessions is refused with
+/// that reason rather than left waiting for a message it cannot decode.
+pub const WORKER_PROTOCOL_SESSION_DROP: u32 = 23;
+
+const _: () = assert!(WORKER_PROTOCOL_SESSION_DROP <= WORKER_PROTOCOL_VERSION);
+const _: () = assert!(WORKER_PROTOCOL_SESSION_DROP > WORKER_PROTOCOL_EXIT_SIGNAL);
 
 /// First protocol in which a worker sizes the PTY to the requested
 /// initial geometry on spawn. An older worker ignores the fields and
@@ -162,6 +171,12 @@ impl PeerProtocol {
     /// the agent's own inbound channel.
     pub fn supports_agent_inbox(self) -> bool {
         self.supports(WORKER_PROTOCOL_AGENT_INBOX)
+    }
+
+    /// Whether the peer can store a file dropped onto one of its
+    /// sessions.
+    pub fn supports_session_drop(self) -> bool {
+        self.supports(WORKER_PROTOCOL_SESSION_DROP)
     }
 }
 

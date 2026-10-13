@@ -6,6 +6,7 @@ pub mod connection;
 pub mod connections;
 pub mod daemon;
 pub mod dir_server;
+pub mod drops;
 pub mod forward;
 pub mod forward_mount;
 pub(crate) mod forward_proxy;

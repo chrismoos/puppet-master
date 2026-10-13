@@ -9,8 +9,10 @@ import "./styles.css";
 import "./controls.css";
 import { App } from "./App";
 import { preloadTerminalFonts } from "./fonts";
+import { guardStrayFileDrops } from "./fileDropGuard";
 
 function renderApp(): void {
+  guardStrayFileDrops(document);
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <App />

@@ -17,6 +17,7 @@ import { shellTabLabel } from "@puppet-master/client-core/terminal/label";
 import { SessionKillDialog } from "./SessionKillDialog";
 import { browserJsonFetch } from "../api/http";
 import { browserWindowOpener, openForward } from "./forwardLink";
+import { SessionDropOverlay, useSessionDrop } from "./SessionDropZone";
 import { REVIEW_TAB_PREFIX, opensOwnWindow } from "./reviewWindow";
 
 /// Distinguishes a plan tab from a terminal id in the same selection.
@@ -290,6 +291,13 @@ export function SessionPane({
   // spawn; wait for it rather than opening a terminal the client does
   // not know yet.
   const agentTerminal = terminals.find((terminal) => terminal.kind === TerminalKind.AGENT);
+  // A dropped file goes to the terminal on screen, which is the agent's
+  // unless another tab is open on one of its shells.
+  const shownTerminal = selected ?? agentTerminal;
+  const fileDrop = useSessionDrop(
+    session && !openedReview && !openedPlan ? session.id.toString() : null,
+    shownTerminal ? shownTerminal.id.toString() : null,
+  );
   useEffect(() => {
     if (!active) return;
     if (ended) {
@@ -565,8 +573,14 @@ export function SessionPane({
               />
             </div>
           )}
-          <div className="term-main" aria-hidden={openedReview || openedPlan ? true : undefined} inert={openedReview || openedPlan ? true : undefined}>
+          <div
+            className="term-main"
+            aria-hidden={openedReview || openedPlan ? true : undefined}
+            inert={openedReview || openedPlan ? true : undefined}
+            {...fileDrop.handlers}
+          >
             <div className="term-host" ref={hostRef} />
+            <SessionDropOverlay state={fileDrop.state} />
             {session && ended && selectedTerminal === "agent" && (
               <div className="term-overlay">
                 <div className="term-overlay-card">

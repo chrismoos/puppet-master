@@ -90,6 +90,11 @@ See the [iOS guide](https://puppet-master.xyz/docs/guides/ios/) for setup and
 A terminal has one shared size across viewers. Web and mobile let you choose
 whether to resize it to fit your current view.
 
+Drop a file on a session's terminal in the browser and it is stored on the
+host that runs that session, with its path typed into the composer for you to
+send. A session on a remote host gets the file on that host, where its agent
+can read it.
+
 ## Connect tools with approvals
 
 Add an HTTP MCP server or import a REST API's OpenAPI document in

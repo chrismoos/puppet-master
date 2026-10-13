@@ -81,3 +81,13 @@ pub fn worker_transcript_dir(name: Option<&str>) -> PathBuf {
         None => data_dir().join("worker-transcripts"),
     }
 }
+
+/// Where files dropped onto this host's sessions are kept. Outlives the
+/// worker process, because an agent may open a dropped file later in the
+/// same conversation and a worker restarts for every self-update.
+pub fn worker_drop_dir(name: Option<&str>) -> PathBuf {
+    match name {
+        Some(name) => data_dir().join(format!("worker-drops-{}", slug(name))),
+        None => data_dir().join("worker-drops"),
+    }
+}

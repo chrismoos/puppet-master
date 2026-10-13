@@ -1598,6 +1598,7 @@ message WorkerMessage {
     WorkerDirShareBound dir_share_bound = 16;
     WorkerAgentInboxResult agent_inbox_result = 17;
     WorkerProgramStatus program_status = 18;
+    WorkerSessionDropped session_dropped = 19;
   }
 }
 
@@ -1774,6 +1775,15 @@ message WorkerFileRead {
   string filename = 5;
 }
 
+// Reply to a ControllerSessionDrop, correlated by req_id. `path` is the
+// absolute path the worker wrote, meaningful only when ok.
+message WorkerSessionDropped {
+  uint64 req_id = 1;
+  bool ok = 2;
+  string error = 3;
+  string path = 4;
+}
+
 message WorkerRegister {
   // Set only on first join, from a one-time enrollment token.
   string enrollment_token = 1;
@@ -1924,6 +1934,7 @@ message ControllerMessage {
     ControllerDirShareServe dir_share_serve = 21;
     ControllerDirShareStop dir_share_stop = 22;
     ControllerAgentInbox agent_inbox = 23;
+    ControllerSessionDrop session_drop = 24;
   }
 }
 
@@ -2053,6 +2064,17 @@ message ControllerFileRead {
   string root = 2;
   string path = 3;
   uint64 max_bytes = 4;
+}
+
+// A file a viewer dropped onto a session, to be written on the host that
+// runs it. The controller names the session and a sanitized filename and
+// never a path: the worker chooses a directory it owns, so this cannot
+// write anywhere else on that host.
+message ControllerSessionDrop {
+  uint64 req_id = 1;
+  uint64 session_id = 2;
+  string filename = 3;
+  bytes content = 4;
 }
 
 // Asks the worker to serve `path`, resolved below the session working

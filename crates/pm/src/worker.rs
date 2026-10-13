@@ -411,6 +411,14 @@ pub async fn run(
     let files_dir = runtime_dir.path().join("session-files");
     pm_daemon::fsperm::create_private_dir(&files_dir)
         .context("restricting the worker session-files directory")?;
+    let drops_dir = paths::worker_drop_dir(name);
+    pm_daemon::fsperm::create_private_dir(&drops_dir)
+        .context("restricting the worker session-drops directory")?;
+    pm_daemon::drops::sweep(
+        &drops_dir,
+        std::time::SystemTime::now(),
+        pm_daemon::drops::DROP_RETENTION,
+    );
     let transcripts = Arc::new(WorkerTranscriptStore::new(
         &paths::worker_transcript_dir(name),
         &controller,
@@ -442,6 +450,7 @@ pub async fn run(
         mux,
         hook_socket,
         files_dir,
+        drops_dir,
         out_slot,
         transcripts,
         dir_shares: Arc::new(Mutex::new(HashMap::new())),
@@ -1015,6 +1024,10 @@ struct WorkerRuntime {
     mux: Arc<Mux>,
     hook_socket: PathBuf,
     files_dir: PathBuf,
+    /// Where files dropped onto this host's sessions land. Unlike
+    /// `files_dir` this outlives the process, so a self-update does not
+    /// invalidate a path an agent was given.
+    drops_dir: PathBuf,
     out_slot: OutSlot,
     transcripts: Arc<WorkerTranscriptStore>,
     /// Directory shares this host serves, kept on the runtime rather
@@ -1638,6 +1651,7 @@ async fn serve(
             &out_tx,
             &rt.hook_socket,
             &rt.files_dir,
+            &rt.drops_dir,
             &pm_exe,
             &links,
             &rt.transcripts,
@@ -1668,6 +1682,7 @@ async fn handle_command(
     out_tx: &mpsc::Sender<Message>,
     hook_socket: &std::path::Path,
     files_dir: &std::path::Path,
+    drops_dir: &std::path::Path,
     pm_exe: &std::path::Path,
     links: &ControllerLinks,
     transcripts: &Arc<WorkerTranscriptStore>,
@@ -1898,6 +1913,20 @@ async fn handle_command(
             tokio::task::spawn_blocking(move || {
                 let _ =
                     tx.blocking_send(control(read_scoped_file(req_id, &root, &path, max_bytes)));
+            });
+        }
+        ControllerMsg::SessionDrop {
+            req_id,
+            session_id,
+            filename,
+            content,
+        } => {
+            let tx = out_tx.clone();
+            let drops_dir = drops_dir.to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                let _ = tx.blocking_send(control(write_session_drop(
+                    req_id, &drops_dir, session_id, &filename, &content,
+                )));
             });
         }
         ControllerMsg::Registered { .. } => {}
@@ -2290,6 +2319,53 @@ fn list_directory(req_id: u64, path: &str) -> WorkerMsg {
 
 /// Reads a regular file below the session cwd. Root is controller-owned session state;
 /// user input may only select a descendant and no descendant symlink is followed.
+/// Stores a file the controller says a viewer dropped onto one of this
+/// host's sessions. The controller names the file and this host names the
+/// directory, so a drop cannot write anywhere else.
+fn write_session_drop(
+    req_id: u64,
+    drops_dir: &std::path::Path,
+    session_id: u64,
+    filename: &str,
+    content: &[u8],
+) -> WorkerMsg {
+    let Some(filename) = pm_daemon::drops::drop_filename(filename) else {
+        return WorkerMsg::SessionDropped {
+            req_id,
+            ok: false,
+            error: "the dropped file has no usable name".into(),
+            path: String::new(),
+        };
+    };
+    pm_daemon::drops::sweep(
+        drops_dir,
+        std::time::SystemTime::now(),
+        pm_daemon::drops::DROP_RETENTION,
+    );
+    match pm_daemon::drops::store_drop(drops_dir, session_id, &filename, content) {
+        Ok(path) => {
+            info!(
+                session_id,
+                path = %path.display(),
+                bytes = content.len(),
+                "stored a file dropped onto a session"
+            );
+            WorkerMsg::SessionDropped {
+                req_id,
+                ok: true,
+                error: String::new(),
+                path: path.to_string_lossy().into_owned(),
+            }
+        }
+        Err(error) => WorkerMsg::SessionDropped {
+            req_id,
+            ok: false,
+            error: format!("cannot store the dropped file: {error}"),
+            path: String::new(),
+        },
+    }
+}
+
 fn read_scoped_file(req_id: u64, root: &str, path: &str, max_bytes: u64) -> WorkerMsg {
     let fail = |error: String| WorkerMsg::FileRead {
         req_id,
@@ -3336,6 +3412,7 @@ mod tests {
             &out_tx,
             &dir.path().join("hook.sock"),
             dir.path(),
+            dir.path(),
             std::path::Path::new("/usr/bin/pm"),
             &links,
             &transcripts,
@@ -3730,6 +3807,42 @@ mod tests {
                 content,
                 ..
             }] => assert_eq!(content, b"hello"),
+            other => panic!("unexpected reply {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_file_is_stored_and_answered_with_its_path() {
+        let (mux, _channels) = Mux::new();
+        let mux = Arc::new(mux);
+        let sent = dispatch(
+            &mux,
+            ControllerMsg::SessionDrop {
+                req_id: 11,
+                session_id: 42,
+                filename: "Screen Shot.png".into(),
+                content: b"png".to_vec(),
+            },
+        )
+        .await;
+        match sent.as_slice() {
+            [WorkerMsg::SessionDropped {
+                req_id: 11,
+                ok: true,
+                path,
+                ..
+            }] => {
+                // The dispatcher's drops directory is a temporary one that
+                // goes with it, so the path's shape is what survives to be
+                // asserted on here; `pm_daemon::drops` covers the bytes.
+                let path = std::path::Path::new(path);
+                assert_eq!(path.file_name().unwrap(), "Screen-Shot.png");
+                assert_eq!(
+                    path.parent().unwrap().file_name().unwrap(),
+                    "session-42",
+                    "a drop lands in its own session's directory"
+                );
+            }
             other => panic!("unexpected reply {other:?}"),
         }
     }
