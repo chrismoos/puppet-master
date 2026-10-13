@@ -12,6 +12,11 @@ pub const TAG_ACK: u8 = 0x05;
 pub const TAG_RESYNC: u8 = 0x06;
 pub const TAG_OWNERSHIP: u8 = 0x07;
 pub const TAG_RESIZE_REQUEST: u8 = 0x08;
+/// A viewer that was served part of a terminal's history asking for the
+/// rest, once its first screen is up. The answer is a snapshot taken at
+/// once, with no wait for the program to settle: nothing is being redrawn,
+/// so absorbing live output would only stall the screen.
+pub const TAG_HISTORY: u8 = 0x09;
 
 pub const FLAG_REPLAY: u8 = 0x01;
 pub const FLAG_REPLAY_START: u8 = 0x02;
@@ -62,6 +67,9 @@ pub enum TerminalFrame<'a> {
         bytes: u32,
     },
     Resync {
+        generation: u64,
+    },
+    History {
         generation: u64,
     },
 }
@@ -133,6 +141,13 @@ pub fn encode_resync(generation: u64) -> Bytes {
     frame.into()
 }
 
+pub fn encode_history_request(generation: u64) -> Bytes {
+    let mut frame = Vec::with_capacity(RESYNC_FRAME_BYTES);
+    frame.push(TAG_HISTORY);
+    frame.extend_from_slice(&generation.to_le_bytes());
+    frame.into()
+}
+
 pub fn decode(frame: &[u8]) -> Option<TerminalFrame<'_>> {
     match *frame.first()? {
         TAG_OUTPUT if frame.len() >= OUTPUT_HEADER_BYTES => Some(TerminalFrame::Output {
@@ -171,6 +186,9 @@ pub fn decode(frame: &[u8]) -> Option<TerminalFrame<'_>> {
             rows: u16::from_le_bytes(frame[11..13].try_into().ok()?),
         }),
         TAG_RESYNC if frame.len() == RESYNC_FRAME_BYTES => Some(TerminalFrame::Resync {
+            generation: u64::from_le_bytes(frame[1..9].try_into().ok()?),
+        }),
+        TAG_HISTORY if frame.len() == RESYNC_FRAME_BYTES => Some(TerminalFrame::History {
             generation: u64::from_le_bytes(frame[1..9].try_into().ok()?),
         }),
         TAG_ACK if frame.len() == ACK_FRAME_BYTES => Some(TerminalFrame::Ack {
@@ -260,6 +278,12 @@ mod tests {
             decode(&resync),
             Some(TerminalFrame::Resync { generation: 11 })
         );
+        let history = encode_history_request(12);
+        assert_eq!(
+            decode(&history),
+            Some(TerminalFrame::History { generation: 12 })
+        );
+        assert_eq!(decode(&history[..8]), None);
         assert_eq!(decode(&resync[..8]), None);
         let resize = encode_resize(9, 120, 40);
         assert_eq!(

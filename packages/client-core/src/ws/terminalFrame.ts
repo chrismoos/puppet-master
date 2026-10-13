@@ -94,6 +94,18 @@ export function encodeTerminalResync(generation: bigint): ArrayBuffer {
   return frame;
 }
 
+/** Asks for the history a bounded first snapshot left out, once the
+ * viewer's screen is up. The answer is a snapshot taken at once. */
+export const TERMINAL_TAG_HISTORY = 0x09;
+
+export function encodeTerminalHistoryRequest(generation: bigint): ArrayBuffer {
+  const frame = new ArrayBuffer(9);
+  const view = new DataView(frame);
+  view.setUint8(0, TERMINAL_TAG_HISTORY);
+  view.setBigUint64(GENERATION_OFFSET, generation, true);
+  return frame;
+}
+
 export const TERMINAL_TAG_OWNERSHIP = 0x07;
 export const TERMINAL_TAG_RESIZE_REQUEST = 0x08;
 const REVISION_OFFSET = GENERATION_OFFSET + 8;

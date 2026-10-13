@@ -13,6 +13,7 @@ import {
   TERMINAL_TAG_INPUT,
   TERMINAL_TAG_INPUT_SUBMIT,
   TERMINAL_TAG_RESYNC,
+  TERMINAL_TAG_HISTORY,
 } from "./terminalFrame";
 
 class FakeWebSocket {
@@ -495,6 +496,40 @@ describe("TerminalSocket", () => {
     expect(query.has("claim")).toBe(false);
     socket.close();
   });
+  it("asks for the rest of the history only once its first snapshot has arrived", () => {
+    const socket = new TerminalSocket(connect, 7n, 3n, () => {}, () => {}, null, { cols: 120, rows: 40 }, 500);
+    const wire = FakeWebSocket.instances[0];
+    socket.requestWholeHistory();
+    expect(wire.sent).toHaveLength(0);
+    wire.output(3n, TERMINAL_FLAG_REPLAY | TERMINAL_FLAG_REPLAY_START | TERMINAL_FLAG_REPLAY_END, [1]);
+
+    socket.requestWholeHistory();
+    const request = wire.sent.at(-1)!;
+    expect(new DataView(request).getUint8(0)).toBe(TERMINAL_TAG_HISTORY);
+    expect(new DataView(request).getBigUint64(1, true)).toBe(3n);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    socket.close();
+  });
+
+  it("bounds the history of a first snapshot only, so a reconnect is served all of it", () => {
+    const socket = new TerminalSocket(connect, 12n, 1n, () => {}, () => {}, null, { cols: 165, rows: 45 }, 500);
+    const first = FakeWebSocket.instances[0];
+    expect(new URLSearchParams(first.url.split("?")[1]).get("history")).toBe("500");
+    first.output(1n, TERMINAL_FLAG_REPLAY | TERMINAL_FLAG_REPLAY_START | TERMINAL_FLAG_REPLAY_END);
+    first.resizeEcho(1n, 50, 24);
+    first.disconnect();
+    vi.advanceTimersByTime(1_000);
+    const query = new URLSearchParams(FakeWebSocket.instances.at(-1)!.url.split("?")[1]);
+    expect(query.has("history")).toBe(false);
+    socket.close();
+  });
+
+  it("asks for the whole history when no bound is given", () => {
+    const socket = new TerminalSocket(connect, 12n, 1n, () => {}, () => {}, null, { cols: 165, rows: 45 });
+    expect(new URLSearchParams(FakeWebSocket.instances[0].url.split("?")[1]).has("history")).toBe(false);
+    socket.close();
+  });
+
   it("orders ownership independently of delayed local size echoes", () => {
     const socket = new TerminalSocket(connect, 7n, 3n, () => {}, () => {}, null, { cols: 120, rows: 40 });
     const wire = FakeWebSocket.instances[0];

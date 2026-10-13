@@ -11,7 +11,7 @@ import { isRealPaneFit, measureFit, spawnGeometry, type TerminalGeometry } from 
 import { collectXtermDebug, type TerminalLayerDebug } from "./terminalDiagnostics";
 import { wireViewerSize, type ViewerSizeController } from "@puppet-master/client-core/ws/terminalRepaint";
 import { applyEchoedPtySize } from "@puppet-master/client-core/ws/terminalResize";
-import { applyMeasuredFit, deliverLayerFrame, isInitialSnapshotFrame, showLayer, waitForTerminalRender } from "./terminalLayer";
+import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, pendingShowVisibility, showLayer, waitForTerminalRender, type HeldInput } from "./terminalLayer";
 import { wireTransientTerminalScrollbar } from "./terminalScrollbar";
 import { TerminalClipboard } from "./terminalClipboard";
 import { registerForegroundCommandHandler, wireTerminalClipboard } from "./terminalHostWiring";
@@ -70,6 +70,11 @@ interface Layer {
   pendingFit: TerminalSize | null;
   /** The pending size came from another viewer, which this one follows. */
   pendingFollow: boolean;
+  /** The first snapshot was bounded, so the whole scrollback is still to
+   * be asked for once this layer has painted. */
+  historyPending: boolean;
+  /** Typed before the terminal was attached, delivered once it is. */
+  heldInput: HeldInput[];
   /** The latest size measured while a width change was in flight, sent once
    * the size stops changing so a dragged window is not a stream of resizes. */
   settlingFit: TerminalSize | null;
@@ -88,6 +93,12 @@ type TerminalCommandListener = (terminalId: bigint, command: string) => void;
  */
 let activeStage: TerminalStage | null = null;
 
+/** History lines in a layer's first snapshot. The screen is always whole,
+ * so this only sets how far back the reader can scroll until the rest of
+ * the scrollback arrives, which it asks for as soon as it has painted. */
+const FIRST_SNAPSHOT_HISTORY_LINES = 500;
+/** Keystrokes held for a terminal that is not attached yet. */
+const HELD_INPUT_CAP_BYTES = 64 * 1024;
 const SWAP_RECHECK_MS = 2_000;
 const INITIAL_RECHECK_MS = 250;
 /** How long a dragged window's size must hold before it is sent. */
@@ -254,21 +265,25 @@ export class TerminalStage {
     this.layoutVisibleLayer(layer);
 
     if (layer.initialReplayPending || layer.pendingFit) {
-      // The new screen is not ready: keep the previous one on screen, inert,
-      // until the snapshot has painted, then swap in one step.
       if (!layer.initialReplayPending) layer.swapPending = true;
       layer.focusAtShow = document.activeElement;
       for (const [otherKey, other] of this.layers) {
-        const keep = otherKey === wasVisibleId && otherKey !== key && other.el.style.visibility === "visible";
-        other.el.style.visibility = keep ? "visible" : "hidden";
-        other.el.style.pointerEvents = "none";
-        other.webgl?.setVisible(keep || otherKey === key, true);
+        const visible = pendingShowVisibility(
+          { key, initialReplayPending: layer.initialReplayPending },
+          { key: otherKey, visible: other.el.style.visibility === "visible" },
+          wasVisibleId,
+        );
+        other.el.style.visibility = visible ? "visible" : "hidden";
+        other.el.style.pointerEvents = visible && otherKey === key ? "auto" : "none";
+        other.webgl?.setVisible(visible || otherKey === key, true);
       }
+      if (layer.initialReplayPending) layer.term.focus();
       this.scheduleRefitVisible();
       if (layer.revealTimeout === null) {
         layer.revealTimeout = setTimeout(() => {
           layer.revealTimeout = null;
           this.revealPendingLayer(layer);
+          if (layer.initialReplayPending) this.showConnectingNote(layer);
         }, layer.swapPending ? SWAP_RECHECK_MS : INITIAL_RECHECK_MS);
       }
       this.evict();
@@ -347,14 +362,12 @@ export class TerminalStage {
 
     const encoder = new TextEncoder();
     const dataSub = term.onData((text) => {
-      this.inputTarget(key)?.handle?.input(encoder.encode(text), text === "\r");
+      this.sendInput(key, encoder.encode(text), text === "\r");
     });
     const binarySub = term.onBinary((chunk) => {
-      const handle = this.inputTarget(key)?.handle;
-      if (!handle) return;
       const bytes = new Uint8Array(chunk.length);
       for (let i = 0; i < chunk.length; i++) bytes[i] = chunk.charCodeAt(i);
-      handle.input(bytes);
+      this.sendInput(key, bytes, false);
     });
     const titleSub = addressedTerminal
       ? registerForegroundCommandHandler(term, (command) => this.updateTerminalCommand(sessionId, command))
@@ -394,6 +407,8 @@ export class TerminalStage {
       ackTimer: null,
       initialReplayPending: true,
       swapPending: false,
+      historyPending: false,
+      heldInput: [],
       focusAtShow: null,
       replayPainted: false,
       heldSnapshot: null,
@@ -667,9 +682,10 @@ export class TerminalStage {
     applyMeasuredFit(layer.term, measured, false);
     const size = { cols: measured.cols, rows: measured.rows };
     const handle = layer.addressedTerminal
-      ? this.client.openTerminal(layer.sessionId, size)
-      : this.client.openPty(layer.sessionId, size);
+      ? this.client.openTerminal(layer.sessionId, size, FIRST_SNAPSHOT_HISTORY_LINES)
+      : this.client.openPty(layer.sessionId, size, FIRST_SNAPSHOT_HISTORY_LINES);
     layer.handle = handle;
+    layer.historyPending = true;
     layer.lastResize = size;
     layer.sizePrompt.requested(size);
     // The size this viewer claims is the one it is moving to: while a resize
@@ -726,15 +742,15 @@ export class TerminalStage {
       layer.statusEl.replaceChildren();
       layer.statusEl.hidden = status.phase === "online";
       if (status.phase === "online") return;
-      // A slow first snapshot reports itself without an error, and the screen
-      // being switched away from stays up through it. A real failure, or a
-      // pane with nothing else on it, shows the status instead.
+      // A slow first snapshot reports itself without an error, and the layer
+      // waiting for it is already on screen. Only a real failure replaces a
+      // screen kept up for a layer that has painted before.
       const currentLayer = this.layers.get(layer.key);
-      if (currentLayer && (status.lastError || !this.anotherLayerOnScreen(currentLayer.key))) {
-        this.revealPendingLayer(currentLayer, true);
-      }
+      if (currentLayer && status.lastError) this.revealPendingLayer(currentLayer, true);
+      const connecting = !status.lastError && !currentLayer?.replayPainted;
+      layer.statusEl.classList.toggle("is-connecting", connecting);
       const label = document.createElement("span");
-      label.textContent = status.lastError ?? "reconnecting…";
+      label.textContent = status.lastError ?? (connecting ? "connecting…" : "reconnecting…");
       layer.statusEl.appendChild(label);
       if (status.canRetry) {
         const retry = document.createElement("button");
@@ -748,6 +764,9 @@ export class TerminalStage {
     if (documentVisible(document) && this.visibleId === layer.key) viewer.opened();
     else viewer.setVisible(false);
     handle.connect((frame) => this.receiveFrame(layer.key, frame));
+    const held = layer.heldInput;
+    layer.heldInput = [];
+    for (const entry of held) handle.input(entry.data, entry.submitted);
     this.flushHeldSnapshot(layer);
     return true;
   }
@@ -777,18 +796,23 @@ export class TerminalStage {
 
   /** A screen kept up while the next session loads still holds keyboard
    * focus, so what is typed into it goes to the session switched to. */
+  /** Delivers a keystroke to the session on screen, holding it when that
+   * session's terminal has not been attached yet. */
+  private sendInput(key: string, data: Uint8Array, submitted: boolean): void {
+    const target = this.inputTarget(key);
+    if (!target) return;
+    if (!target.handle) {
+      target.heldInput = holdInput(target.heldInput, { data, submitted }, HELD_INPUT_CAP_BYTES);
+      return;
+    }
+    target.handle.input(data, submitted);
+  }
+
   private inputTarget(key: string): Layer | undefined {
     const target = this.visibleId !== null && this.visibleId !== key && this.layers.get(this.visibleId)
       ? this.visibleId
       : key;
     return this.layers.get(target);
-  }
-
-  private anotherLayerOnScreen(key: string): boolean {
-    for (const [otherKey, other] of this.layers) {
-      if (otherKey !== key && other.el.style.visibility === "visible") return true;
-    }
-    return false;
   }
 
   private revealPendingLayer(layer: Layer, force = false): void {
@@ -811,9 +835,23 @@ export class TerminalStage {
     );
   }
 
+  /** Says why a pane that has already taken the screen is still empty. A
+   * terminal stream reports itself only once it has failed, so a first
+   * attach that is merely slow says nothing on its own. */
+  private showConnectingNote(layer: Layer): void {
+    if (this.visibleId !== layer.key || !layer.statusEl.hidden) return;
+    layer.statusEl.replaceChildren();
+    layer.statusEl.classList.add("is-connecting");
+    const label = document.createElement("span");
+    label.textContent = "connecting…";
+    layer.statusEl.appendChild(label);
+    layer.statusEl.hidden = false;
+  }
+
   private finishLayerReveal(layer: Layer): void {
     layer.initialReplayPending = false;
     layer.swapPending = false;
+    if (layer.statusEl.classList.contains("is-connecting")) layer.statusEl.hidden = true;
     if (layer.revealTimeout !== null) {
       clearTimeout(layer.revealTimeout);
       layer.revealTimeout = null;
@@ -838,6 +876,18 @@ export class TerminalStage {
     restoreTerminalViewport(layer.term, layer.viewport);
     layer.term.refresh(0, layer.term.rows - 1);
     if (focusTerminal) layer.term.focus();
+    this.askForWholeHistory(layer);
+  }
+
+  /** Asks for the scrollback the first snapshot left out, as soon as the
+   * screen it did carry is up. The answer is another snapshot, which
+   * replaces the buffer in place and keeps the reader's distance from the
+   * bottom, so the lines on screen do not move. */
+  private askForWholeHistory(layer: Layer): void {
+    if (!layer.historyPending) return;
+    if (!historyWasTruncated(layer.term.buffer.active.length, FIRST_SNAPSHOT_HISTORY_LINES)) return;
+    layer.historyPending = false;
+    layer.handle?.requestWholeHistory();
   }
 
   private disposeLayer(key: string): void {

@@ -214,8 +214,14 @@ pub struct DaemonConfig {
 }
 
 pub enum WebTerminalReplay {
-    Complete { bytes: bytes::Bytes },
+    Complete {
+        bytes: bytes::Bytes,
+    },
     Streaming(tokio::sync::mpsc::UnboundedReceiver<crate::workers::ReplayChunk>),
+    /// The upstream replay is on its way and this viewer asked for part of
+    /// the history, so it waits for the mirror to parse and then takes its
+    /// own bounded snapshot.
+    Parsed(tokio::sync::oneshot::Receiver<bytes::Bytes>),
 }
 
 pub struct WebTerminalAttach {
@@ -8019,7 +8025,7 @@ impl Daemon {
         replay_bytes: usize,
         size: Option<(u16, u16)>,
     ) -> Result<WebTerminalAttach, DaemonError> {
-        self.attach_web_terminal_for_viewer(id, replay_bytes, size, 0, 0)
+        self.attach_web_terminal_for_viewer(id, replay_bytes, size, 0, 0, None)
     }
 
     pub(crate) fn attach_web_terminal_for_viewer(
@@ -8029,6 +8035,7 @@ impl Daemon {
         size: Option<(u16, u16)>,
         viewer: u64,
         request: u64,
+        history: Option<usize>,
     ) -> Result<WebTerminalAttach, DaemonError> {
         let terminal = self.storage.get_terminal(id)?;
         let link = self.terminal_link(id)?;
@@ -8037,7 +8044,7 @@ impl Daemon {
             self.viewer_resize(id, terminal.generation, viewer, request, cols, rows)
         });
         let resized = size.is_some_and(|size| size != previous_size);
-        let attach = link.streaming_viewer_attach(id);
+        let attach = link.streaming_viewer_attach(id, history);
         if let (crate::workers::StreamingViewerAttach::First { .. }, Some((cols, rows))) =
             (&attach, size)
         {
@@ -8061,16 +8068,20 @@ impl Daemon {
             guard: Some(guard),
             progress,
         };
+        let pending = |replay| match replay {
+            crate::workers::ReplaySource::Chunks(chunks) => WebTerminalReplay::Streaming(chunks),
+            crate::workers::ReplaySource::Parsed(parsed) => WebTerminalReplay::Parsed(parsed),
+        };
         match attach {
             crate::workers::StreamingViewerAttach::Joined { rx, replay } => {
                 Ok(assemble(WebTerminalReplay::Complete { bytes: replay }, rx))
             }
             crate::workers::StreamingViewerAttach::Waiting { rx, replay } => {
-                Ok(assemble(WebTerminalReplay::Streaming(replay), rx))
+                Ok(assemble(pending(replay), rx))
             }
             crate::workers::StreamingViewerAttach::First { rx, replay } => {
                 self.start_terminal_stream(&link, &terminal, replay_bytes)?;
-                Ok(assemble(WebTerminalReplay::Streaming(replay), rx))
+                Ok(assemble(pending(replay), rx))
             }
         }
     }
@@ -8291,12 +8302,15 @@ impl Daemon {
         &self,
         id: u64,
         progress: &crate::workers::ViewerProgress,
+        history: Option<usize>,
     ) -> Option<(
         bytes::Bytes,
         tokio::sync::broadcast::Receiver<bytes::Bytes>,
         (u16, u16),
     )> {
-        self.terminal_link(id).ok()?.resnapshot_viewer(id, progress)
+        self.terminal_link(id)
+            .ok()?
+            .resnapshot_viewer(id, progress, history)
     }
 
     pub(crate) fn viewer_resize(

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyMeasuredFit, deliverLayerFrame, isInitialSnapshotFrame, showLayer, waitForTerminalRender } from "./terminalLayer";
+import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, pendingShowVisibility, showLayer, waitForTerminalRender } from "./terminalLayer";
 
 describe("hidden layers", () => {
   it("keep parsing every frame into the emulator when sizes already match", () => {
@@ -202,5 +202,66 @@ describe("waitForTerminalRender", () => {
     onRender?.();
     expect(rendered).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe("pendingShowVisibility", () => {
+  const cold = { key: "s:2", initialReplayPending: true };
+  const warm = { key: "s:2", initialReplayPending: false };
+
+  it("puts a layer with nothing to show on screen at once", () => {
+    expect(pendingShowVisibility(cold, { key: "s:2", visible: false }, "s:1")).toBe(true);
+  });
+
+  it("takes the previous session off screen while a first snapshot loads", () => {
+    expect(pendingShowVisibility(cold, { key: "s:1", visible: true }, "s:1")).toBe(false);
+  });
+
+  it("keeps the previous screen up for a layer that has painted before", () => {
+    expect(pendingShowVisibility(warm, { key: "s:1", visible: true }, "s:1")).toBe(true);
+    expect(pendingShowVisibility(warm, { key: "s:2", visible: false }, "s:1")).toBe(false);
+  });
+
+  it("shows no screen other than the one being left", () => {
+    expect(pendingShowVisibility(warm, { key: "s:3", visible: true }, "s:1")).toBe(false);
+    expect(pendingShowVisibility(warm, { key: "s:1", visible: false }, "s:1")).toBe(false);
+    expect(pendingShowVisibility(warm, { key: "s:1", visible: true }, null)).toBe(false);
+  });
+});
+
+describe("holdInput", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text);
+
+  it("keeps what was typed before the terminal was attached, in order", () => {
+    let held = holdInput([], { data: bytes("mouse"), submitted: false }, 1_024);
+    held = holdInput(held, { data: bytes("on"), submitted: false }, 1_024);
+    held = holdInput(held, { data: bytes("\r"), submitted: true }, 1_024);
+    expect(held.map((entry) => new TextDecoder().decode(entry.data))).toEqual(["mouse", "on", "\r"]);
+    expect(held.at(-1)!.submitted).toBe(true);
+  });
+
+  it("drops the oldest past the cap and keeps the newest keystroke", () => {
+    const held = holdInput(
+      [{ data: bytes("old"), submitted: false }, { data: bytes("er"), submitted: false }],
+      { data: bytes("new"), submitted: false },
+      6,
+    );
+    expect(held.map((entry) => new TextDecoder().decode(entry.data))).toEqual(["er", "new"]);
+  });
+
+  it("holds a keystroke larger than the cap rather than losing it", () => {
+    const held = holdInput([], { data: bytes("abcdefgh"), submitted: false }, 4);
+    expect(held).toHaveLength(1);
+  });
+});
+
+describe("historyWasTruncated", () => {
+  it("is false when the whole history fitted in the first snapshot", () => {
+    expect(historyWasTruncated(52, 500)).toBe(false);
+  });
+
+  it("is true once the first snapshot reached the bound", () => {
+    expect(historyWasTruncated(500, 500)).toBe(true);
+    expect(historyWasTruncated(540, 500)).toBe(true);
   });
 });

@@ -3120,6 +3120,10 @@ struct TerminalStreamQuery {
     rows: Option<u16>,
     viewer: Option<u64>,
     claim: Option<u64>,
+    /// How many lines of history the viewer's first snapshot carries, so a
+    /// screen paints before the whole scrollback is parsed. Absent or zero
+    /// carries all of it, and every later snapshot carries all of it.
+    history: Option<u16>,
 }
 
 async fn terminal_ws_upgrade(
@@ -3209,8 +3213,14 @@ async fn terminal_ws_connection(
         rows: initial_rows,
         viewer,
         claim,
+        history: requested_history,
         ..
     } = query;
+    // Only the first snapshot is bounded: a viewer that has painted asks
+    // again and is served the whole history.
+    let mut history = requested_history
+        .filter(|lines| *lines > 0)
+        .map(usize::from);
     let terminal = match daemon.terminal(terminal_id) {
         Ok(terminal) => terminal,
         Err(_) => {
@@ -3248,6 +3258,7 @@ async fn terminal_ws_connection(
         size,
         viewer_id,
         claim.unwrap_or_default(),
+        history,
     ) {
         Ok(attach) => attach,
         Err(_) => {
@@ -3269,6 +3280,7 @@ async fn terminal_ws_connection(
     let mut ownership_rx = daemon.viewer_owners.subscribe(terminal_id, generation);
     let (mut sink, mut stream) = socket.split();
     let (resync_tx, mut resync_rx) = mpsc::channel::<()>(1);
+    let (history_tx, mut history_rx) = mpsc::channel::<()>(1);
     let (cols, rows) = attach.pty_size;
     if viewer.is_some() {
         let owner = ownership_rx.borrow_and_update().clone();
@@ -3302,6 +3314,7 @@ async fn terminal_ws_connection(
     match replay {
         crate::daemon::WebTerminalReplay::Complete { .. } if hold_first_snapshot => {}
         crate::daemon::WebTerminalReplay::Complete { bytes } => {
+            history = None;
             for frame in pm_protocol::terminal_frame::replay_frames_with_flags(
                 generation,
                 &bytes[..],
@@ -3309,6 +3322,35 @@ async fn terminal_ws_connection(
             ) {
                 if sink.send(Message::Binary(frame)).await.is_err() {
                     return;
+                }
+            }
+        }
+        // A bounded viewer cannot be served the upstream replay in chunks,
+        // so it waits for the mirror to parse it and takes its own snapshot.
+        crate::daemon::WebTerminalReplay::Parsed(parsed) => {
+            match tokio::time::timeout(WEB_TERMINAL_REPLAY_TIMEOUT, parsed).await {
+                Ok(Ok(_)) => {}
+                _ => return,
+            }
+            if !hold_first_snapshot {
+                let Some((snapshot, fresh, (cols, rows))) =
+                    daemon.web_terminal_resnapshot(terminal_id, &progress, history.take())
+                else {
+                    return;
+                };
+                output = fresh;
+                let size = pm_protocol::terminal_frame::encode_resize(generation, cols, rows);
+                if sink.send(Message::Binary(size)).await.is_err() {
+                    return;
+                }
+                for frame in pm_protocol::terminal_frame::replay_frames_with_flags(
+                    generation,
+                    &snapshot[..],
+                    pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
+                ) {
+                    if sink.send(Message::Binary(frame)).await.is_err() {
+                        return;
+                    }
                 }
             }
         }
@@ -3350,7 +3392,7 @@ async fn terminal_ws_connection(
                 () = settled => {
                     resync = None;
                     let Some((snapshot, fresh, (cols, rows))) =
-                        daemon.web_terminal_resnapshot(terminal_id, &progress)
+                        daemon.web_terminal_resnapshot(terminal_id, &progress, history.take())
                     else {
                         if hold_first_snapshot {
                             return;
@@ -3416,6 +3458,30 @@ async fn terminal_ws_connection(
                 Some(()) = resync_rx.recv() => {
                     if resync.is_none() {
                         resync = Some((tokio::time::Instant::now(), None));
+                    }
+                }
+                // The viewer has its screen and wants the history behind it.
+                // The mirror already holds it, so the snapshot goes out now
+                // rather than through the redraw wait a resize needs.
+                Some(()) = history_rx.recv() => {
+                    let Some((snapshot, fresh, (cols, rows))) =
+                        daemon.web_terminal_resnapshot(terminal_id, &progress, None)
+                    else {
+                        continue;
+                    };
+                    output = fresh;
+                    let size = pm_protocol::terminal_frame::encode_resize(generation, cols, rows);
+                    if sink.send(Message::Binary(size)).await.is_err() {
+                        return;
+                    }
+                    for frame in pm_protocol::terminal_frame::replay_frames_with_flags(
+                        generation,
+                        &snapshot[..],
+                        pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
+                    ) {
+                        if sink.send(Message::Binary(frame)).await.is_err() {
+                            return;
+                        }
                     }
                 }
                 // The program's repaint is already arriving, so the snapshot
@@ -3504,6 +3570,11 @@ async fn terminal_ws_connection(
                     generation: incoming,
                 }) if incoming == generation => {
                     let _ = resync_tx.try_send(());
+                }
+                Some(pm_protocol::terminal_frame::TerminalFrame::History {
+                    generation: incoming,
+                }) if incoming == generation => {
+                    let _ = history_tx.try_send(());
                 }
                 _ => break,
             }

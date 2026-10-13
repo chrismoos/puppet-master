@@ -136,6 +136,26 @@ async function switchAndSample(page: Page): Promise<{ from: string; to: string; 
   return { from, to: await visibleKey(page), samples };
 }
 
+/// The pane goes from the session being left, to this session's own empty
+/// terminal, to its snapshot in one step. No frame shows a partly drawn
+/// screen, and none shows the session being left once the switch has begun.
+function expectBlankThenOnePaint(result: { from: string; to: string; samples: Sample[] }): void {
+  const { from, to, samples } = result;
+  const final = samples.at(-1)!.layers[to];
+  expect(final.painted).toBe(true);
+  const states: string[] = [];
+  for (const [index, sample] of samples.entries()) {
+    expect(sample.onScreen, `frame ${index}`).toHaveLength(1);
+    const [shown] = sample.onScreen;
+    if (shown !== from && shown !== to) throw new Error(`frame ${index} shows ${shown}`);
+    const state = shown === from
+      ? "previous"
+      : sample.layers[to]?.painted ? "painted" : "blank";
+    if (states.at(-1) !== state) states.push(state);
+  }
+  expect(states).toEqual(["previous", "blank", "painted"]);
+}
+
 function expectOneSwap(result: { from: string; to: string; samples: Sample[] }): void {
   const { from, to, samples } = result;
   const final = samples.at(-1)!.layers[to];
@@ -155,7 +175,7 @@ function expectOneSwap(result: { from: string; to: string; samples: Sample[] }):
   expect(swapped).toBe(true);
 }
 
-test("a session whose snapshot is slow to arrive replaces the previous screen in one step", async ({ page }) => {
+test("a session whose snapshot is slow to arrive takes the pane empty rather than leaving the previous screen up", async ({ page }) => {
   await logIn(page);
   await openSession(page, 0);
   await fillHistory(page);
@@ -174,8 +194,7 @@ test("a session whose snapshot is slow to arrive replaces the previous screen in
   await expect(page.locator('.term-layer[style*="visibility: visible"]')).toHaveCount(1, { timeout: 20_000 });
 
   const result = await switchAndSample(page);
-  expectOneSwap(result);
-  expect(result.samples.filter((sample) => sample.onScreen[0] === result.from).length).toBeGreaterThan(5);
+  expectBlankThenOnePaint(result);
 });
 
 test("a warm session at a stale size is shown only once it is redrawn at the pane's size", async ({ page }) => {
@@ -199,4 +218,101 @@ test("a warm session at a stale size is shown only once it is redrawn at the pan
   const shown = settled.samples.at(-1)!.layers[settled.to];
   const other = settled.samples.at(-1)!.layers[settled.from];
   expect({ cols: shown.cols, rows: shown.rows }).toEqual({ cols: other.cols, rows: other.rows });
+});
+
+test("a session still reaching for its terminal says it is connecting over an empty pane", async ({ page }) => {
+  await logIn(page);
+  await openSession(page, 0);
+  await fillHistory(page);
+  const from = await visibleKey(page);
+
+  let letTicketThrough = () => {};
+  const held = new Promise<void>((resolve) => {
+    letTicketThrough = resolve;
+  });
+  await page.route("**/api/terminals/*/attach-ticket", async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  await page.locator(".sb-session:not(.is-selected)").first().click();
+  const pane = page.locator('.term-layer[style*="visibility: visible"]');
+  await expect(pane.locator(".terminal-stream-status.is-connecting")).toHaveText("connecting…");
+  const waiting = await page.evaluate(() => {
+    const stage = (window as unknown as StageWindow).__pmStage as unknown as {
+      visibleId: string;
+      layers: StageWindow["__pmStage"]["layers"];
+    };
+    const layer = stage.layers.get(stage.visibleId)!;
+    return {
+      key: stage.visibleId,
+      painted: layer.replayPainted,
+      lines: layer.term.buffer.active.length,
+    };
+  });
+  expect(waiting.key).not.toBe(from);
+  expect(waiting.painted).toBe(false);
+  expect(waiting.lines).toBeLessThan(HISTORY_LINES);
+
+  letTicketThrough();
+  await expect(pane.locator(".terminal-stream-status")).toBeHidden();
+  await expect.poll(() => page.evaluate(() => {
+    const stage = (window as unknown as StageWindow).__pmStage as unknown as {
+      visibleId: string;
+      layers: StageWindow["__pmStage"]["layers"];
+    };
+    return stage.layers.get(stage.visibleId)!.replayPainted;
+  })).toBe(true);
+});
+
+interface DebugStageWindow extends Window {
+  __pmStage: {
+    debugSnapshot(): Array<{
+      visible: boolean;
+      bufferLines: number;
+      rows: number;
+      viewportY: number;
+      socket: { replayCount: number } | null;
+    }>;
+    layers: Map<string, {
+      el: HTMLElement;
+      term: {
+        rows: number;
+        buffer: { active: { length: number; viewportY: number; getLine(index: number): { translateToString(trim: boolean): string } | undefined } };
+      };
+    }>;
+  };
+}
+
+function shownHistory(page: Page) {
+  return page.evaluate(() => {
+    const stage = (window as unknown as DebugStageWindow).__pmStage;
+    const shown = stage.debugSnapshot().find((entry) => entry.visible);
+    if (!shown) return null;
+    const layer = [...stage.layers.values()].find((entry) => entry.el.style.visibility === "visible")!;
+    const buffer = layer.term.buffer.active;
+    return {
+      lines: buffer.length,
+      rows: layer.term.rows,
+      viewportY: buffer.viewportY,
+      replays: shown.socket?.replayCount ?? 0,
+    };
+  });
+}
+
+test("a session opened cold has its whole scrollback once its screen is up", async ({ page }) => {
+  await logIn(page);
+  await openSession(page, 0);
+  await fillHistory(page);
+
+  // A first snapshot carries a few hundred lines, so the screen paints
+  // without parsing the scrollback, and the rest follows it.
+  await page.reload();
+  await expect.poll(() => shownHistory(page).then((state) => state?.lines ?? 0), { timeout: 20_000 })
+    .toBeGreaterThan(HISTORY_LINES);
+
+  const filled = (await shownHistory(page))!;
+  expect(filled.replays).toBeGreaterThan(1);
+  // The history arrives above the screen, which stays at the bottom.
+  expect(filled.viewportY).toBe(filled.lines - filled.rows);
 });

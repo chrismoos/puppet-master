@@ -266,16 +266,36 @@ pub struct ReplayChunk {
 pub enum StreamingViewerAttach {
     First {
         rx: broadcast::Receiver<Bytes>,
-        replay: mpsc::UnboundedReceiver<ReplayChunk>,
+        replay: ReplaySource,
     },
     Waiting {
         rx: broadcast::Receiver<Bytes>,
-        replay: mpsc::UnboundedReceiver<ReplayChunk>,
+        replay: ReplaySource,
     },
     Joined {
         rx: broadcast::Receiver<Bytes>,
         replay: Bytes,
     },
+}
+
+/// How a viewer that arrives before the upstream replay receives it.
+pub enum ReplaySource {
+    /// Chunks forwarded on as they arrive, so a viewer taking the whole
+    /// history starts parsing before the last one lands.
+    Chunks(mpsc::UnboundedReceiver<ReplayChunk>),
+    /// Fires once the mirror has parsed the whole replay. A viewer that
+    /// asked for part of the history cannot be served chunks, because a
+    /// state snapshot carries no meaning when cut, so it waits here and
+    /// then takes a bounded snapshot of the mirror instead.
+    Parsed(oneshot::Receiver<Bytes>),
+}
+
+/// The mirror's state, carrying at most the history a viewer asked for.
+fn mirror_snapshot(retained: &crate::term_model::Retained, history: Option<usize>) -> Vec<u8> {
+    match history {
+        Some(lines) => retained.model.snapshot_with_history(lines),
+        None => retained.model.snapshot(),
+    }
 }
 
 enum WorkerTransport {
@@ -885,6 +905,7 @@ impl WorkerLink {
         &self,
         session_id: u64,
         progress: &ViewerProgress,
+        history: Option<usize>,
     ) -> Option<(Bytes, broadcast::Receiver<Bytes>, (u16, u16))> {
         let session = self.sessions.lock().unwrap().get(&session_id)?.clone();
         let retained = session.retained.lock().unwrap();
@@ -894,7 +915,11 @@ impl WorkerLink {
             std::sync::atomic::Ordering::Relaxed,
         );
         session.drained.notify_waiters();
-        Some((Bytes::from(retained.model.snapshot()), rx, retained.size()))
+        Some((
+            Bytes::from(mirror_snapshot(&retained, history)),
+            rx,
+            retained.size(),
+        ))
     }
 
     /// Waits until every viewer is within the backlog budget of what the
@@ -1059,24 +1084,36 @@ impl WorkerLink {
         }
     }
 
-    pub fn streaming_viewer_attach(&self, session_id: u64) -> StreamingViewerAttach {
+    pub fn streaming_viewer_attach(
+        &self,
+        session_id: u64,
+        history: Option<usize>,
+    ) -> StreamingViewerAttach {
         let session = self.session(session_id);
         let mut relay = session.relay.lock().unwrap();
         let retained = session.retained.lock().unwrap();
         let rx = session.out_tx.subscribe();
         relay.viewers += 1;
         relay.detach_epoch += 1;
+        let pending = |relay: &mut RelayState| match history {
+            Some(_) => {
+                let (tx, replay) = oneshot::channel();
+                relay.replay_complete_waiters.push(tx);
+                ReplaySource::Parsed(replay)
+            }
+            None => ReplaySource::Chunks(Self::add_streaming_replay_waiter(relay)),
+        };
         if relay.replay_pending {
-            let replay = Self::add_streaming_replay_waiter(&mut relay);
+            let replay = pending(&mut relay);
             StreamingViewerAttach::Waiting { rx, replay }
         } else if relay.viewers == 1 && relay.upstream.is_none() {
             relay.replay_pending = true;
-            let replay = Self::add_streaming_replay_waiter(&mut relay);
+            let replay = pending(&mut relay);
             StreamingViewerAttach::First { rx, replay }
         } else {
             StreamingViewerAttach::Joined {
                 rx,
-                replay: Bytes::from(retained.model.snapshot()),
+                replay: Bytes::from(mirror_snapshot(&retained, history)),
             }
         }
     }
@@ -1630,7 +1667,7 @@ mod tests {
         let progress = link.viewer_progress(1);
         let mut old = link.session(1).out_tx.subscribe();
         link.feed_terminal_output(1, 0, 0, Bytes::from_static(b"before "));
-        let (snapshot, mut fresh, _) = link.resnapshot_viewer(1, &progress).unwrap();
+        let (snapshot, mut fresh, _) = link.resnapshot_viewer(1, &progress, None).unwrap();
         link.feed_terminal_output(1, 0, 0, Bytes::from_static(b"after"));
         assert!(String::from_utf8_lossy(&snapshot).contains("before"));
         assert_eq!(fresh.try_recv().unwrap(), Bytes::from_static(b"after"));
@@ -1711,7 +1748,7 @@ mod tests {
     #[test]
     fn a_snapshot_replay_seeds_the_mirror_and_joined_viewers_get_state() {
         let link = link();
-        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7, None) else {
             panic!("first viewer starts the stream");
         };
         let (upstream, _input) = mpsc::channel(1);
@@ -1728,7 +1765,8 @@ mod tests {
         );
         link.feed_terminal_output(7, 1, 0, Bytes::from_static(b" live"));
 
-        let StreamingViewerAttach::Joined { replay, .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::Joined { replay, .. } = link.streaming_viewer_attach(7, None)
+        else {
             panic!("second viewer joins the running stream");
         };
         let mut restored = crate::term_model::TerminalModel::new(
@@ -1746,13 +1784,80 @@ mod tests {
         assert!(screen.contains("boxed live"), "screen was: {screen}");
     }
 
+    #[test]
+    fn a_joiner_asking_for_part_of_the_history_is_served_that_much() {
+        let link = link();
+        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7, None) else {
+            panic!("first viewer starts the stream");
+        };
+        let (upstream, _input) = mpsc::channel(1);
+        link.connect_terminal_stream(7, 1, upstream);
+        let mut history = Vec::new();
+        for index in 0..400 {
+            history.extend_from_slice(format!("line-{index:03}\r\n").as_bytes());
+        }
+        link.feed_terminal_output(
+            7,
+            1,
+            pm_protocol::terminal_frame::FLAG_REPLAY
+                | pm_protocol::terminal_frame::FLAG_REPLAY_START
+                | pm_protocol::terminal_frame::FLAG_REPLAY_END
+                | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
+            Bytes::from(history),
+        );
+
+        let StreamingViewerAttach::Joined {
+            replay: bounded, ..
+        } = link.streaming_viewer_attach(7, Some(50))
+        else {
+            panic!("a joiner is served the mirror");
+        };
+        let StreamingViewerAttach::Joined { replay: whole, .. } =
+            link.streaming_viewer_attach(7, None)
+        else {
+            panic!("a joiner is served the mirror");
+        };
+        let restore = |bytes: &Bytes| {
+            let mut model = crate::term_model::TerminalModel::new(
+                crate::mux::DEFAULT_COLS,
+                crate::mux::DEFAULT_ROWS,
+            );
+            model.advance(bytes);
+            model
+        };
+        let bounded = restore(&bounded);
+        let whole = restore(&whole);
+        assert_eq!(bounded.scrollback_text().len(), 50);
+        assert_eq!(bounded.visible_text(), whole.visible_text());
+        assert!(whole.scrollback_text().len() > 300);
+    }
+
+    #[test]
+    fn a_viewer_asking_for_part_of_the_history_waits_for_the_parsed_mirror() {
+        let link = link();
+        assert!(matches!(
+            link.streaming_viewer_attach(7, Some(50)),
+            StreamingViewerAttach::First {
+                replay: ReplaySource::Parsed(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            link.streaming_viewer_attach(7, Some(50)),
+            StreamingViewerAttach::Waiting {
+                replay: ReplaySource::Parsed(_),
+                ..
+            }
+        ));
+    }
+
     /// An upstream that replays raw bytes instead of a snapshot still only
     /// reaches a joiner through the mirror. Handing the joiner those bytes
     /// is what put half-parsed escape sequences on screen.
     #[test]
     fn a_raw_upstream_replay_still_reaches_joiners_as_state() {
         let link = link();
-        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7, None) else {
             panic!("first viewer starts the stream");
         };
         let (upstream, _input) = mpsc::channel(1);
@@ -1765,7 +1870,8 @@ mod tests {
                 | pm_protocol::terminal_frame::FLAG_REPLAY_END,
             Bytes::from_static(b"\x1b[2J\x1b[1;1Hlegacy tail"),
         );
-        let StreamingViewerAttach::Joined { replay, .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::Joined { replay, .. } = link.streaming_viewer_attach(7, None)
+        else {
             panic!("second viewer joins the running stream");
         };
         assert_ne!(
@@ -1789,7 +1895,7 @@ mod tests {
     #[test]
     fn a_joiner_keeps_screen_state_after_the_ring_has_wrapped() {
         let link = link();
-        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7, None) else {
             panic!("first viewer starts the stream");
         };
         let (upstream, _input) = mpsc::channel(1);
@@ -1811,7 +1917,8 @@ mod tests {
         }
         link.feed_terminal_output(7, 1, 0, Bytes::from_static(b"\x1b[5;1Hlast frame"));
 
-        let StreamingViewerAttach::Joined { replay, .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::Joined { replay, .. } = link.streaming_viewer_attach(7, None)
+        else {
             panic!("second viewer joins the running stream");
         };
         let mut restored = crate::term_model::TerminalModel::new(
@@ -1838,7 +1945,7 @@ mod tests {
     #[test]
     fn mirror_resize_shapes_later_snapshots() {
         let link = link();
-        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7, None) else {
             panic!("first viewer starts the stream");
         };
         let (upstream, _input) = mpsc::channel(1);
@@ -1849,7 +1956,8 @@ mod tests {
             | pm_protocol::terminal_frame::FLAG_REPLAY_END
             | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT;
         link.feed_terminal_output(7, 1, snapshot_flags, Bytes::from_static(b"sized"));
-        let StreamingViewerAttach::Joined { replay, .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::Joined { replay, .. } = link.streaming_viewer_attach(7, None)
+        else {
             panic!("second viewer joins the running stream");
         };
         let mut restored = crate::term_model::TerminalModel::new(60, 10);
@@ -1860,7 +1968,7 @@ mod tests {
     #[test]
     fn mirror_resize_echoes_only_actual_size_changes() {
         let link = link();
-        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7) else {
+        let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7, None) else {
             panic!("first viewer starts the stream");
         };
         let (size, mut sizes) = link.viewer_size_feed(7);
@@ -1986,8 +2094,9 @@ mod tests {
     fn streaming_replay_delivers_each_chunk_before_completion() {
         let link = link();
         let StreamingViewerAttach::First {
-            replay: mut first, ..
-        } = link.streaming_viewer_attach(7)
+            replay: ReplaySource::Chunks(mut first),
+            ..
+        } = link.streaming_viewer_attach(7, None)
         else {
             panic!("first viewer");
         };
@@ -1998,8 +2107,9 @@ mod tests {
         assert_eq!(first_chunk.flags, start);
         assert_eq!(first_chunk.data, Bytes::from_static(b"first"));
         let StreamingViewerAttach::Waiting {
-            replay: mut joined, ..
-        } = link.streaming_viewer_attach(7)
+            replay: ReplaySource::Chunks(mut joined),
+            ..
+        } = link.streaming_viewer_attach(7, None)
         else {
             panic!("joining viewer");
         };

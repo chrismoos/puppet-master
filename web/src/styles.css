@@ -3780,6 +3780,25 @@ body.resizing-col {
   display: none;
 }
 
+/* A first connect is ordinary, so it reads as a quiet note rather than a
+   warning. The stage shows it only once the wait is long enough to notice. */
+.terminal-stream-status.is-connecting {
+  border-color: var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  animation: terminal-stream-status-appear 120ms linear both;
+}
+
+@keyframes terminal-stream-status-appear {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 .terminal-stream-status button {
   padding: 1px 4px;
   border: 0;

@@ -7,6 +7,7 @@ import {
   encodeTerminalResizeRequest,
   encodeTerminalAck,
   encodeTerminalResync,
+  encodeTerminalHistoryRequest,
   encodeTerminalInput,
   encodeTerminalResize,
   TERMINAL_FLAG_REPLAY,
@@ -123,6 +124,9 @@ export class TerminalSocket {
     private unauthenticated: () => void,
     unavailableReason: string | null = null,
     private initialSize?: TerminalSize | null,
+    /** History lines the first snapshot carries, so a screen paints before
+     * the whole scrollback is parsed. A later snapshot carries all of it. */
+    private initialHistoryLines?: number | null,
     private viewer = createTerminalViewerIdentity(),
   ) {
     if (unavailableReason) {
@@ -314,6 +318,16 @@ export class TerminalSocket {
     socket.send(encodeTerminalResync(this.generation));
   }
 
+  /** Asks for the history a bounded first snapshot left out. A socket that
+   * is not open needs no request: only a first socket bounds its snapshot,
+   * so whatever replaces this one carries the whole history. */
+  requestWholeHistory(): void {
+    const socket = this.socket;
+    if (this.stopped || !this.available || !this.replayComplete) return;
+    if (socket?.readyState !== SOCKET_OPEN) return;
+    socket.send(encodeTerminalHistoryRequest(this.generation));
+  }
+
   resync(): void {
     if (this.stopped || !this.available) return;
     this.reconnectNow();
@@ -339,6 +353,9 @@ export class TerminalSocket {
     this.ownershipRevision = -1n;
     this.ownershipSupported = false;
     let url = `/ws/terminal/${this.terminalId}?generation=${this.generation}&viewer=${this.viewer.id}`;
+    if (this.socketsOpened === 1 && this.initialHistoryLines) {
+      url += `&history=${this.initialHistoryLines}`;
+    }
     const size = this.pendingResize ?? (this.socketsOpened === 1 ? this.initialSize : null);
     if (size && size.cols >= 2 && size.rows >= 1) {
       const request = this.pendingResize?.request ?? ++this.viewer.request;

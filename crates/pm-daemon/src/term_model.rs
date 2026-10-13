@@ -447,7 +447,7 @@ impl TerminalModel {
         let mut out = String::new();
         out.push_str("\x1b[0m");
         self.write_modes(&mut out);
-        self.write_primary_screen_skipping(&mut out, dropped);
+        self.write_primary_screen_skipping(&mut out, dropped, None);
         self.write_scroll_region(&mut out);
         self.write_cursor(&mut out);
         if self.term.mode().contains(TermMode::INSERT) {
@@ -476,7 +476,18 @@ impl TerminalModel {
     /// is not reachable through the public grid API, so the snapshot
     /// restores modes and the alternate screen only.
     pub fn snapshot(&self) -> Vec<u8> {
-        match catch_unwind(AssertUnwindSafe(|| self.snapshot_inner())) {
+        self.snapshot_bounded(None)
+    }
+
+    /// Serialized state carrying at most `lines` of the oldest history, for
+    /// a viewer that paints a screen quickly and asks for the rest once it
+    /// is up. The screen itself is always complete.
+    pub fn snapshot_with_history(&self, lines: usize) -> Vec<u8> {
+        self.snapshot_bounded(Some(lines))
+    }
+
+    fn snapshot_bounded(&self, history: Option<usize>) -> Vec<u8> {
+        match catch_unwind(AssertUnwindSafe(|| self.snapshot_inner(history))) {
             Ok(snapshot) => snapshot,
             Err(_) => {
                 tracing::error!("terminal emulator snapshot failed; sending a reset screen without stopping the live PTY");
@@ -485,7 +496,7 @@ impl TerminalModel {
         }
     }
 
-    fn snapshot_inner(&self) -> Vec<u8> {
+    fn snapshot_inner(&self, history: Option<usize>) -> Vec<u8> {
         let mut out = String::new();
         out.push_str("\x1b[0m");
         self.write_modes(&mut out);
@@ -494,7 +505,7 @@ impl TerminalModel {
             out.push_str("\x1b[?1049h");
             self.write_alt_screen(&mut out);
         } else {
-            self.write_primary_screen(&mut out);
+            self.write_primary_screen(&mut out, history);
         }
         self.write_scroll_region(&mut out);
         self.write_cursor(&mut out);
@@ -553,19 +564,28 @@ impl TerminalModel {
         }
     }
 
-    fn write_primary_screen(&self, out: &mut String) {
-        self.write_primary_screen_skipping(out, &[]);
+    fn write_primary_screen(&self, out: &mut String, history: Option<usize>) {
+        self.write_primary_screen_skipping(out, &[], history);
     }
 
-    fn write_primary_screen_skipping(&self, out: &mut String, skip: &[usize]) {
+    fn write_primary_screen_skipping(
+        &self,
+        out: &mut String,
+        skip: &[usize],
+        history_limit: Option<usize>,
+    ) {
         let grid = self.term.grid();
         let history = grid.history_size() as i32;
         let skipped = |line: i32| line < 0 && skip.contains(&((line + history) as usize));
         let screen_lines = grid.screen_lines() as i32;
         let columns = grid.columns();
+        let first = match history_limit {
+            Some(limit) => -history.min(limit as i32),
+            None => -history,
+        };
 
         let mut rows: Vec<(String, bool)> = Vec::new();
-        for line in -history..screen_lines {
+        for line in first..screen_lines {
             if skipped(line) {
                 continue;
             }
@@ -811,6 +831,49 @@ mod tests {
         let mut restored = TerminalModel::new(cols, rows);
         restored.advance(&original.snapshot());
         (original, restored)
+    }
+
+    #[test]
+    fn a_bounded_snapshot_keeps_the_screen_and_the_newest_history() {
+        let mut input = Vec::new();
+        for index in 0..300 {
+            input.extend_from_slice(format!("line-{index:03}\r\n").as_bytes());
+        }
+        let original = fed(40, 10, &input);
+        let mut restored = TerminalModel::new(40, 10);
+        restored.advance(&original.snapshot_with_history(25));
+
+        assert_eq!(original.visible_text(), restored.visible_text());
+        assert_eq!(original.cursor_position(), restored.cursor_position());
+        let history = restored.scrollback_text();
+        assert_eq!(history.len(), 25);
+        assert_eq!(
+            history,
+            original.scrollback_text()[original.scrollback_text().len() - 25..]
+        );
+    }
+
+    #[test]
+    fn a_bounded_snapshot_asking_past_the_history_carries_all_of_it() {
+        let mut input = Vec::new();
+        for index in 0..30 {
+            input.extend_from_slice(format!("line-{index:02}\r\n").as_bytes());
+        }
+        let original = fed(40, 10, &input);
+        let mut restored = TerminalModel::new(40, 10);
+        restored.advance(&original.snapshot_with_history(MODEL_SCROLLBACK_LINES));
+        assert_eq!(original.scrollback_text(), restored.scrollback_text());
+        assert_eq!(original.visible_text(), restored.visible_text());
+    }
+
+    #[test]
+    fn a_bounded_snapshot_is_smaller_than_the_whole_history() {
+        let mut input = Vec::new();
+        for index in 0..3_000 {
+            input.extend_from_slice(format!("line-{index:04} {}\r\n", "x".repeat(100)).as_bytes());
+        }
+        let model = fed(140, 40, &input);
+        assert!(model.snapshot_with_history(500).len() * 4 < model.snapshot().len());
     }
 
     #[test]

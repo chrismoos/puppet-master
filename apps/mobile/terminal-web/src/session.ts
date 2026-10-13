@@ -253,6 +253,7 @@ export class TerminalViewSession {
       () => this.hooks.post({ type: "error", message: "terminal socket rejected authentication" }),
       null,
       initialSize,
+      null,
       this.viewerIdentity,
     );
     this.socket = socket;

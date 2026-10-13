@@ -9,6 +9,8 @@
 - [Web] Dropping a file on a session's terminal stores it on the host that runs that session and types the path into the composer, so an agent can open it whether it runs locally or on a remote host.
 - [Web] A file dropped anywhere else in the dashboard is ignored instead of replacing the dashboard with the file.
 - [Daemon] A host keeps files dropped onto its sessions for seven days. A host running a pm that predates this refuses a drop and says so.
+- [Web] A session whose terminal has not loaded yet takes the pane empty, with a connecting note once the wait is noticeable, instead of leaving the previous session's screen up.
+- [Web] Opening a session paints its screen from a few hundred lines of history, about nine times sooner than from the whole scrollback, and reading back to the top fills in the rest.
 
 - Switching terminals waits for the destination to render at the pane size before showing it.
 - Browser tests select the installed test agent and verify scrollbar timers independently of runner speed.

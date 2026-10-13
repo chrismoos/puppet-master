@@ -154,6 +154,8 @@ export interface PtyHandle {
   resync(): void;
   /** A fresh snapshot on the open socket, falling back to a reconnect. */
   refreshSnapshot(): void;
+  /** The history a bounded first snapshot left out. */
+  requestWholeHistory(): void;
   retry(): void;
   close(): void;
 }
@@ -626,23 +628,37 @@ export class PmClient {
     });
   }
 
-  openPty(sessionId: bigint, initialSize?: TerminalSize | null): PtyHandle {
+  openPty(
+    sessionId: bigint,
+    initialSize?: TerminalSize | null,
+    initialHistoryLines?: number | null,
+  ): PtyHandle {
     const terminal = [...this.state.terminals.values()].find(
       (item) => item.sessionId === sessionId && item.kind === TerminalKind.AGENT,
     );
     if (!terminal) throw new Error(`session ${sessionId} has no agent terminal`);
-    return this.createTerminalHandle(terminal.id, terminal.generation, initialSize);
+    return this.createTerminalHandle(
+      terminal.id,
+      terminal.generation,
+      initialSize,
+      initialHistoryLines,
+    );
   }
 
-  openTerminal(terminalId: bigint, initialSize?: TerminalSize | null): PtyHandle {
+  openTerminal(
+    terminalId: bigint,
+    initialSize?: TerminalSize | null,
+    initialHistoryLines?: number | null,
+  ): PtyHandle {
     const generation = this.state.terminals.get(terminalId.toString())?.generation ?? 0n;
-    return this.createTerminalHandle(terminalId, generation, initialSize);
+    return this.createTerminalHandle(terminalId, generation, initialSize, initialHistoryLines);
   }
 
   private createTerminalHandle(
     terminalId: bigint,
     generation: bigint,
     initialSize?: TerminalSize | null,
+    initialHistoryLines?: number | null,
   ): PtyHandle {
     const buffer = new PtyBuffer();
     const unavailableReason = this.terminalWorkerUnavailableReason(terminalId);
@@ -654,6 +670,7 @@ export class PmClient {
       () => this.onUnauthenticated?.(),
       unavailableReason,
       initialSize,
+      initialHistoryLines,
     );
     const key = terminalId.toString();
     const sockets = this.terminalSockets.get(key) ?? new Set<TerminalSocket>();
@@ -671,6 +688,7 @@ export class PmClient {
       stats: () => socket.stats(),
       resync: () => socket.resync(),
       refreshSnapshot: () => socket.refreshSnapshot(),
+      requestWholeHistory: () => socket.requestWholeHistory(),
       retry: () => socket.retry(),
       close: () => {
         socket.close();

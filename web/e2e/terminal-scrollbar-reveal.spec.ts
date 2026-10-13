@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures";
-import { installScrollbarClock, logIn, SCROLL_RENDER_MS } from "./support";
+import { expectTerminalRevealed, installScrollbarClock, logIn, SCROLL_RENDER_MS } from "./support";
 
 import { SCROLLBAR_IDLE_MS } from "../src/transientScrollbar";
 const SCROLLBACK_BYTES = 60_000;
@@ -14,6 +14,10 @@ function barOpacity(page: Page): Promise<number> {
 }
 
 async function fillScrollback(page: Page): Promise<void> {
+  // A pane takes the screen before its stream is online, and input typed
+  // into it is held until then, so the output this asks for would still be
+  // arriving when the test freezes the clock.
+  await expectTerminalRevealed(page, "s:");
   const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
   await textarea.focus();
   await page.keyboard.type(`bigout ${SCROLLBACK_BYTES}`);

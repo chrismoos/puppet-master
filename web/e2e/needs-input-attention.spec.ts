@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 function sessionRow(page: Page, title: string) {
   return page.locator(".sb-session-title")
@@ -21,6 +21,10 @@ test("NeedsInput stays blocked until submission and persists seen descendant att
 
   // Enable real xterm mouse tracking before the session blocks, then trigger
   // NeedsInput from the retained terminal while another session is selected.
+  // A pane takes the screen before its stream is online, and input typed
+  // into it is held until then, so the agent has to be reachable first for
+  // the hook to land after what this types.
+  await expectTerminalRevealed(page, "s:");
   const terminal = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
   await terminal.focus();
   await page.keyboard.type("mouseon");
