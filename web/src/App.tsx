@@ -13,6 +13,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { fetchMe, fetchVersion, logout, type BuildInfo } from "./api/auth";
+import { BuildStamp } from "./components/UpdateNotice";
 import { securityNoticeTitle } from "./securityNotice";
 import { fetchItem } from "./api/items";
 import { createWorkspace, deleteWorkspace, listWorkspaces, reorderWorkspaces, updateWorkspace, type SavedWorkspace } from "./api/workspaces";
@@ -203,7 +204,7 @@ function ForwardHandoff({ onUnauthenticated }: { onUnauthenticated: () => void }
   </div></div>;
 }
 
-function BuildStamp() {
+function TopbarBuild() {
   const [build, setBuild] = useState<BuildInfo | null>(null);
   useEffect(() => {
     let live = true;
@@ -214,12 +215,7 @@ function BuildStamp() {
       live = false;
     };
   }, []);
-  if (!build) return null;
-  return (
-    <span className="build-stamp" title={`version ${build.version}`}>
-      v{build.version} · {build.gitRev}
-    </span>
-  );
+  return <BuildStamp build={build} />;
 }
 
 function ConnectedApp({
@@ -990,7 +986,7 @@ function Shell({
         >
           <ProductBrand variant="mark" decorative />
         </a>
-        <BuildStamp />
+        <TopbarBuild />
         <ConnStatus phase={state.conn} />
         <StatusTallies
           sessions={talliedSessions}

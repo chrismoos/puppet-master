@@ -12,7 +12,7 @@ export type Route =
 export const SETTINGS_GROUPS = [
   { label: "Your account", sections: ["appearance", "terminal-theme", "notifications", "password"] },
   { label: "Workspace", sections: ["projects", "connections", "models", "instructions"] },
-  { label: "Controller", sections: ["workers", "mobile", "daemon"] },
+  { label: "Controller", sections: ["workers", "mobile", "daemon", "about"] },
 ] as const;
 export type SettingsSection = typeof SETTINGS_GROUPS[number]["sections"][number];
 export const SETTINGS_SECTIONS: readonly SettingsSection[] =

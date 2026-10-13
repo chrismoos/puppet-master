@@ -124,6 +124,11 @@ Use `pm update --channel dev` to follow pre-releases, or
 `pm update --channel stable` to return to stable releases. Workers follow their
 controller's build.
 
+The daemon checks its channel every six hours and reports what it finds. When a
+newer build is published, the version in the dashboard's topbar carries an
+update mark and opens the command above. Settings → About shows the build this
+controller runs, the channel it follows, and when it last looked.
+
 The dashboard binds to localhost by default and is intended for a single
 trusted user. Access gives control of agents and terminals on your machine.
 Read [SECURITY.md](SECURITY.md) before enabling remote access or sharing previews.

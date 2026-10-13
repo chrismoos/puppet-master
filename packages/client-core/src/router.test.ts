@@ -68,7 +68,7 @@ describe("Settings routes", () => {
     expect(SETTINGS_SECTIONS).toEqual([
       "appearance", "terminal-theme", "notifications", "password",
       "projects", "connections", "models", "instructions",
-      "workers", "mobile", "daemon",
+      "workers", "mobile", "daemon", "about",
     ]);
   });
 

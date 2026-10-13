@@ -109,6 +109,12 @@ export interface BuildInfo {
   gitRev: string;
   /** The release channel `pm update` on the controller host follows. */
   channel: string;
+  /** The newest version published on that channel, when the daemon has read one. */
+  latestVersion: string | null;
+  /** The published version that is newer than this build, when there is one. */
+  updateAvailable: string | null;
+  /** When the daemon last read the release manifest, in Unix milliseconds. */
+  latestCheckedAtUnixMs: number | null;
   /** Port hosts connect to, or null when this controller serves none. */
   hostPlanePort: number | null;
   /** The base URL the operator configured the daemon with, or null. */
@@ -136,6 +142,9 @@ export async function fetchVersion(): Promise<BuildInfo | null> {
       version: body.version ?? "",
       gitRev: body.gitRev ?? "",
       channel: body.channel ?? "stable",
+      latestVersion: body.latestVersion ?? null,
+      updateAvailable: body.updateAvailable ?? null,
+      latestCheckedAtUnixMs: body.latestCheckedAtUnixMs ?? null,
       hostPlanePort: body.hostPlanePort ?? null,
       publicUrl: body.publicUrl ?? null,
       installCommand: body.installCommand ?? "",

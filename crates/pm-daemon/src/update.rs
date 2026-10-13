@@ -499,6 +499,27 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
+    /// The dashboard prints how long ago the daemon looked, so the time
+    /// of the read is kept with the release rather than guessed from when
+    /// the page loaded.
+    #[test]
+    fn the_newest_release_is_held_with_the_time_it_was_read() {
+        let latest = LatestRelease::default();
+        assert_eq!(latest.checked_at_unix_ms(), None);
+
+        let release = Release {
+            version: "9.9.9".into(),
+            protocol_version: 1,
+            artifacts: std::collections::BTreeMap::new(),
+            channel: None,
+            promoted_from: None,
+        };
+        latest.set(release, 1_700_000_000_000);
+
+        assert_eq!(latest.get().expect("a release").version, "9.9.9");
+        assert_eq!(latest.checked_at_unix_ms(), Some(1_700_000_000_000));
+    }
+
     /// Set by the parent of the re-exec test to the directory its
     /// throwaway harness copy lives in.
     const REEXEC_DIR_VAR: &str = "PM_TEST_REEXEC_DIR";
@@ -799,15 +820,32 @@ mod tests {
 /// The newest published release, refreshed in the background so the
 /// daemon can say a build is available without checking on demand.
 #[derive(Default)]
-pub struct LatestRelease(std::sync::Mutex<Option<Release>>);
+pub struct LatestRelease(std::sync::Mutex<Option<Checked>>);
+
+/// A release and the moment it was read, in Unix milliseconds.
+#[derive(Clone)]
+struct Checked {
+    release: Release,
+    at_unix_ms: i64,
+}
 
 impl LatestRelease {
     pub fn get(&self) -> Option<Release> {
-        self.0.lock().unwrap().clone()
+        self.0.lock().unwrap().clone().map(|held| held.release)
     }
 
-    fn set(&self, release: Release) {
-        *self.0.lock().unwrap() = Some(release);
+    /// When the manifest was last read successfully. A failed poll leaves
+    /// the previous answer and its time, so a reader can tell how old the
+    /// version beside it is.
+    pub fn checked_at_unix_ms(&self) -> Option<i64> {
+        self.0.lock().unwrap().as_ref().map(|held| held.at_unix_ms)
+    }
+
+    fn set(&self, release: Release, at_unix_ms: i64) {
+        *self.0.lock().unwrap() = Some(Checked {
+            release,
+            at_unix_ms,
+        });
     }
 
     /// Whether a newer build than this one has been published.
@@ -838,7 +876,7 @@ pub fn watch_latest(
         };
         loop {
             match fetch_release(&client, source).await {
-                Ok(release) => latest.set(release),
+                Ok(release) => latest.set(release, crate::daemon::now_unix_ms()),
                 Err(error) => tracing::debug!(%error, "could not read the release manifest"),
             }
             tokio::time::sleep(every).await;

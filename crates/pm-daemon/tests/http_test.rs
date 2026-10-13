@@ -5209,6 +5209,27 @@ async fn version_advertises_installation_and_mobile_capability() {
     assert_eq!(again["installationId"], installation_id.as_str());
 }
 
+/// The dashboard decides whether to show an update notice from these
+/// three fields alone. A daemon that has not read the manifest yet must
+/// report no release rather than omitting the keys, or an older
+/// dashboard reading `undefined` would have to guess.
+#[tokio::test]
+async fn version_reports_no_release_until_the_manifest_has_been_read() {
+    let (daemon, _tmp) = test_daemon();
+    let app = pm_daemon::http::router(daemon.clone());
+    let version = body_json(
+        app.oneshot(Request::get("/api/version").body(Body::empty()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .await;
+
+    assert!(version["latestVersion"].is_null());
+    assert!(version["updateAvailable"].is_null());
+    assert!(version["latestCheckedAtUnixMs"].is_null());
+    assert!(!version["channel"].as_str().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn mobile_tokens_stay_out_of_logs() {
     let buffer: Arc<std::sync::Mutex<Vec<u8>>> = Arc::new(std::sync::Mutex::new(Vec::new()));

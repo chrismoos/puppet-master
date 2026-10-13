@@ -16,6 +16,7 @@ import {
   PasswordSettings,
   TerminalThemeSettings,
 } from "./AccountSettings";
+import { AboutPanel } from "./AboutPanel";
 import { SettingsConnections } from "./ConnectionsManage";
 import { DaemonSettingsPanel } from "./DaemonSettingsPanel";
 import { InstructionsPanel } from "./InstructionsPanel";
@@ -38,6 +39,7 @@ export const SETTINGS_LABELS: Readonly<Record<SettingsSection, string>> = {
   workers: "Workers",
   mobile: "Devices",
   daemon: "Daemon",
+  about: "About",
 };
 
 /** Names the channel a controller follows, when it is not stable. */
@@ -170,6 +172,7 @@ export function SettingsPage({
         {section === "workers" && <WorkersPanel />}
         {section === "mobile" && <MobileDevicesPanel />}
         {section === "daemon" && <DaemonSettings />}
+        {section === "about" && <AboutPanel />}
       </main>
     </div>
   );

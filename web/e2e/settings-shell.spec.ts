@@ -158,7 +158,7 @@ test("Settings uses its accessible narrow page selector", async ({ page }, testI
   await expect(selector).toHaveValue("workers");
   // Every page is reachable from the selector, under the same three groups.
   await expect(selector.locator("optgroup")).toHaveCount(3);
-  await expect(selector.locator("option")).toHaveCount(11);
+  await expect(selector.locator("option")).toHaveCount(12);
   await selector.selectOption("daemon");
   await expect(page).toHaveURL(/#\/settings\/daemon$/);
   await expect(page.getByRole("heading", { level: 2 })).toHaveText(["Daemon"]);
@@ -186,11 +186,11 @@ test("the nav groups every page as plain text links with counts", async ({ page 
   await expect(nav.getByRole("group", { name: "Workspace" }).getByRole("link"))
     .toHaveText([/^Projects\d+$/, "Connections", /^Model profiles\d+$/, "Instructions"]);
   await expect(nav.getByRole("group", { name: "Controller" }).getByRole("link"))
-    .toHaveText([/^Workers\d+$/, "Devices", "Daemon"]);
+    .toHaveText([/^Workers\d+$/, "Devices", "Daemon", "About"]);
   await expect(nav.locator("svg, img")).toHaveCount(0);
   await expect(nav).toContainText("Signed in as browser-e2e");
 
-  for (const label of ["Terminal theme", "Notifications", "Password", "Connections", "Daemon"]) {
+  for (const label of ["Terminal theme", "Notifications", "Password", "Connections", "Daemon", "About"]) {
     await nav.getByRole("link", { name: label }).click();
     await expect(nav.getByRole("link", { name: label })).toHaveAttribute("aria-current", "page");
     await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);

@@ -2338,6 +2338,9 @@ async fn version(State(daemon): State<Arc<Daemon>>) -> Response {
         // daemon would end every session it is holding.
         "latestVersion": daemon.latest_release.get().map(|release| release.version),
         "updateAvailable": daemon.latest_release.upgrade_available(),
+        // The poll runs every six hours, so the dashboard says how old
+        // the answer above is rather than presenting it as current.
+        "latestCheckedAtUnixMs": daemon.latest_release.checked_at_unix_ms(),
         // Hosts connect to their own listener, not this one. The port is
         // all the controller can honestly report: the name a host reaches
         // it by is the operator's to state.

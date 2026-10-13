@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [Web] The build stamp in the topbar shows the version alone, with the git rev in its tooltip, and turns into a button when a newer build is published. It opens a dialog with the command that fetches the update and the restart that applies it.
+- [Web] New Settings page, About, with the build this controller runs, the channel it follows, the newest published version, and when the daemon last looked.
+- [Daemon] `/api/version` reports when the release manifest was last read, so the dashboard can say how old the published version beside it is.
+
 - New `spawn.program_status` setting, off by default: agent terminals answer the Program Status Protocol (OSC 7501), and an agent that reports through it drives its session state ahead of lifecycle hooks, with its message and progress in the state detail.
 - Interrupting a Codex turn immediately marks the session idle with an interruption reason.
 - A session whose agent is killed on its host is resumed instead of left ended, up to three times, and says which signal ended it.

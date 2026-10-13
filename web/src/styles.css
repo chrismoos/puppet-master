@@ -2574,6 +2574,149 @@ body.resizing-col {
   white-space: nowrap;
 }
 
+/* The stamp is a button only while a newer build is published, so it
+   takes a control's padding and border then rather than always. */
+.update-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-btn);
+  padding: 3px 7px;
+  cursor: pointer;
+}
+
+.update-stamp:hover,
+.update-stamp[aria-expanded="true"] {
+  color: var(--bright);
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+
+.update-glyph {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.update-badge {
+  color: var(--warn-text);
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+}
+
+.update-modal .update-versions {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-family: var(--font-code);
+  font-size: 13px;
+}
+
+.update-modal .update-versions .from {
+  color: var(--muted);
+}
+
+.update-modal .update-versions .arrow {
+  color: var(--dim);
+}
+
+.update-modal .update-versions .to {
+  color: var(--amber);
+}
+
+.update-meta {
+  margin: -6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.update-lead {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.update-after {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* A command to run elsewhere, shown as a shell line: the prompt is not
+   part of what the copy button hands over. */
+.shell-snippet {
+  position: relative;
+  background: var(--panel-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-input);
+  padding: 10px 12px;
+}
+
+.shell-snippet code {
+  display: block;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--bright);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.shell-prompt {
+  color: var(--dim);
+  user-select: none;
+  margin-right: 8px;
+}
+
+.shell-snippet-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
+.about-build {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.about-facts {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 8px 14px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.about-facts dt {
+  color: var(--slate);
+  font-size: 11px;
+  text-transform: var(--label-transform);
+  letter-spacing: calc(0.08em * var(--label-tracking));
+}
+
+.about-facts dd {
+  margin: 0;
+  font-family: var(--font-code);
+  color: var(--text);
+}
+
+.about-facts dd.behind {
+  color: var(--amber);
+}
+
 .sb-check {
   display: inline-flex;
   flex: 0 1 auto;

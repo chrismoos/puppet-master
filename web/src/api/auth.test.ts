@@ -36,6 +36,9 @@ describe("fetchVersion", () => {
       version: "0.9.0",
       gitRev: "abc1234",
       channel: "stable",
+      latestVersion: null,
+      updateAvailable: null,
+      latestCheckedAtUnixMs: null,
       hostPlanePort: 7677,
       installCommand: "curl -fsSL https://dl.example/install.sh | sh",
       platform: "linux",
@@ -61,6 +64,39 @@ describe("fetchVersion", () => {
   it("reports an absent mount as unknown rather than guessing", async () => {
     stubFetch(jsonResponse({ version: "0.9.0", gitRev: "abc1234" }));
     await expect(fetchVersion()).resolves.toMatchObject({ forwardMount: null });
+  });
+
+  /// The dashboard only shows the notice when the daemon says a newer
+  /// build exists, so the three fields it decides on have to survive the
+  /// read rather than being inferred from the versions.
+  it("carries what the daemon published, and when it last looked", async () => {
+    stubFetch(
+      jsonResponse({
+        version: "0.10.3-dev.2",
+        gitRev: "e574dde",
+        channel: "dev",
+        latestVersion: "0.10.4",
+        updateAvailable: "0.10.4",
+        latestCheckedAtUnixMs: 1_700_000_000_000,
+      }),
+    );
+    await expect(fetchVersion()).resolves.toMatchObject({
+      channel: "dev",
+      latestVersion: "0.10.4",
+      updateAvailable: "0.10.4",
+      latestCheckedAtUnixMs: 1_700_000_000_000,
+    });
+  });
+
+  /// A daemon older than these fields reports none of them, and absent
+  /// must read as "nothing published", never as an update.
+  it("reads a daemon that reports no release at all as current", async () => {
+    stubFetch(jsonResponse({ version: "0.9.0", gitRev: "abc1234" }));
+    await expect(fetchVersion()).resolves.toMatchObject({
+      latestVersion: null,
+      updateAvailable: null,
+      latestCheckedAtUnixMs: null,
+    });
   });
 
   it("answers null when the daemon cannot be reached", async () => {
