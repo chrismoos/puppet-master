@@ -648,7 +648,9 @@ export function TerminalScreen({
         // Request the page side after a short delay to let the refit settle
         setTimeout(requestDiag, 400);
       }
-      veilRef.current.event("kbShow");
+      // The rows change under the keyboard and the program repaints for
+      // them; the native view keeps the current picture up through both.
+      swiftTermRef.current?.holdForResize();
       runShiftDirectives(planner.willShow(overlap, event.duration));
     });
     const hidden = Keyboard.addListener("keyboardWillHide", (event: KeyboardEvent) => {
@@ -660,6 +662,7 @@ export function TerminalScreen({
         );
         setTimeout(requestDiag, 400);
       }
+      swiftTermRef.current?.holdForResize();
       runShiftDirectives(planner.willHide(event.duration));
     });
     return () => {
@@ -827,21 +830,11 @@ export function TerminalScreen({
           veilRef.current.event("painted");
         });
         break;
-      case "nativeResized":
-        veilRef.current.event("kbSettle");
-        break;
       case "status":
         setStatus(msg.phase);
         setDetail(msg.detail ?? null);
-        if (msg.phase === "online") {
-          if (veilRef.current.veiled()) {
-            void swiftTermRef.current?.revealAtBottom().then(() => {
-              veilRef.current.event("online");
-            });
-          } else {
-            veilRef.current.event("online");
-          }
-        }
+        // The replay follows online; the veil waits for it.
+        if (msg.phase === "online") veilRef.current.event("online");
         if (useBearer) {
           // The header provider already presents the current token on every
           // retry, so a re-init is only needed when freshAccessToken actually
@@ -1243,7 +1236,9 @@ export function TerminalScreen({
               </Pressable>
             )) : null}
           </ScrollView>
-          {metrics ? <Text style={styles.metrics}>{metrics}</Text> : null}
+          {/* Always laid out: appearing with the first replay, it took a row
+              from the terminal just after open, and the agent repainted. */}
+          <Text style={styles.metrics} numberOfLines={1}>{metrics ?? ""}</Text>
         </Animated.View>
       </View>
       {__DEV__ && diagVisible && diagData ? (
@@ -1376,7 +1371,7 @@ const styles = StyleSheet.create({
   },
   keyText: { color: colors.text, fontSize: 14 },
   modifierKeyTextActive: { color: colors.textBright },
-  metrics: { color: colors.textMuted, fontSize: 11, paddingHorizontal: 16, paddingVertical: 4 },
+  metrics: { color: colors.textMuted, fontSize: 11, lineHeight: 14, height: 22, paddingHorizontal: 16, paddingVertical: 4 },
   scrollBottomButton: {
     position: "absolute",
     bottom: 16,

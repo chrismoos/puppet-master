@@ -2,17 +2,17 @@
  *  so the user sees the final position instantly instead of watching the
  *  feed scroll from the top. The veil is set on init, held through replay,
  *  and cleared only after revealAtBottom scrolls to the end, forces layout,
- *  and waits for a display refresh (or on a fallback timeout, an
- *  online-without-replay status, or an error — each going through the same
+ *  and waits for a display refresh (or on a fallback timeout, an online
+ *  socket that no replay follows, or an error — each going through the same
  *  atomic reveal).
  *
- *  Also covers keyboard resize transitions: veils on kbShow (before the
- *  layout inset changes) and unveils on kbSettle (after the native terminal
- *  has reflowed to the new geometry). A short fallback timeout prevents the
- *  veil from sticking if the resize event never fires. */
+ *  Keyboard resizes are held natively (holdForResize), not here. */
 
 export const VEIL_TIMEOUT_MS = 3_000;
-export const KB_VEIL_TIMEOUT_MS = 400;
+/** How long an online socket waits for its replay before showing the
+ *  terminal without one. The replay follows online within a round trip;
+ *  revealing on online itself showed an empty screen just before it. */
+export const ONLINE_GRACE_MS = 800;
 
 export type VeilEvent =
   | "init"
@@ -20,9 +20,7 @@ export type VeilEvent =
   | "painted"
   | "online"
   | "error"
-  | "timeout"
-  | "kbShow"
-  | "kbSettle";
+  | "timeout";
 
 export interface VeilController {
   /** Process a veil event and return the new veiled state. */
@@ -46,7 +44,7 @@ export interface VeilController {
  *   init      → veiled (start timeout)
  *   replay    → veiled (reset timeout)
  *   painted   → unveiled (clear timeout)
- *   online    → unveiled only if no replay was received
+ *   online    → if no replay was received, unveiled after ONLINE_GRACE_MS
  *   error     → unveiled
  *   timeout   → unveiled (via onTimeout callback)
  */
@@ -101,21 +99,10 @@ export function createReplayVeil(
         set(false);
         break;
       case "online":
-        if (!hadReplay) {
-          clearTimer();
-          set(false);
-        }
+        if (state && !hadReplay) startTimer(ONLINE_GRACE_MS);
         break;
       case "error":
       case "timeout":
-        clearTimer();
-        set(false);
-        break;
-      case "kbShow":
-        set(true);
-        startTimer(KB_VEIL_TIMEOUT_MS);
-        break;
-      case "kbSettle":
         clearTimer();
         set(false);
         break;

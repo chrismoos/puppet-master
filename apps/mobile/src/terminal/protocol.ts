@@ -95,7 +95,6 @@ export type TerminalViewPhase = "connecting" | "replaying" | "online" | "reconne
 export type ViewMessage =
   | { type: "ready" }
   | { type: "sizeMismatch"; show: boolean }
-  | { type: "nativeResized" }
   | { type: "status"; phase: TerminalViewPhase; detail?: string; canRetry?: boolean }
   | { type: "replay"; bytes: number; durationMs: number; snapshot: boolean; capped: boolean }
   | {

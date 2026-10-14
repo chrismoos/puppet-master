@@ -18,6 +18,7 @@ interface NativeTerminalRef {
   copySelection(): Promise<void>;
   scrollToBottom(ctrlEnd: boolean): Promise<void>;
   revealAtBottom(): Promise<void>;
+  holdForResize(): Promise<void>;
 }
 
 interface NativeTerminalProps {
@@ -117,6 +118,9 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
       revealAtBottom() {
         return nativeRef.current?.revealAtBottom() ?? Promise.resolve();
       },
+      holdForResize() {
+        void nativeRef.current?.holdForResize();
+      },
       send(message: HostMessage) {
         switch (message.type) {
           case "scrollToBottom":
@@ -163,7 +167,6 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
         onResize={(event) => {
           const { cols, rows } = event.nativeEvent;
           if (cols < 1 || rows < 1) return;
-          const changed = localSizeRef.current.cols !== cols || localSizeRef.current.rows !== rows;
           localSizeRef.current = { cols, rows };
           if (!sizeReceivedRef.current) {
             sizeReceivedRef.current = true;
@@ -174,7 +177,6 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
             sizeRef.current = { cols, rows };
             sessionRef.current.sendResize(cols, rows);
           }
-          if (changed) messageRef.current({ type: "nativeResized" });
         }}
         onScroll={(event) => {
           messageRef.current({ type: "following", following: event.nativeEvent.position >= 0.999 });

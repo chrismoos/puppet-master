@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createReplayVeil, VEIL_TIMEOUT_MS, KB_VEIL_TIMEOUT_MS } from "./replayVeil";
+import { createReplayVeil, ONLINE_GRACE_MS, VEIL_TIMEOUT_MS } from "./replayVeil";
 
 describe("createReplayVeil", () => {
   beforeEach(() => { vi.useFakeTimers(); });
@@ -45,21 +45,35 @@ describe("createReplayVeil", () => {
     veil.dispose();
   });
 
-  it("unveils on online when no replay was received", () => {
+  it("stays veiled on online, waiting briefly for the replay that follows", () => {
     const setter = vi.fn();
     const veil = createReplayVeil(setter);
     veil.event("init");
     veil.event("online");
+    expect(veil.veiled()).toBe(true);
+    vi.advanceTimersByTime(ONLINE_GRACE_MS - 1);
+    expect(veil.veiled()).toBe(true);
+    veil.event("replay");
+    veil.event("painted");
     expect(veil.veiled()).toBe(false);
     veil.dispose();
   });
 
-  it("clears timeout on online without replay", () => {
-    const setter = vi.fn();
-    const veil = createReplayVeil(setter);
+  it("unveils after the online grace when no replay comes", () => {
+    const onTimeout = vi.fn();
+    const veil = createReplayVeil(vi.fn(), onTimeout);
     veil.event("init");
     veil.event("online");
-    setter.mockClear();
+    vi.advanceTimersByTime(ONLINE_GRACE_MS);
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    veil.dispose();
+  });
+
+  it("online does not veil a terminal already showing", () => {
+    const setter = vi.fn();
+    const veil = createReplayVeil(setter);
+    veil.event("online");
+    expect(veil.veiled()).toBe(false);
     vi.advanceTimersByTime(VEIL_TIMEOUT_MS);
     expect(setter).not.toHaveBeenCalled();
     veil.dispose();
@@ -171,49 +185,4 @@ describe("createReplayVeil", () => {
     veil.dispose();
   });
 
-  it("kbShow veils immediately", () => {
-    const setter = vi.fn();
-    const veil = createReplayVeil(setter);
-    veil.event("init");
-    veil.event("painted");
-    expect(veil.veiled()).toBe(false);
-    setter.mockClear();
-    veil.event("kbShow");
-    expect(veil.veiled()).toBe(true);
-    expect(setter).toHaveBeenCalledWith(true);
-    veil.dispose();
-  });
-
-  it("kbSettle unveils after kbShow", () => {
-    const setter = vi.fn();
-    const veil = createReplayVeil(setter);
-    veil.event("kbShow");
-    expect(veil.veiled()).toBe(true);
-    veil.event("kbSettle");
-    expect(veil.veiled()).toBe(false);
-    veil.dispose();
-  });
-
-  it("kbShow timeout falls back after KB_VEIL_TIMEOUT_MS", () => {
-    const setter = vi.fn();
-    const veil = createReplayVeil(setter);
-    veil.event("kbShow");
-    expect(veil.veiled()).toBe(true);
-    vi.advanceTimersByTime(KB_VEIL_TIMEOUT_MS - 1);
-    expect(veil.veiled()).toBe(true);
-    vi.advanceTimersByTime(1);
-    expect(veil.veiled()).toBe(false);
-    veil.dispose();
-  });
-
-  it("kbSettle clears the keyboard timeout", () => {
-    const setter = vi.fn();
-    const veil = createReplayVeil(setter);
-    veil.event("kbShow");
-    veil.event("kbSettle");
-    setter.mockClear();
-    vi.advanceTimersByTime(KB_VEIL_TIMEOUT_MS + 100);
-    expect(setter).not.toHaveBeenCalled();
-    veil.dispose();
-  });
 });

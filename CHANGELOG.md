@@ -29,6 +29,8 @@
 - [iOS] Holding the keyboard's delete key keeps deleting.
 - [iOS] The key row adds Home, End, PgUp and PgDn, which take Shift, Alt and Ctrl like the arrows.
 - [iOS] The jump-to-bottom button appears whenever the terminal is scrolled up, idle or streaming, and for a full-screen agent scrolled up inside itself, where it sends Ctrl+End to Claude Code.
+- [iOS] Opening a session shows its screen in one step, without a blank screen and stray cursor before the replay, the text scrolling past during it, or the agent repainting just after it.
+- [iOS] Showing or hiding the keyboard keeps the terminal's picture steady while the rows change and the agent repaints, then switches to the repainted screen at once, instead of blanking and passing through intermediate layouts.
 
 ## 0.10.0 — 2026-10-06
 

@@ -106,8 +106,15 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
         var savedOffset = terminalView.contentOffset
         let buffer = terminalView.getTerminal().buffer
         let trimmedBefore = buffer.totalLinesTrimmed
+        let bytes = [UInt8](data)
+        // A reset (RIS) starts a replay that rebuilds the screen over the
+        // writes that follow: hold the current picture until it is done.
+        if bytes.count >= 2 && bytes[0] == 0x1b && bytes[1] == 0x63 {
+            hold(.replay)
+        }
+        noteActivity()
         feeding = true
-        terminalView.feed(byteArray: [UInt8](data)[...])
+        terminalView.feed(byteArray: bytes[...])
         if !atBottom {
             // A full scrollback drops lines off the top without growing, so
             // the same pixel offset would show later text.
@@ -117,6 +124,7 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
             terminalView.setContentOffset(savedOffset, animated: false)
         }
         feeding = false
+        noteActivity()
         reportScrollPosition()
     }
 
@@ -174,33 +182,144 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
         terminalView.scroll(toPosition: 1)
     }
 
-    func setVeiled(_ veiled: Bool) {
-        if veiled {
+    // MARK: Held picture
+    //
+    // A replay resets the screen and rebuilds it over several writes, and a
+    // keyboard resize reflows it and then takes the program's redraw. Drawn
+    // as they happen, both show a blank screen and the text scrolling past.
+    // Instead the veil covers the terminal with a still of what it showed,
+    // pinned to the bottom so it rides the keyboard, and the live view comes
+    // back in one step once the rebuild has settled.
+
+    private enum HoldReason { case replay, resize }
+    private var holds = Set<HoldReason>()
+    private var holdStartedAt: CFTimeInterval = 0
+    private var lastActivityAt: CFTimeInterval = 0
+    /// For a resize hold: whether the grid has changed size since, and
+    /// whether output arrived after that (the program's redraw).
+    private var resizedSinceHold = false
+    private var resizedAt: CFTimeInterval = 0
+    private var outputSinceResize = false
+    private var holdTimer: CADisplayLink?
+    private var releaseGeneration = 0
+
+    private func hold(_ reason: HoldReason) {
+        let now = CACurrentMediaTime()
+        if holds.isEmpty {
+            releaseGeneration += 1
             veilView.layer.removeAllAnimations()
+            // Already covering (the first open, or a reveal not yet drawn)
+            // keeps what it shows; otherwise take what is on screen.
+            if veilView.isHidden || veilView.alpha < 1 {
+                veilView.subviews.forEach { $0.removeFromSuperview() }
+                if let still = terminalView.snapshotView(afterScreenUpdates: false) {
+                    still.frame = CGRect(
+                        origin: CGPoint(x: 0, y: veilView.bounds.height - terminalView.bounds.height),
+                        size: terminalView.bounds.size)
+                    still.autoresizingMask = [.flexibleTopMargin]
+                    veilView.addSubview(still)
+                }
+            }
             veilView.alpha = 1
             veilView.isHidden = false
-        } else {
+            holdStartedAt = now
+        }
+        holds.insert(reason)
+        lastActivityAt = now
+        if reason == .resize {
+            resizedSinceHold = false
+            outputSinceResize = false
+        }
+        if holdTimer == nil {
+            let link = CADisplayLink(target: DisplayLinkTrampoline(repeating: true) { [weak self] in
+                self?.checkHolds()
+            }, selector: #selector(DisplayLinkTrampoline.fire))
+            link.add(to: .main, forMode: .common)
+            holdTimer = link
+        }
+    }
+
+    /// Releases holds whose rebuild has gone quiet. A replay is released by
+    /// its own painted signal; this is the fallback when that never comes.
+    private func checkHolds() {
+        let now = CACurrentMediaTime()
+        let held = now - holdStartedAt
+        let quiet = now - lastActivityAt
+        if holds.contains(.resize) {
+            // Output that keeps streaming never goes quiet; a little after
+            // the redraw began is enough to have it on screen.
+            let settled = resizedSinceHold
+                ? (outputSinceResize && (quiet >= 0.1 || now - resizedAt >= 0.4)) || quiet >= 0.6
+                : held >= 0.35
+            if settled || held >= 1.2 { holds.remove(.resize) }
+        }
+        if holds.contains(.replay), quiet >= 0.25 || held >= 3 {
+            holds.remove(.replay)
+        }
+        if holds.isEmpty { reveal(toBottom: false) }
+    }
+
+    private func noteActivity() {
+        guard !holds.isEmpty else { return }
+        lastActivityAt = CACurrentMediaTime()
+        if resizedSinceHold { outputSinceResize = true }
+    }
+
+    private func noteResized() {
+        guard !holds.isEmpty else { return }
+        lastActivityAt = CACurrentMediaTime()
+        resizedAt = lastActivityAt
+        resizedSinceHold = true
+        outputSinceResize = false
+    }
+
+    /// Swaps the still for the live view once the live view has drawn.
+    private func reveal(toBottom: Bool, then done: (() -> Void)? = nil) {
+        holds.removeAll()
+        holdTimer?.invalidate()
+        holdTimer = nil
+        if toBottom { terminalView.scroll(toPosition: 1) }
+        terminalView.layoutIfNeeded()
+        let generation = releaseGeneration
+        let link = CADisplayLink(target: DisplayLinkTrampoline {
+            defer { done?() }
+            // A new hold since keeps its still up.
+            guard generation == self.releaseGeneration, self.holds.isEmpty else { return }
             UIView.animate(withDuration: 0.05, animations: {
                 self.veilView.alpha = 0
-            }, completion: { _ in
+            }, completion: { finished in
+                guard finished, self.holds.isEmpty else { return }
                 self.veilView.isHidden = true
+                self.veilView.subviews.forEach { $0.removeFromSuperview() }
             })
+        }, selector: #selector(DisplayLinkTrampoline.fire))
+        link.add(to: .main, forMode: .common)
+    }
+
+    /// Holds the picture through a size change the keyboard is about to
+    /// make, until the grid has resized and the program's redraw is in.
+    func holdForResize() {
+        hold(.resize)
+    }
+
+    func setVeiled(_ veiled: Bool) {
+        if veiled {
+            hold(.replay)
+        } else if holds.contains(.replay) {
+            holds.remove(.replay)
+            if holds.isEmpty { reveal(toBottom: false) }
         }
     }
 
     func revealAtBottom(promise: Promise) {
-        terminalView.scroll(toPosition: 1)
-        terminalView.layoutIfNeeded()
-        let link = CADisplayLink(target: DisplayLinkTrampoline {
-            self.veilView.layer.removeAllAnimations()
-            UIView.animate(withDuration: 0.05, animations: {
-                self.veilView.alpha = 0
-            }, completion: { _ in
-                self.veilView.isHidden = true
-            })
+        holds.remove(.replay)
+        guard holds.isEmpty else {
+            // A resize is still settling; it reveals when it does.
+            terminalView.scroll(toPosition: 1)
             promise.resolve()
-        }, selector: #selector(DisplayLinkTrampoline.fire))
-        link.add(to: .main, forMode: .common)
+            return
+        }
+        reveal(toBottom: true) { promise.resolve() }
     }
 
     func configure(fontSize: Double, foreground: UIColor?, background: UIColor?, selection: UIColor?) {
@@ -220,6 +339,7 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
     }
 
     public func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        noteResized()
         onResize(["cols": newCols, "rows": newRows])
     }
 
@@ -283,6 +403,8 @@ public final class PuppetSwiftTermModule: Module {
                 view.scrollToBottom(ctrlEnd: ctrlEnd)
             }
 
+            AsyncFunction("holdForResize") { (view: PuppetSwiftTermView) in view.holdForResize() }
+
             AsyncFunction("revealAtBottom") { (view: PuppetSwiftTermView, promise: Promise) in
                 view.revealAtBottom(promise: promise)
             }
@@ -292,13 +414,15 @@ public final class PuppetSwiftTermModule: Module {
 
 private final class DisplayLinkTrampoline: NSObject {
     private let action: () -> Void
+    private let repeating: Bool
 
-    init(_ action: @escaping () -> Void) {
+    init(repeating: Bool = false, _ action: @escaping () -> Void) {
+        self.repeating = repeating
         self.action = action
     }
 
     @objc func fire(_ link: CADisplayLink) {
-        link.invalidate()
+        if !repeating { link.invalidate() }
         action()
     }
 }

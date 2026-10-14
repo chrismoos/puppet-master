@@ -13,6 +13,9 @@ export interface SwiftTermSurfaceHandle {
   /** Scrolls to bottom, forces layout, waits for display refresh, then
    *  hides the veil and resolves. */
   revealAtBottom(): Promise<void>;
+  /** Keeps the current picture up through a size change the keyboard is
+   *  about to make, until the program has repainted for it. */
+  holdForResize(): void;
 }
 
 export interface SwiftTermSurfaceProps {
