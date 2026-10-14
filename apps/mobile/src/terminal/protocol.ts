@@ -78,8 +78,10 @@ export type HostMessage =
   | { type: "dismissSize" }
   /** Request the page to report its current viewport diagnostics. */
   | { type: "requestDiag" }
-  /** The native shell requests the terminal scroll to the bottom of scrollback. */
-  | { type: "scrollToBottom" }
+  /** The native shell requests the terminal scroll to the bottom of scrollback.
+   * `ctrlEnd` asks a full-screen app scrolled up on the alternate screen to
+   * jump to its own bottom with Ctrl+End (Claude Code binds it). */
+  | { type: "scrollToBottom"; ctrlEnd?: boolean }
   /** Ask the WebView to return the current xterm selection text. */
   | { type: "getSelection" }
   /** A native pan claimed the gesture; cancel any pending tap/long-press state. */
@@ -135,6 +137,8 @@ export type ViewMessage =
   /** Whether the viewport is following the bottom of the scrollback. */
   | { type: "replayPainted" }
   | { type: "following"; following: boolean }
+  /** A full-screen app on the alternate screen was scrolled up, or back. */
+  | { type: "appScrolled"; up: boolean }
   | {
       type: "keyboardDiag";
       /** window.innerHeight */
@@ -244,7 +248,9 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
     case "requestDiag":
       return { type: "requestDiag" };
     case "scrollToBottom":
-      return { type: "scrollToBottom" };
+      return typeof msg["ctrlEnd"] === "boolean"
+        ? { type: "scrollToBottom", ctrlEnd: msg["ctrlEnd"] }
+        : { type: "scrollToBottom" };
     case "getSelection":
       return { type: "getSelection" };
     case "cancelTouch":
@@ -350,6 +356,8 @@ export function parseViewMessage(raw: unknown): ViewMessage | null {
       return { type: "replayPainted" };
     case "following":
       return typeof msg["following"] === "boolean" ? { type: "following", following: msg["following"] } : null;
+    case "appScrolled":
+      return typeof msg["up"] === "boolean" ? { type: "appScrolled", up: msg["up"] } : null;
     case "keyboardDiag": {
       const { layoutHeightPx, visualHeightPx, containerHeightPx, cols, rows, terminalPixelHeight } = msg;
       if (typeof layoutHeightPx !== "number") return null;

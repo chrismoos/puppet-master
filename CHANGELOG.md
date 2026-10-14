@@ -25,6 +25,10 @@
 - The iOS session menu no longer offers Interrupt.
 - [Web] Reading back through a terminal's scrollback while an agent prints no longer pushes the text upward: it stays where you scrolled.
 - [iOS] Text you have scrolled up to read stays in place as output arrives, also once the terminal's scrollback is full.
+- [iOS] Terminal text can be selected with a long press, extended by dragging its handles, and copied from the menu or the key row, without breaking link taps or losing the selection to streaming output.
+- [iOS] Holding the keyboard's delete key keeps deleting.
+- [iOS] The key row adds Home, End, PgUp and PgDn, which take Shift, Alt and Ctrl like the arrows.
+- [iOS] The jump-to-bottom button appears whenever the terminal is scrolled up, idle or streaming, and for a full-screen agent scrolled up inside itself, where it sends Ctrl+End to Claude Code.
 
 ## 0.10.0 — 2026-10-06
 

@@ -15,7 +15,8 @@ interface NativeTerminalRef {
   focus(): Promise<void>;
   blur(): Promise<void>;
   clearSelection(): Promise<void>;
-  scrollToBottom(): Promise<void>;
+  copySelection(): Promise<void>;
+  scrollToBottom(ctrlEnd: boolean): Promise<void>;
   revealAtBottom(): Promise<void>;
 }
 
@@ -32,6 +33,8 @@ interface NativeTerminalProps {
   onScroll(event: NativeSyntheticEvent<{ position: number }>): void;
   onTitle(event: NativeSyntheticEvent<{ title: string }>): void;
   onLink(event: NativeSyntheticEvent<{ url: string }>): void;
+  onSelection(event: NativeSyntheticEvent<{ active: boolean }>): void;
+  onAppScroll(event: NativeSyntheticEvent<{ up: boolean }>): void;
 }
 
 const NativeTerminal = Platform.OS === "ios"
@@ -117,11 +120,14 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
       send(message: HostMessage) {
         switch (message.type) {
           case "scrollToBottom":
-            void nativeRef.current?.scrollToBottom();
+            void nativeRef.current?.scrollToBottom(message.ctrlEnd ?? false);
+            break;
+          case "getSelection":
+            // The native view owns the selection and writes the pasteboard.
+            void nativeRef.current?.copySelection();
             break;
           case "refit":
           case "requestDiag":
-          case "getSelection":
           case "pan":
           case "touch":
           case "cancelTouch":
@@ -174,6 +180,8 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
           messageRef.current({ type: "following", following: event.nativeEvent.position >= 0.999 });
         }}
         onTitle={(event) => messageRef.current({ type: "title", title: event.nativeEvent.title })}
+        onSelection={(event) => messageRef.current({ type: "selection", active: event.nativeEvent.active })}
+        onAppScroll={(event) => messageRef.current({ type: "appScrolled", up: event.nativeEvent.up })}
         onLink={(event) => {
           const url = event.nativeEvent.url;
           messageRef.current({ type: "link", url });

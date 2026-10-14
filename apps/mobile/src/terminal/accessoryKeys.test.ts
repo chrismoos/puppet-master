@@ -21,6 +21,15 @@ describe("accessoryKeyBytes", () => {
     expect(text(accessoryKeyBytes("up", { shift: true, alt: true, ctrl: true }))).toBe("\x1b[1;8A");
   });
 
+  it("sends Home/End like arrows and page keys as CSI n;m ~", () => {
+    expect(text(accessoryKeyBytes("home", none))).toBe("\x1b[H");
+    expect(text(accessoryKeyBytes("end", none))).toBe("\x1b[F");
+    expect(text(accessoryKeyBytes("end", { ...none, ctrl: true }))).toBe("\x1b[1;5F");
+    expect(text(accessoryKeyBytes("home", { ...none, ctrl: true }))).toBe("\x1b[1;5H");
+    expect(text(accessoryKeyBytes("pgup", none))).toBe("\x1b[5~");
+    expect(text(accessoryKeyBytes("pgdn", { ...none, shift: true }))).toBe("\x1b[6;2~");
+  });
+
   it("sends backtab for Shift+Tab and prefixes Alt with ESC", () => {
     expect(text(accessoryKeyBytes("tab", { ...none, shift: true }))).toBe("\x1b[Z");
     expect(text(accessoryKeyBytes("tab", { ...none, alt: true }))).toBe("\x1b\t");

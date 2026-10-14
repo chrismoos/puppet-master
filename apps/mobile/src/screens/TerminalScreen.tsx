@@ -23,7 +23,7 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import type { PmClient } from "@puppet-master/client-core/ws/client";
 import type { Plan, SessionForward, Terminal } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
-import { PlanState, TerminalKind } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
+import { AgentKind, PlanState, TerminalKind } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
 import { openableForwardUrl } from "@puppet-master/client-core/api/forwards";
 import { forwardsForSession } from "@puppet-master/client-core/state/forwards";
 import { sessionEnded } from "@puppet-master/client-core/format";
@@ -185,6 +185,9 @@ export function TerminalScreen({
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [followingBottom, setFollowingBottom] = useState(true);
+  // A full-screen app (alternate screen) scrolled up inside itself, which
+  // the local scrollback position cannot see.
+  const [appScrolledUp, setAppScrolledUp] = useState(false);
   const [sheetTab, setSheetTab] = useState<"glance" | "info" | "timeline" | "urls" | "terminals" | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const hasSelectionRef = useRef(false);
@@ -319,6 +322,10 @@ export function TerminalScreen({
   }, [target.title, handleKill]);
 
   const session = appState.sessions.get(target.sessionId.toString());
+  // Claude Code's full-screen mode jumps to its bottom on Ctrl+End; only
+  // its own terminal gets that, never a shell opened beside it.
+  const viewingClaude = session?.agent === AgentKind.CLAUDE_CODE
+    && appState.terminals.get(target.terminalId.toString())?.kind === TerminalKind.AGENT;
   const ended = session !== undefined && sessionEnded(session);
   const [resuming, setResuming] = useState(false);
   // The resumed agent restarts this same terminal under a new generation,
@@ -895,6 +902,9 @@ export function TerminalScreen({
       case "following":
         setFollowingBottom(msg.following);
         break;
+      case "appScrolled":
+        setAppScrolledUp(msg.up);
+        break;
       case "selection":
         hasSelectionRef.current = msg.active;
         if (msg.active) selectionModeRef.current = true;
@@ -1106,10 +1116,13 @@ export function TerminalScreen({
                 />
               )}
             </View>
-            {!followingBottom ? (
+            {!followingBottom || appScrolledUp ? (
               <Pressable
                 style={styles.scrollBottomButton}
-                onPress={() => send({ type: "scrollToBottom" })}
+                onPress={() => send({
+                  type: "scrollToBottom",
+                  ctrlEnd: viewingClaude,
+                })}
                 accessibilityRole="button"
                 accessibilityLabel="Scroll to bottom"
               >

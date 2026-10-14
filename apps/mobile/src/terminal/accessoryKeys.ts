@@ -27,7 +27,8 @@ export interface Modifiers {
 const ESC = 0x1b;
 const CSI = [ESC, 0x5b];
 
-export type AccessoryKeyId = "esc" | "tab" | "left" | "down" | "up" | "right" | "enter";
+export type AccessoryKeyId =
+  | "esc" | "tab" | "left" | "down" | "up" | "right" | "home" | "end" | "pgup" | "pgdn" | "enter";
 
 export interface AccessoryKey {
   id: AccessoryKeyId;
@@ -41,6 +42,10 @@ export const ACCESSORY_KEYS: AccessoryKey[] = [
   { id: "down", label: "▼" },
   { id: "up", label: "▲" },
   { id: "right", label: "▶" },
+  { id: "home", label: "Home" },
+  { id: "end", label: "End" },
+  { id: "pgup", label: "PgUp" },
+  { id: "pgdn", label: "PgDn" },
   { id: "enter", label: "Enter" },
 ];
 
@@ -49,7 +54,18 @@ const ARROW_FINAL: Partial<Record<AccessoryKeyId, number>> = {
   down: 0x42,  // B
   right: 0x43, // C
   left: 0x44,  // D
+  home: 0x48,  // H
+  end: 0x46,   // F
 };
+
+// Page keys are CSI n ~, with modifiers as CSI n;m ~ (Ctrl+End and the like
+// are how full-screen TUIs jump to the bottom).
+const TILDE_CODE: Partial<Record<AccessoryKeyId, number>> = {
+  pgup: 5,
+  pgdn: 6,
+};
+
+const digits = (n: number) => String(n).split("").map((c) => c.charCodeAt(0));
 
 function modifierParam(mods: Modifiers): number {
   return 1 + (mods.shift ? 1 : 0) + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0);
@@ -65,7 +81,14 @@ export function accessoryKeyBytes(id: AccessoryKeyId, mods: Modifiers): number[]
   if (arrow !== undefined) {
     const param = modifierParam(mods);
     if (param === 1) return [...CSI, arrow];
-    return [...CSI, 0x31, 0x3b, ...String(param).split("").map((c) => c.charCodeAt(0)), arrow];
+    return [...CSI, 0x31, 0x3b, ...digits(param), arrow];
+  }
+  const tilde = TILDE_CODE[id];
+  if (tilde !== undefined) {
+    const param = modifierParam(mods);
+    return param === 1
+      ? [...CSI, ...digits(tilde), 0x7e]
+      : [...CSI, ...digits(tilde), 0x3b, ...digits(param), 0x7e];
   }
   switch (id) {
     case "tab":
