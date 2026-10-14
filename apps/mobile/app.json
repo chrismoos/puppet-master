@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "com.tech9.puppetmaster",
-      "buildNumber": "703",
+      "buildNumber": "704",
       "supportsTablet": false,
       "entitlements": {
         "aps-environment": "production"
