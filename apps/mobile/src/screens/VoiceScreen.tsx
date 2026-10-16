@@ -110,6 +110,17 @@ export function VoiceScreen({
 
   const state = controller.state();
 
+  // What the agent is reading out. A call hears its own speaker, so the
+  // turn rules need to know what the words coming back were.
+  const spoken = useMemo(() => {
+    const last = state.lines[state.lines.length - 1];
+    return last?.from === "agent" ? last.text : "";
+  }, [state.lines]);
+
+  useEffect(() => {
+    if (inCall) turns.spoke(spoken);
+  }, [inCall, spoken, turns]);
+
   useEffect(() => {
     if (!inCall) return;
     if (state.status === "thinking") {
@@ -205,9 +216,20 @@ export function VoiceScreen({
     [dictation, silence],
   );
 
+  /// Tapping the microphone takes the floor, so an answer being read out
+  /// stops rather than playing on over what the user is saying.
+  const talk = useCallback(async () => {
+    if (state.status !== "idle") await controller.cancel();
+    await listen();
+  }, [controller, listen, state.status]);
+
   /// Starts a call: the microphone stays open, utterances send
   /// themselves, and the answer can be talked over.
   const startCall = useCallback(async () => {
+    // Starting a call switches the echo canceller on, which rebuilds the
+    // audio graph, so an answer still being read out stops here rather
+    // than part way through a sentence.
+    if (state.status !== "idle") await controller.cancel();
     turns.reset();
     setInCall(true);
     callRef.current = true;
@@ -218,7 +240,7 @@ export function VoiceScreen({
     setSpeaker(ownSpeaker);
     setOutputToSpeaker(ownSpeaker);
     await listen(true);
-  }, [listen, turns]);
+  }, [controller, listen, state.status, turns]);
 
   const endCall = useCallback(async () => {
     callRef.current = false;
@@ -244,7 +266,7 @@ export function VoiceScreen({
         return;
       }
       case "talk":
-        void (listening ? finish() : listen());
+        void (listening ? finish() : talk());
         return;
       case "stop":
         void controller.cancel();

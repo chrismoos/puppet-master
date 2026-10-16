@@ -17,9 +17,10 @@ vi.mock("../voice/webAudioSink", () => ({
     stop() {}
   },
 }));
+let canDictate = false;
 vi.mock("../voice/speech", () => ({
-  dictationAvailable: () => false,
-  listenOnce: vi.fn(),
+  dictationAvailable: () => canDictate,
+  listenOnce: vi.fn(async () => ""),
 }));
 
 let host: HTMLDivElement;
@@ -51,6 +52,7 @@ function fakeClient(): PmClient {
 }
 
 beforeEach(() => {
+  canDictate = false;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -209,4 +211,37 @@ it("closes on Escape and on a click past it", async () => {
   expect(closed).toBe(2);
 
   outside.remove();
+});
+
+/**
+ * The microphone takes the floor. Tapping it while an answer is being
+ * read out used to leave it playing, so the user talked over the agent
+ * and the recognizer heard both.
+ */
+it("stops an answer being read out when the microphone is tapped", async () => {
+  canDictate = true;
+  const client = fakeClient();
+  await act(async () => {
+    root.render(<VoicePanel controller={started(client)} onClose={() => {}} />);
+  });
+  await act(async () => type("status"));
+  await act(async () => submit());
+  await act(async () => {
+    emit(
+      create(VoiceDeltaSchema, {
+        conversationId: 3n,
+        audioCodec: "pcm_s16le",
+        audioSampleRate: 24000,
+      }),
+    );
+  });
+
+  const talk = [...host.querySelectorAll("button")].find(
+    (button) => button.textContent === "Talk",
+  )!;
+  await act(async () => {
+    talk.click();
+  });
+
+  expect(client.voiceCancel).toHaveBeenCalledWith(3n);
 });

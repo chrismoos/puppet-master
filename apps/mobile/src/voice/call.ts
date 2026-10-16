@@ -24,8 +24,62 @@ export type TurnAction =
  */
 export const BARGE_IN_WORDS = 2;
 
+/**
+ * How much of an utterance has to be sound the agent just made for it to
+ * be the speaker leaking back into the microphone rather than the user.
+ */
+export const ECHO_OVERLAP = 0.6;
+
+/**
+ * Below this many words an utterance is judged by [`BARGE_IN_WORDS`]
+ * alone. "Yes" is a word the agent may well have said too, and dropping
+ * it would lose the answer to the question it just asked.
+ */
+export const ECHO_WORDS_MIN = 3;
+
+/** How many characters a run has to share to count as the same sound. */
+const ECHO_RUN = 3;
+
 function words(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function flatten(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function runs(text: string): Set<string> {
+  const found = new Set<string>();
+  for (let i = 0; i + ECHO_RUN <= text.length; i += 1) {
+    found.add(text.slice(i, i + ECHO_RUN));
+  }
+  return found;
+}
+
+/**
+ * Whether an utterance is the agent's own speech coming back through the
+ * microphone. On the speaker, echo cancellation leaves enough of a
+ * sentence to pass for a whole turn, and acting on it asks the agent
+ * about what it just said.
+ *
+ * Scored on short runs of characters rather than on whole words, because
+ * recognition does not return speech verbatim: it mishears words, splits
+ * them and joins them, and a comparison that wanted the words back as
+ * written would call that a new question.
+ */
+export function looksLikeEcho(said: string, spoken: string): boolean {
+  if (words(said) < ECHO_WORDS_MIN) return false;
+  const heard = runs(flatten(said));
+  const out = runs(flatten(spoken));
+  if (heard.size === 0 || out.size === 0) return false;
+  let shared = 0;
+  for (const run of heard) {
+    if (out.has(run)) shared += 1;
+  }
+  return shared / heard.size >= ECHO_OVERLAP;
 }
 
 export class CallTurns {
@@ -37,6 +91,14 @@ export class CallTurns {
    * them together with the exchange that came before.
    */
   private held: string[] = [];
+  /** What the agent last read out, which the microphone may hear back. */
+  private spoken = "";
+
+  /** Records what is being read out, so hearing it back is not a turn. */
+  spoke(text: string): void {
+    const said = text.trim();
+    if (said) this.spoken = said;
+  }
 
   at(): CallPhase {
     return this.phase;
@@ -56,6 +118,10 @@ export class CallTurns {
   heard(text: string): TurnAction {
     const said = text.trim();
     if (!said) return { kind: "ignored" };
+    // Checked before the phase, because playback outlasts the answer the
+    // daemon has already finished sending: the tail of it arrives while
+    // the call is listening again, where nothing else would question it.
+    if (looksLikeEcho(said, this.spoken)) return { kind: "ignored" };
     switch (this.phase) {
       case "listening":
         this.phase = "working";
@@ -98,5 +164,6 @@ export class CallTurns {
   reset(): void {
     this.phase = "listening";
     this.held = [];
+    this.spoken = "";
   }
 }

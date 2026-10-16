@@ -71,6 +71,9 @@ export function VoicePanel({
 
   const dictate = useCallback(async () => {
     setTrouble("");
+    // Taking the floor: an answer still being read out stops rather
+    // than playing on over the user.
+    if (controller.state().status !== "idle") await controller.cancel();
     setListening(true);
     try {
       const heard = await listenOnce();
@@ -80,7 +83,7 @@ export function VoicePanel({
     } finally {
       setListening(false);
     }
-  }, [send]);
+  }, [controller, send]);
 
   const busy = state.status !== "idle";
   const canDictate = useMemo(dictationAvailable, []);

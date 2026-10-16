@@ -199,4 +199,25 @@ describe("a codec the device cannot play", () => {
     expect(controller.state().error).toBe("");
     expect(sink.frames.map((f) => Array.from(f))).toEqual([[1, 2]]);
   });
+
+  /**
+   * The sink plays on after the daemon has sent the last of an answer,
+   * so the turn reads as over while the speech is still coming out. The
+   * next question used to be asked over the top of it.
+   */
+  it("silences an answer still playing when the next question is asked", async () => {
+    const t = transport();
+    const sink = new FakeSink();
+    const controller = new VoiceController(t.transport, sink);
+    controller.start();
+    await controller.say("what needs me", true);
+    t.emit(delta({ audioCodec: "pcm_s16le", audioSampleRate: 24000 }));
+    t.emit(delta({ audio: new Uint8Array([1, 2]), done: true }));
+    expect(controller.state().status).toBe("idle");
+    const silenced = sink.stopped;
+
+    await controller.say("never mind, what about the other one", true);
+
+    expect(sink.stopped).toBe(silenced + 1);
+  });
 });

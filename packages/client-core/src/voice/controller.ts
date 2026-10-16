@@ -103,6 +103,10 @@ export class VoiceController {
   async say(text: string, wantsAudio: boolean): Promise<void> {
     const said = text.trim();
     if (!said) return;
+    // Speech already handed to the sink plays on after the daemon has
+    // finished sending it, so the status is idle while the last answer
+    // is still coming out. A new turn silences it either way.
+    this.sink.stop();
     if (this.status !== "idle") await this.cancel();
     this.error = "";
     this.lines = [...this.lines, { from: "user", text: said }];
