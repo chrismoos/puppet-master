@@ -1,4 +1,5 @@
 import type { IDisposable } from "@xterm/xterm";
+import { normalizeTerminalSelection } from "@puppet-master/client-core/ws/clipboard";
 import { decodeOsc52 } from "@puppet-master/client-core/ws/osc52";
 import type { TerminalClipboard } from "./terminalClipboard";
 
@@ -54,11 +55,12 @@ export function isCopyShortcut(event: CopyShortcutEvent): boolean {
  * (xterm keeps its selection outside the DOM, so a native browser copy never
  * sees it), the explicit copy shortcut, and the application's own OSC 52
  * copies, which is how Claude Code and Codex copy over a mouse-tracking TUI.
- * OSC 52 read requests are refused by decodeOsc52.
+ * OSC 52 read requests are refused by decodeOsc52. Only the two selection
+ * paths are normalized: an OSC 52 copy names its own text exactly.
  */
 export function wireTerminalClipboard(term: CopyTerminal, host: CopyHost, clipboard: TerminalClipboard): () => void {
   const copySelection = () => {
-    const selection = term.getSelection();
+    const selection = normalizeTerminalSelection(term.getSelection());
     if (selection) void clipboard.copySelection(selection);
   };
   host.addEventListener("mouseup", copySelection);

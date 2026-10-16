@@ -160,3 +160,17 @@ export class DeferredClipboardCopy {
     return state;
   }
 }
+
+/**
+ * Strips the padding a terminal selection carries. An application that
+ * paints a background fills every column of a row with spaces, so the row
+ * reads as content out to the window's width and a copy of it arrives with
+ * one trailing space per column the text never reached. Interior blank
+ * rows and leading indentation are content and stay.
+ */
+export function normalizeTerminalSelection(text: string): string {
+  const lineBreak = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/).map((line) => line.replace(/[ \t]+$/, ""));
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines.join(lineBreak);
+}

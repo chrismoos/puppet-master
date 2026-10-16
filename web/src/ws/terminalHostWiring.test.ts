@@ -108,6 +108,40 @@ describe("wireTerminalClipboard", () => {
     expect(clipboard.copySelection).toHaveBeenCalledTimes(2);
   });
 
+  it("strips the row padding a selection carries, on both selection paths", () => {
+    const term = new FakeTerminal();
+    const host = new FakeHost();
+    const clipboard = fakeClipboard();
+    wireTerminalClipboard(term, host, clipboard as unknown as TerminalClipboard);
+
+    term.selection = `first${" ".repeat(90)}\n  second${" ".repeat(88)}\n\n`;
+    host.mouseUp();
+    expect(clipboard.copySelection).toHaveBeenCalledWith("first\n  second");
+
+    term.keyHandler!(key({ metaKey: true, key: "c" }));
+    expect(clipboard.copySelection).toHaveBeenLastCalledWith("first\n  second");
+  });
+
+  it("holds the clipboard when the selection is nothing but padding", () => {
+    const term = new FakeTerminal();
+    const host = new FakeHost();
+    const clipboard = fakeClipboard();
+    wireTerminalClipboard(term, host, clipboard as unknown as TerminalClipboard);
+
+    term.selection = " ".repeat(120);
+    host.mouseUp();
+    expect(clipboard.copySelection).not.toHaveBeenCalled();
+  });
+
+  it("writes an OSC 52 copy exactly as the application named it", () => {
+    const term = new FakeTerminal();
+    const clipboard = fakeClipboard();
+    wireTerminalClipboard(term, new FakeHost(), clipboard as unknown as TerminalClipboard);
+    const exact = "token \n  trailing space kept   ";
+    expect(term.osc(52, `c;${b64(exact)}`)).toBe(true);
+    expect(clipboard.copyFromApplication).toHaveBeenCalledWith(exact);
+  });
+
   it("releases the host listener and the OSC 52 registration on dispose", () => {
     const term = new FakeTerminal();
     const host = new FakeHost();

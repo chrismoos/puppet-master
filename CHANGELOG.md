@@ -6,6 +6,7 @@
 - [iOS] A voice screen in the overflow menu, with tap to talk or a call that keeps the microphone open and sends what you say as you say it. Speech is transcribed on the device, so no audio leaves the phone, and answers come out of the speaker or the earpiece, whichever you pick.
 - [Daemon] A message can be handed to any session's agent as the user, and the short answer it sends back is read out in the agent's own words.
 - [Daemon] New voice settings choose the model profile the voice agent reasons with and the provider that renders its speech, under `voice.model.profile` and `voice.tts.*`. The credential is sealed at rest and never read back.
+- [Web] Copying a terminal selection no longer carries the spaces an agent paints across the rest of each row, so pasting several lines keeps its shape. Selecting past the last line of output no longer appends the blank rows below it, and a selection holding only blank space leaves the clipboard as it was. An agent's own OSC 52 copy is still written exactly as sent.
 
 ## 0.10.3 — 2026-10-14
 

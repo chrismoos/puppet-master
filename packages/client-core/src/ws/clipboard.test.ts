@@ -5,6 +5,7 @@ import {
   DeferredClipboardCopy,
   clipboardAvailable,
   clipboardFailureReason,
+  normalizeTerminalSelection,
   writeClipboardText,
   type ClipboardCopyState,
 } from "./clipboard";
@@ -161,5 +162,57 @@ describe("DeferredClipboardCopy", () => {
     expect(copy.hasPending()).toBe(false);
     expect(copy.current()).toEqual({ kind: "idle" });
     expect(states.at(-1)).toEqual({ kind: "idle" });
+  });
+});
+
+describe("normalizeTerminalSelection", () => {
+  it("drops the padding an application paints across the rest of each row", () => {
+    const selection = [
+      `❯ say hi${" ".repeat(91)}`,
+      "",
+      "● - SIGHUP (1) — terminal hangup",
+      `  - SIGINT (2) — interrupt${" ".repeat(60)}`,
+    ].join("\n");
+    expect(normalizeTerminalSelection(selection)).toBe([
+      "❯ say hi",
+      "",
+      "● - SIGHUP (1) — terminal hangup",
+      "  - SIGINT (2) — interrupt",
+    ].join("\n"));
+  });
+
+  it("keeps leading indentation, which a code block needs", () => {
+    expect(normalizeTerminalSelection("    kill -TERM 1234   ")).toBe("    kill -TERM 1234");
+  });
+
+  it("keeps a run of spaces inside a line, which is where alignment lives", () => {
+    const columns = [
+      `COL-ONE${" ".repeat(12)}COL-TWO${" ".repeat(12)}COL-THREE`,
+      `r2c1${" ".repeat(15)}r2c2${" ".repeat(15)}r2c3`,
+    ].join("\n");
+    expect(normalizeTerminalSelection(columns)).toBe(columns);
+  });
+
+  it("keeps the run a soft wrap is joined across", () => {
+    // xterm concatenates a wrapped row onto the row above before a copy
+    // sees it, so a gap straddling the wrap arrives as interior space.
+    const joined = `WRAPPED-${"a".repeat(92)}${" ".repeat(30)}TAIL-BLAH`;
+    expect(normalizeTerminalSelection(joined)).toBe(joined);
+  });
+
+  it("drops the blank rows below the output but keeps the ones inside it", () => {
+    expect(normalizeTerminalSelection("first\n\nsecond\n   \n\n")).toBe("first\n\nsecond");
+  });
+
+  it("reports a selection of nothing but padding as empty", () => {
+    expect(normalizeTerminalSelection(`${" ".repeat(80)}\n${" ".repeat(80)}`)).toBe("");
+  });
+
+  it("keeps the CRLF breaks xterm joins with on Windows", () => {
+    expect(normalizeTerminalSelection("one   \r\ntwo   \r\n   \r\n")).toBe("one\r\ntwo");
+  });
+
+  it("leaves text that carries no padding untouched", () => {
+    expect(normalizeTerminalSelection("exactly this")).toBe("exactly this");
   });
 });
