@@ -9,7 +9,38 @@ export interface DaemonSetting {
   default: string;
   /** True when a value is explicitly stored. */
   set: boolean;
+  /**
+   * A credential. The value never comes back, so `value` is always empty
+   * and `set` is the only thing that says whether one is stored.
+   */
+  secret?: boolean;
+  /** The values this setting accepts, when they are a known set. */
+  options?: string[];
+  /**
+   * Where to ask for the choices, when they are not ours to name. The
+   * fetch costs a round trip to a provider, so it happens when the user
+   * asks for it rather than on load.
+   */
+  choices_url?: string | null;
   description: string;
+}
+
+/** One choice fetched from a `choices_url`. */
+export interface FetchedChoice {
+  id: string;
+  name: string;
+}
+
+/**
+ * Asks the daemon for a setting's choices. The daemon holds the
+ * credential and makes the provider call, so nothing reaches the page
+ * but the list.
+ */
+export async function fetchChoices(url: string): Promise<FetchedChoice[]> {
+  const res = await authedFetch(url);
+  if (!res.ok) return fail(res, "choices fetch");
+  const body = (await res.json()) as { options: FetchedChoice[] };
+  return body.options;
 }
 
 async function fail(res: Response, what: string): Promise<never> {
@@ -40,6 +71,21 @@ export function isBooleanSetting(setting: DaemonSetting): boolean {
   return setting.default === "true" || setting.default === "false";
 }
 
+/** Whether a setting holds a credential, so its value is never shown. */
+export function isSecretSetting(setting: DaemonSetting): boolean {
+  return setting.secret === true;
+}
+
+/** The values a setting accepts, when it is a choice rather than free text. */
+export function settingOptions(setting: DaemonSetting): string[] {
+  return setting.options ?? [];
+}
+
+/** Where a setting's choices can be fetched, when they are fetchable. */
+export function settingChoicesUrl(setting: DaemonSetting): string | null {
+  return setting.choices_url ?? null;
+}
+
 /** Whether a setting takes an integer numeric value. */
 export function isNumericSetting(setting: DaemonSetting): boolean {
   return /^\d+$/.test(setting.default);
@@ -58,12 +104,14 @@ export interface SettingMeta {
 export const CATEGORY_ORDER = [
   "Agent terminal",
   "Supervisors",
+  "Voice",
   "Mobile app",
 ] as const;
 
 export const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   "Agent terminal": "How spawned agents see their terminal",
   "Supervisors": "Session concurrency limits",
+  "Voice": "What the microphone reasons with and speaks through",
   "Mobile app": "Token lifetimes and push delivery",
 };
 
@@ -134,6 +182,16 @@ const KNOWN_SETTING_METAS: Record<string, Partial<SettingMeta>> = {
     title: "Push gateway relay URL",
     category: "Mobile app",
   },
+  "voice.model.profile": {
+    title: "Model profile the voice agent reasons with",
+    category: "Voice",
+  },
+  "voice.tts.provider": { title: "Speech provider", category: "Voice" },
+  "voice.tts.voice": { title: "Voice", category: "Voice" },
+  "voice.tts.base_url": { title: "Speech provider base URL", category: "Voice" },
+  "voice.tts.api_key": { title: "Speech provider API key", category: "Voice" },
+  "voice.tts.format": { title: "Audio format", category: "Voice" },
+  "voice.tts.model": { title: "Speech model", category: "Voice" },
 };
 
 export function settingMetadata(key: string): SettingMeta {
@@ -143,6 +201,7 @@ export function settingMetadata(key: string): SettingMeta {
     if (key.startsWith("spawn.")) category = "Agent terminal";
     else if (key.startsWith("supervisor.")) category = "Supervisors";
     else if (key.startsWith("mobile.") || key.startsWith("push.")) category = "Mobile app";
+    else if (key.startsWith("voice.")) category = "Voice";
     else category = "General";
   }
 

@@ -1673,6 +1673,36 @@ pub enum ClientMsg {
     SessionForwardInventory {
         session_token: String,
     },
+    /// Hands a message to a session's agent from the user rather than
+    /// from a peer session. Deliberately unscoped: the control socket
+    /// already subscribes to every bucket, so narrowing this would hide
+    /// sessions the dashboard shows rather than protect anything.
+    MessageSession {
+        session_id: u64,
+        text: String,
+        reply: bool,
+        mode: AgentInboxMode,
+        /// Replaying a key returns the message it first created, so a
+        /// retry after a lost acknowledgment cannot deliver twice.
+        idempotency_key: String,
+        /// Wraps the text in the instruction that the answer is spoken,
+        /// so it comes back short and without code or paths.
+        voice: bool,
+    },
+    /// One utterance for the voice agent, already transcribed: speech
+    /// recognition runs on the client, so no audio is uploaded.
+    VoiceTurn {
+        text: String,
+        /// Continues an existing conversation; `None` starts one.
+        conversation_id: Option<u64>,
+        /// Whether this client can play speech back.
+        wants_audio: bool,
+    },
+    /// Abandons a turn in flight, including synthesis still running, so
+    /// an interruption also stops paying for the rest of it.
+    VoiceCancel {
+        conversation_id: u64,
+    },
     CloseForward {
         forward_id: u64,
     },
@@ -1929,6 +1959,10 @@ pub enum Event {
     /// that something is said at the time, rather than a row a user has to
     /// think to go and look at.
     SecurityNotice(SecurityNotice),
+    /// An answer to a message the user sent asking for one. Not
+    /// persisted as a notice: it reaches whoever is connected, and the
+    /// message itself keeps the answer for whoever reads it later.
+    AgentReplyArrived(AgentReplyArrived),
 }
 
 /// What happened, for a notice the user is told about rather than asked about.
@@ -1964,6 +1998,61 @@ pub struct SecurityNotice {
     pub subject: String,
     /// One sentence naming what it now allows.
     pub detail: String,
+}
+
+/// An answer to a message the user sent with a reply capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentReplyArrived {
+    pub message_id: u64,
+    pub session_id: u64,
+    pub body: String,
+}
+
+/// One chunk of a voice answer. Text for a chunk precedes the audio
+/// rendered from it, so a client can show the answer while speech is
+/// still arriving.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VoiceDelta {
+    pub conversation_id: u64,
+    pub text: String,
+    pub audio: Bytes,
+    /// Names the codec for the frames that follow, sent once before the
+    /// first of them.
+    pub audio_codec: String,
+    pub audio_sample_rate: u32,
+    pub done: bool,
+    /// Why the turn stopped, when it stopped for a reason the user needs.
+    pub error: String,
+}
+
+/// Who sent a message to a session's agent. A message from the user has
+/// no session behind it, which is what distinguishes it from a peer
+/// session's and what lets a reply be attributed to the right sender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MessageOrigin {
+    #[default]
+    Session,
+    User,
+    Voice,
+}
+
+impl MessageOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::User => "user",
+            Self::Voice => "voice",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "session" => Some(Self::Session),
+            "user" => Some(Self::User),
+            "voice" => Some(Self::Voice),
+            _ => None,
+        }
+    }
 }
 
 /// Why the daemon raised an alert, mirroring the push event classes.
@@ -2038,6 +2127,9 @@ pub enum ServerMsg {
         /// for plain acks.
         data: Bytes,
     },
+    /// A piece of one voice answer, streamed so speech can start before
+    /// the answer is finished.
+    VoiceDelta(VoiceDelta),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

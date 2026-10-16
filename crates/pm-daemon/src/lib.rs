@@ -42,6 +42,7 @@ pub mod terminal_theme;
 pub mod text;
 pub mod ui_theme;
 pub mod update;
+pub mod voice;
 pub mod web_origin;
 pub mod worker_dialer;
 pub mod worker_plane;

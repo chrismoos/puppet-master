@@ -63,6 +63,12 @@ import {
   type UpsertItem,
   type InstructionTarget,
   SessionAlertKind,
+  AgentInboxMode,
+  MessageSessionSchema,
+  VoiceTurnSchema,
+  VoiceCancelSchema,
+  type VoiceDelta,
+  type AgentReplyArrived,
   type SecurityNotice,
 } from "../gen/pm/v1/pm_pb";
 import { SOCKET_OPEN, type SocketConnector, type SocketLike } from "../platform";
@@ -82,6 +88,21 @@ import { TerminalSocket, type TerminalSocketStats, type TerminalStreamStatus } f
 
 /** Server close code meaning the session cookie is missing or expired. */
 export const WS_CLOSE_UNAUTHENTICATED = 4401;
+
+/** Whether a message waits for the agent's next break or interrupts it. */
+export type MessageUrgency = "queue" | "steer";
+
+/** What became of one message handed to a session. */
+export interface SessionMessageResult {
+  /** Set when an answer was asked for: the message to match it against. */
+  messageId?: bigint;
+  /** "delivered", or "duplicate" when an idempotency key was replayed. */
+  delivery: string;
+  /** Only "steered" means it reached a turn already running. */
+  inputState: string;
+  /** One line naming what happened, for a client that shows it. */
+  message: string;
+}
 
 const RECONNECT_MIN_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
@@ -174,6 +195,8 @@ export class PmClient {
   private listeners = new Set<() => void>();
   private alertListeners = new Set<(session: Session, kind: SessionAlertKind) => void>();
   private securityNoticeListeners = new Set<(notice: SecurityNotice) => void>();
+  private agentReplyListeners = new Set<(reply: AgentReplyArrived) => void>();
+  private voiceListeners = new Set<(delta: VoiceDelta) => void>();
   private alertCatchUp = new AlertCatchUp();
   private ws: SocketLike | null = null;
   private tracker = new CommandTracker();
@@ -277,6 +300,54 @@ export class PmClient {
     this.alertListeners.add(listener);
     return () => this.alertListeners.delete(listener);
   };
+
+  /**
+   * Fires when a session answers something the user asked it. The answer is
+   * also kept on the message, so a client that was not connected reads it
+   * there rather than missing it.
+   */
+  onAgentReply = (listener: (reply: AgentReplyArrived) => void): (() => void) => {
+    this.agentReplyListeners.add(listener);
+    return () => this.agentReplyListeners.delete(listener);
+  };
+
+  /**
+   * Fires for each piece of a voice answer. Text for a chunk arrives before
+   * the audio rendered from it, and a chunk naming a codec precedes the
+   * frames it describes. The last one has `done` set.
+   */
+  onVoiceDelta = (listener: (delta: VoiceDelta) => void): (() => void) => {
+    this.voiceListeners.add(listener);
+    return () => this.voiceListeners.delete(listener);
+  };
+
+  /**
+   * Sends one utterance to the voice agent, already transcribed. Returns the
+   * conversation it belongs to, which later utterances pass back to continue
+   * it. Answers arrive through {@link onVoiceDelta}.
+   */
+  async voiceTurn(
+    text: string,
+    options: { conversationId?: bigint; wantsAudio?: boolean } = {},
+  ): Promise<bigint | undefined> {
+    const outcome = await this.request({
+      case: "voiceTurn",
+      value: create(VoiceTurnSchema, {
+        text,
+        conversationId: options.conversationId ?? 0n,
+        wantsAudio: options.wantsAudio ?? false,
+      }),
+    });
+    return outcome.createdId;
+  }
+
+  /** Abandons the answer in flight, including speech still being rendered. */
+  voiceCancel(conversationId: bigint): Promise<CommandOutcome> {
+    return this.request({
+      case: "voiceCancel",
+      value: create(VoiceCancelSchema, { conversationId }),
+    });
+  }
 
   /**
    * Fires when the daemon says something granted or moved a credential: a
@@ -431,6 +502,52 @@ export class PmClient {
       case: "respondToItem",
       value: create(RespondToItemSchema, { bucketId, itemId, text, target: wire }),
     });
+  }
+
+  /**
+   * Hands a message to a session's agent as the user rather than as another
+   * session, reaching any session this client can see.
+   *
+   * `reply` asks for one answer, which arrives through {@link onAgentReply}
+   * and is also kept on the message for a client that was away. An
+   * `idempotencyKey` makes a retry after a lost result safe: it returns the
+   * message the first send created instead of saying the same thing twice.
+   *
+   * Branch on `inputState`: only "steered" means the message reached a live
+   * turn. Most agent channels cannot interrupt one, so a steer request
+   * against them is queued and says so.
+   */
+  async messageSession(
+    sessionId: bigint,
+    text: string,
+    options: {
+      reply?: boolean;
+      mode?: MessageUrgency;
+      idempotencyKey?: string;
+      voice?: boolean;
+    } = {},
+  ): Promise<SessionMessageResult> {
+    const outcome = await this.request({
+      case: "messageSession",
+      value: create(MessageSessionSchema, {
+        sessionId,
+        text,
+        reply: options.reply ?? false,
+        mode: options.mode === "steer" ? AgentInboxMode.STEER : AgentInboxMode.QUEUE,
+        idempotencyKey: options.idempotencyKey ?? "",
+        voice: options.voice ?? false,
+      }),
+    });
+    const sent: Partial<Record<"delivery" | "input_state" | "message", string>> =
+      outcome.data && outcome.data.length > 0
+        ? JSON.parse(new TextDecoder().decode(outcome.data))
+        : {};
+    return {
+      messageId: outcome.createdId,
+      delivery: sent.delivery ?? "",
+      inputState: sent.input_state ?? "",
+      message: sent.message ?? "",
+    };
   }
 
   deleteItem(bucketId: bigint, id: bigint): Promise<CommandOutcome> {
@@ -827,6 +944,15 @@ export class PmClient {
         if (msg.msg.value.event.case === "securityNotice") {
           this.emitSecurityNotice(msg.msg.value.event.value);
         }
+        if (msg.msg.value.event.case === "agentReplyArrived") {
+          const reply = msg.msg.value.event.value;
+          for (const listener of this.agentReplyListeners) listener(reply);
+        }
+        break;
+      }
+      case "voiceDelta": {
+        const delta = msg.msg.value;
+        for (const listener of this.voiceListeners) listener(delta);
         break;
       }
       case "commandResult":

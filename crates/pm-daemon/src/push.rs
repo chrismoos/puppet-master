@@ -68,8 +68,6 @@ pub const PUSH_WEB_IDLE_MINUTES_MAX_BYTES: usize = 16;
 /// in listings or logs, only whether they are set, and they are sealed
 /// with the installation secret before they reach the database, the
 /// same way device push tokens are.
-pub const SECRET_SETTINGS: &[&str] = &[];
-
 pub const PUSH_TOKEN_MAX: usize = 512;
 pub const PUSH_LOCALE_MAX: usize = 40;
 

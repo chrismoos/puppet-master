@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use crate::daemon::{Daemon, DaemonError};
+use crate::daemon::{Daemon, DaemonError, UserMessage};
 
 /// Outgoing messages buffered per connection; a client that stops
 /// reading past this is disconnected rather than wedging the daemon.
@@ -1179,6 +1179,67 @@ pub async fn handle_message(
                 Err(e) => reply(Err(e.to_string())),
             };
             let _ = out_tx.send(msg).await;
+        }
+        ClientMsg::MessageSession {
+            session_id,
+            text,
+            reply: expect_reply,
+            mode,
+            idempotency_key,
+            voice,
+        } => {
+            let msg = match daemon
+                .send_user_message(
+                    session_id,
+                    UserMessage {
+                        text: &text,
+                        reply: expect_reply,
+                        mode,
+                        idempotency_key: &idempotency_key,
+                        voice,
+                    },
+                )
+                .await
+            {
+                Ok(outcome) => {
+                    let message_id = outcome.message_id;
+                    let data = serde_json::to_vec(&outcome).unwrap_or_default();
+                    ServerMsg::CommandResult {
+                        seq,
+                        result: Ok(message_id),
+                        data: bytes::Bytes::from(data),
+                    }
+                }
+                Err(e) => reply(Err(e.to_string())),
+            };
+            let _ = out_tx.send(msg).await;
+        }
+        ClientMsg::VoiceTurn {
+            text,
+            conversation_id,
+            wants_audio,
+        } => {
+            if text.trim().is_empty() {
+                let _ = out_tx
+                    .send(reply(Err("there is nothing to answer".to_string())))
+                    .await;
+                return;
+            }
+            // The turn answers on this connection as it goes, so the
+            // result carries only the conversation it belongs to: the
+            // client needs that to continue or interrupt it.
+            let conversation = daemon.voice().begin_turn(
+                daemon,
+                conversation_id,
+                text,
+                wants_audio,
+                out_tx.clone(),
+            );
+            let _ = out_tx.send(reply(Ok(Some(conversation)))).await;
+        }
+        ClientMsg::VoiceCancel { conversation_id } => {
+            daemon.voice().cancel(conversation_id);
+            let _ = out_tx.send(reply(Ok(None))).await;
         }
 
         ClientMsg::ListWorkspaces => {

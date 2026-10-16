@@ -40,6 +40,9 @@ import {
 import { LoginScreen } from "./src/screens/LoginScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { ApprovalsScreen } from "./src/screens/ApprovalsScreen";
+import { VoiceScreen } from "./src/screens/VoiceScreen";
+import { VoiceController } from "@puppet-master/client-core/voice/controller";
+import { NativeAudioSink } from "./src/voice/native";
 import { usePendingApprovalCount } from "./src/api/pendingApprovals";
 import { SessionsScreen, type TerminalTarget } from "./src/screens/SessionsScreen";
 import { TerminalScreen } from "./src/screens/TerminalScreen";
@@ -54,7 +57,8 @@ type Screen =
   | { kind: "sessions" }
   | { kind: "terminal"; target: TerminalTarget }
   | { kind: "plan"; target: PlanTarget; returnTo: TerminalTarget | null }
-  | { kind: "approvals"; approvalId: string | null };
+  | { kind: "approvals"; approvalId: string | null }
+  | { kind: "voice" };
 
 const UNAUTH_RETRY_DELAY_MS = 5_000;
 
@@ -137,6 +141,14 @@ export default function App() {
       ),
     [],
   );
+
+  // Outlives the Voice screen: an agent's answer can arrive minutes
+  // after it was asked for, and leaving the screen must not lose it.
+  const voice = useMemo(() => new VoiceController(client, new NativeAudioSink()), [client]);
+  useEffect(() => {
+    voice.start();
+    return () => voice.dispose();
+  }, [voice]);
 
   useEffect(() => {
     if (!auth) return;
@@ -410,8 +422,11 @@ export default function App() {
           onOpenTerminal={(target) => setScreen({ kind: "terminal", target })}
           onOpenSettings={() => setScreen({ kind: "settings" })}
           onOpenApprovals={() => setScreen({ kind: "approvals", approvalId: null })}
+          onOpenVoice={() => setScreen({ kind: "voice" })}
           pendingApprovals={pendingApprovals}
         />
+      ) : screen.kind === "voice" ? (
+        <VoiceScreen controller={voice} onClose={() => setScreen({ kind: "sessions" })} />
       ) : screen.kind === "approvals" && config ? (
         <ApprovalsScreen
           config={config}

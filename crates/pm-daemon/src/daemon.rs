@@ -5,12 +5,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pm_adapters::{select_endpoint, AdapterRegistry, Integration, SpawnCtx};
 use pm_protocol::domain::{
-    AgentDialects, AgentKind, AgentSelectionSource, BucketBriefing, ConnectMode, ContextField,
-    ControllerMsg, Event, HookKind, InstructionLayer, InstructionRevision, InstructionTarget, Item,
-    ItemQuery, ItemRef, ItemWrite, ModelDialect, ModelProfile, ModelProfileSource, PermissionMode,
-    ResolvedModelEndpoint, RespondTarget, Scope, Session, SessionForward, SessionRole,
-    SessionState, Snapshot, UserSetting, UserSettingChanged, WorkerMsg, WorkerTerminal,
-    LOCAL_WORKER_ID,
+    AgentDialects, AgentInboxMode, AgentKind, AgentReplyArrived, AgentSelectionSource,
+    BucketBriefing, ConnectMode, ContextField, ControllerMsg, Event, HookKind, InstructionLayer,
+    InstructionRevision, InstructionTarget, Item, ItemQuery, ItemRef, ItemWrite, MessageOrigin,
+    ModelDialect, ModelProfile, ModelProfileSource, PermissionMode, ResolvedModelEndpoint,
+    RespondTarget, Scope, Session, SessionForward, SessionRole, SessionState, Snapshot,
+    UserSetting, UserSettingChanged, WorkerMsg, WorkerTerminal, LOCAL_WORKER_ID,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
@@ -263,6 +263,10 @@ pub struct Daemon {
     /// Where the at-rest sealing secret lives. `None` for an in-memory
     /// database, which has no file to keep it beside.
     pub(crate) secret_path: Option<PathBuf>,
+    /// Voice conversations, which outlive the connection that started
+    /// one so a client that reconnects carries on rather than starting
+    /// over.
+    pub(crate) voice: std::sync::Arc<crate::voice::agent::VoiceAgent>,
     pub(crate) installation_secret: std::sync::OnceLock<String>,
     /// A PHC string no password matches, so a login for a username that does
     /// not exist costs the same argon2 work as one that does.
@@ -628,6 +632,35 @@ pub struct SupervisorInputOutcome {
     pub message_id: Option<u64>,
 }
 
+/// One message bound for a session's agent. Grouped rather than passed
+/// positionally because the sender and the origin are only meaningful
+/// together, and because what the message is allowed to do to a live
+/// turn belongs with it.
+pub(crate) struct SessionMessage<'a> {
+    pub origin: MessageOrigin,
+    /// Ignored unless `origin` is `Session`.
+    pub from_session_id: u64,
+    pub text: &'a str,
+    pub submit: bool,
+    pub expect_reply: bool,
+    /// Whether this may reach the model without waiting for the current
+    /// turn to end, where the agent's channel can do that at all.
+    pub may_steer: bool,
+    pub idempotency_key: Option<&'a str>,
+    pub record_item_note: bool,
+}
+
+/// What the user asked to be handed to a session.
+pub struct UserMessage<'a> {
+    pub text: &'a str,
+    pub reply: bool,
+    pub mode: AgentInboxMode,
+    /// Empty when the caller did not offer one, which gives up replay
+    /// protection for that send.
+    pub idempotency_key: &'a str,
+    pub voice: bool,
+}
+
 /// What a session shows while its turn is over but its own background
 /// work is not.
 pub(crate) const BACKGROUND_WORK_DETAIL: &str = "working in the background";
@@ -666,7 +699,44 @@ fn reply_instructions(text: &str, message_id: u64, token: &str) -> String {
     )
 }
 
+/// Tells an agent its answer is read aloud, so it comes back in a
+/// shape somebody can listen to rather than one they have to read.
+///
+/// The answer is spoken exactly as written, so the constraints are
+/// stated as the hard requirements they are, and an answer that breaks
+/// them is handed back once rather than read out.
+fn voice_instructions(text: &str) -> String {
+    format!(
+        "{text}\n\n---\nThis message came from the user by voice. Your answer is spoken to \
+         them exactly as you write it, so write speech, not writing.\n\nAt most two \
+         sentences. No code, no code blocks, no file paths, no URLs, no markdown and no \
+         lists. If the detail needs any of those, say that it does and leave it in your \
+         terminal.\n\nAnswer now rather than when the work is done. If a complete answer \
+         would take you more than a few seconds, say where you are up to instead: a short \
+         true sentence about what you are doing now is worth more to someone listening than \
+         a full answer they wait a minute for."
+    )
+}
+
 impl SupervisorInputOutcome {
+    /// A send whose idempotency key had already created a message, so
+    /// the same words were not delivered a second time.
+    fn already_sent(session_id: u64, message_id: u64) -> Self {
+        Self {
+            session_id,
+            delivery: "duplicate",
+            input_state: "already_sent",
+            submit_requested: true,
+            submitted: true,
+            bytes_queued: 0,
+            bytes_sent: 0,
+            retryable: false,
+            reason: None,
+            message: format!("message {message_id} was already sent with this key"),
+            message_id: Some(message_id),
+        }
+    }
+
     /// The agent took the message on its own inbound channel, so no
     /// keystrokes were written and none of the terminal's confirmation
     /// machinery applies: the agent acknowledged the handoff itself.
@@ -1035,6 +1105,46 @@ pub const KNOWN_SETTINGS: &[(&str, &str, &str)] = &[
          leaves the terminal and hook-driven state exactly as before",
     ),
     (
+        crate::voice::tts::PROVIDER_SETTING,
+        "elevenlabs",
+        "which text-to-speech provider renders the voice agent's answers",
+    ),
+    (
+        crate::voice::tts::VOICE_SETTING,
+        "",
+        "the provider's own identifier for the voice to speak in",
+    ),
+    (
+        crate::voice::tts::BASE_URL_SETTING,
+        "",
+        "where the text-to-speech provider's API lives. No default ships: \
+         set it to the provider's endpoint, or to a stand-in when testing",
+    ),
+    (
+        crate::voice::tts::API_KEY_SETTING,
+        "",
+        "the text-to-speech provider's credential. Sealed at rest and never \
+         read back",
+    ),
+    (
+        crate::voice::tts::FORMAT_SETTING,
+        "",
+        "what the provider should encode speech as; empty takes the \
+         provider's own low-latency default",
+    ),
+    (
+        crate::voice::tts::MODEL_SETTING,
+        "",
+        "which of the provider's models renders the speech; empty takes its \
+         own default",
+    ),
+    (
+        crate::voice::model::PROFILE_SETTING,
+        "",
+        "the model profile the voice agent reasons with, by name or id. It \
+         supplies the endpoint and the credential",
+    ),
+    (
         SETTING_SUPERVISOR_MAX_CHILDREN,
         "8",
         "how many live sessions one supervisor session may have spawned \
@@ -1359,6 +1469,7 @@ impl Daemon {
             connection_call_waiters: Mutex::new(HashMap::new()),
             latest_release: std::sync::Arc::new(crate::update::LatestRelease::default()),
             secret_path,
+            voice: std::sync::Arc::new(crate::voice::agent::VoiceAgent::new()),
             installation_secret: std::sync::OnceLock::new(),
             absent_user_hash: std::sync::OnceLock::new(),
             mux,
@@ -5748,12 +5859,22 @@ impl Daemon {
                     crate::push::PushScope::parse(value).is_some(),
                     "default, all, supervisors, or none",
                 ),
-                crate::push::SETTING_PUSH_GATEWAY_URL => (
+                crate::push::SETTING_PUSH_GATEWAY_URL | crate::voice::tts::BASE_URL_SETTING => (
                     value.is_empty()
                         || value.starts_with("http://")
                         || value.starts_with("https://"),
                     "an http(s) URL or empty",
                 ),
+                // Named by the provider, the operator, or the user, so
+                // the daemon cannot know the valid values and takes any
+                // text. An unusable one fails where it is used, naming
+                // the provider's own reason.
+                crate::voice::tts::PROVIDER_SETTING
+                | crate::voice::tts::VOICE_SETTING
+                | crate::voice::tts::API_KEY_SETTING
+                | crate::voice::tts::FORMAT_SETTING
+                | crate::voice::tts::MODEL_SETTING
+                | crate::voice::model::PROFILE_SETTING => (true, "any text"),
                 _ => (value == "true" || value == "false", "true or false"),
             };
             if !valid {
@@ -5763,13 +5884,13 @@ impl Daemon {
             }
         }
         let stored = match value {
-            Some(value) if crate::push::SECRET_SETTINGS.contains(&key) => Some(
+            Some(value) if crate::secrets::SECRET_SETTINGS.contains(&key) => Some(
                 crate::secrets::seal_secret(&self.installation_secret(), value),
             ),
             other => other.map(str::to_string),
         };
         self.storage.set_setting(key, stored.as_deref())?;
-        let logged = if crate::push::SECRET_SETTINGS.contains(&key) {
+        let logged = if crate::secrets::SECRET_SETTINGS.contains(&key) {
             value.map(|_| "(secret)")
         } else {
             value
@@ -5782,18 +5903,143 @@ impl Daemon {
         Ok(())
     }
 
+    /// The voice agent. Its conversations outlive the connection that
+    /// started one, so a client that reconnects carries on.
+    /// Reads an agent's answer out on the conversation that asked for
+    /// it. Synthesis is slow enough to keep off the caller's path, which
+    /// is finishing the agent's own send.
+    fn read_out(&self, conversation_id: u64, body: &str) {
+        let config = match crate::voice::config::resolve(self) {
+            Ok(config) => config,
+            Err(error) => {
+                warn!(%error, "cannot read out an agent's reply");
+                return;
+            }
+        };
+        let voice = std::sync::Arc::clone(self.voice());
+        let body = body.to_string();
+        tokio::spawn(async move {
+            voice
+                .deliver_agent_reply(conversation_id, &body, &config)
+                .await;
+        });
+    }
+
+    /// Hands an unspeakable answer back to the agent and waits on the
+    /// one it sends instead, so the user hears speech rather than a
+    /// path read out character by character.
+    async fn ask_for_a_speakable_answer(
+        &self,
+        session_id: u64,
+        message_id: u64,
+        reason: &str,
+        awaited: crate::voice::agent::Awaited,
+    ) {
+        warn!(
+            message = message_id,
+            session = session_id,
+            reason,
+            "asking an agent to say its answer in a speakable way"
+        );
+        let asked = self
+            .send_user_message(
+                session_id,
+                UserMessage {
+                    text: &crate::voice::speakable::ask_again(reason),
+                    reply: true,
+                    mode: AgentInboxMode::Queue,
+                    idempotency_key: "",
+                    voice: true,
+                },
+            )
+            .await;
+        match asked {
+            Ok(sent) => match sent.message_id {
+                Some(again) => self.voice().await_instead(
+                    again,
+                    crate::voice::agent::Awaited {
+                        conversation_id: awaited.conversation_id,
+                        asked_again: true,
+                    },
+                ),
+                // Nothing to wait on, so the user hears the original
+                // rather than nothing at all.
+                None => self.read_out(awaited.conversation_id, reason),
+            },
+            Err(error) => {
+                warn!(%error, "could not ask for a speakable answer");
+                self.read_out(awaited.conversation_id, reason);
+            }
+        }
+    }
+
+    pub fn voice(&self) -> &std::sync::Arc<crate::voice::agent::VoiceAgent> {
+        &self.voice
+    }
+
+    /// One setting's stored value, or `None` when it was never set.
+    /// Returns a credential as it is stored, which is sealed: read one
+    /// with [`Daemon::secret_setting`] instead.
+    pub fn setting(&self, key: &str) -> Option<String> {
+        self.storage.get_setting(key).ok().flatten()
+    }
+
+    /// Opens a sealed setting. `None` covers both never set and a
+    /// database travelling without the secret that opens it.
+    pub fn secret_setting(&self, key: &str) -> Option<String> {
+        let sealed = self.setting(key)?;
+        crate::secrets::open_secret(&self.installation_secret(), &sealed)
+    }
+
+    /// The same global state every client subscribes to. The voice
+    /// agent reads this rather than querying per session, so what it
+    /// says and what the dashboard shows cannot disagree.
+    pub fn state_snapshot(&self) -> Snapshot {
+        let _guard = self.state_lock.lock().unwrap();
+        self.subscription_snapshot()
+    }
+
     /// Every known setting with its current and default values.
     /// Credential values are never returned; only their set state is.
     pub fn settings(&self) -> Result<Vec<serde_json::Value>, DaemonError> {
+        // Fetched once rather than per setting: both of these name a
+        // choice the client offers, and neither changes mid-listing.
+        let providers = self.voice().speech_providers();
+        let mut profiles: Vec<String> = self
+            .storage
+            .list_model_profiles()?
+            .into_iter()
+            .map(|profile| profile.name)
+            .collect();
+        profiles.sort_unstable();
         KNOWN_SETTINGS
             .iter()
             .map(|(key, default, description)| {
                 let value = self.storage.get_setting(key)?;
-                let secret = crate::push::SECRET_SETTINGS.contains(key);
+                let secret = crate::secrets::SECRET_SETTINGS.contains(key);
                 let shown = if secret {
                     ""
                 } else {
                     value.as_deref().unwrap_or(default)
+                };
+                // A setting whose values are a known set says so, so a
+                // client offers the choices instead of a free text box
+                // the user can mistype.
+                let options: Vec<&str> = if *key == crate::voice::tts::PROVIDER_SETTING {
+                    providers.clone()
+                } else if *key == crate::voice::model::PROFILE_SETTING {
+                    profiles.iter().map(String::as_str).collect()
+                } else {
+                    Vec::new()
+                };
+                // A setting whose choices are the provider's to name,
+                // not ours, says where to ask instead of listing them:
+                // that is a credentialed round trip a client asks for
+                // when the user wants it.
+                let choices_url = if *key == crate::voice::tts::MODEL_SETTING {
+                    Some("/api/voice/speech-models")
+                } else {
+                    None
                 };
                 Ok(serde_json::json!({
                     "key": key,
@@ -5801,6 +6047,8 @@ impl Daemon {
                     "default": default,
                     "set": value.is_some(),
                     "secret": secret,
+                    "options": options,
+                    "choices_url": choices_url,
                     "description": description.split_whitespace().collect::<Vec<_>>().join(" "),
                 }))
             })
@@ -6516,6 +6764,12 @@ impl Daemon {
     /// Appends an audit note to every item linked to a supervised
     /// session; failures only log, they never fail the action itself.
     pub(crate) fn supervised_item_note(&self, supervisor_id: u64, session_id: u64, note: &str) {
+        self.session_item_note(Some(supervisor_id), session_id, note)
+    }
+
+    /// Appends a note to every item the session is linked to. `author`
+    /// is the session that caused it, or `None` when the user did.
+    pub(crate) fn session_item_note(&self, author: Option<u64>, session_id: u64, note: &str) {
         let Ok(items) = self.storage.item_refs_for_session(session_id) else {
             return;
         };
@@ -6526,8 +6780,8 @@ impl Daemon {
                 note: Some(note.to_string()),
                 ..ItemWrite::default()
             };
-            if let Err(e) = self.upsert_item(item.bucket_id, &write, Some(supervisor_id)) {
-                warn!(item = item.item_id, error = %e, "failed to append supervisor audit note");
+            if let Err(e) = self.upsert_item(item.bucket_id, &write, author) {
+                warn!(item = item.item_id, error = %e, "failed to append audit note");
             }
         }
     }
@@ -6840,26 +7094,64 @@ impl Daemon {
         // The answer goes back the way the message came. A reply carries
         // no capability of its own, so an exchange is one round trip and
         // two sessions cannot talk each other in circles.
-        let note = format!("Reply to your message {message_id}:\n{body}");
-        if let Err(e) = self
-            .send_session_input(
-                caller_session_id,
-                message.from_session_id,
-                &note,
-                true,
-                false,
-            )
-            .await
-        {
-            // The answer is recorded either way, so a sender that polls
-            // still gets it even when its own session could not be
-            // reached.
-            warn!(
-                message = message_id,
-                session = message.from_session_id,
-                error = %e,
-                "recorded a reply the sender could not be handed"
-            );
+        match message.from_session() {
+            Some(from) => {
+                let note = format!("Reply to your message {message_id}:\n{body}");
+                if let Err(e) = self
+                    .send_session_input(caller_session_id, from, &note, true, false)
+                    .await
+                {
+                    // The answer is recorded either way, so a sender that
+                    // polls still gets it even when its own session could
+                    // not be reached.
+                    warn!(
+                        message = message_id,
+                        session = from,
+                        error = %e,
+                        "recorded a reply the sender could not be handed"
+                    );
+                }
+            }
+            // The user has no session to be written to. Whoever is
+            // connected hears it, and the message row keeps the answer
+            // for whoever reads it later.
+            None => {
+                self.publish(Event::AgentReplyArrived(AgentReplyArrived {
+                    message_id,
+                    session_id: caller_session_id,
+                    body: body.to_string(),
+                }));
+                // A voice conversation that asked for this answer reads
+                // it out, exactly as written.
+                if let Some(awaited) = self.voice().take_awaited(message_id) {
+                    match crate::voice::speakable::trouble(body) {
+                        // One corrective round, because the agent still
+                        // holds a reply capability by answering again.
+                        // A second refusal is spoken as it stands rather
+                        // than leaving the user with silence.
+                        Some(reason) if !awaited.asked_again => {
+                            self.ask_for_a_speakable_answer(
+                                caller_session_id,
+                                message_id,
+                                &reason,
+                                awaited,
+                            )
+                            .await
+                        }
+                        trouble => {
+                            if let Some(reason) = trouble {
+                                warn!(
+                                    message = message_id,
+                                    session = caller_session_id,
+                                    reason = reason.as_str(),
+                                    "reading out an answer that is hard to listen to"
+                                );
+                            }
+                            self.read_out(awaited.conversation_id, body);
+                        }
+                    }
+                }
+            }
         }
         Ok(self.storage.agent_message(message_id)?)
     }
@@ -6959,12 +7251,62 @@ impl Daemon {
         expect_reply: bool,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
         self.send_session_input_inner(
-            from_session_id,
             session_id,
-            text,
-            submit,
-            expect_reply,
-            true,
+            SessionMessage {
+                origin: MessageOrigin::Session,
+                from_session_id,
+                text,
+                submit,
+                expect_reply,
+                may_steer: true,
+                idempotency_key: None,
+                record_item_note: true,
+            },
+        )
+        .await
+    }
+
+    /// Hands a message to a session on the user's behalf.
+    ///
+    /// Deliberately unscoped: a client socket already subscribes to
+    /// every bucket, so this reaches exactly what the dashboard reaches
+    /// and carries no authority the user does not already have.
+    ///
+    /// A key that already created a message returns that message
+    /// instead of delivering the same words again, so a client that
+    /// retries after a lost acknowledgment cannot say it twice.
+    pub async fn send_user_message(
+        &self,
+        session_id: u64,
+        request: UserMessage<'_>,
+    ) -> Result<SupervisorInputOutcome, DaemonError> {
+        if !request.idempotency_key.is_empty() {
+            if let Some(sent) = self
+                .storage
+                .agent_message_by_idempotency_key(request.idempotency_key)?
+            {
+                return Ok(SupervisorInputOutcome::already_sent(
+                    sent.to_session_id,
+                    sent.id,
+                ));
+            }
+        }
+        self.send_session_input_inner(
+            session_id,
+            SessionMessage {
+                origin: if request.voice {
+                    MessageOrigin::Voice
+                } else {
+                    MessageOrigin::User
+                },
+                from_session_id: 0,
+                text: request.text,
+                submit: true,
+                expect_reply: request.reply,
+                may_steer: request.mode == AgentInboxMode::Steer,
+                idempotency_key: Some(request.idempotency_key).filter(|key| !key.is_empty()),
+                record_item_note: true,
+            },
         )
         .await
     }
@@ -6974,8 +7316,7 @@ impl Daemon {
         session_id: u64,
         text: &str,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
-        self.send_session_input_inner(session_id, session_id, text, true, false, false)
-            .await
+        self.send_own_input(session_id, text).await
     }
 
     pub(crate) async fn send_connection_input(
@@ -6983,8 +7324,7 @@ impl Daemon {
         session_id: u64,
         text: &str,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
-        self.send_session_input_inner(session_id, session_id, text, true, false, false)
-            .await
+        self.send_own_input(session_id, text).await
     }
 
     pub(crate) async fn send_review_input(
@@ -6992,19 +7332,48 @@ impl Daemon {
         session_id: u64,
         text: &str,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
-        self.send_session_input_inner(session_id, session_id, text, true, false, false)
-            .await
+        self.send_own_input(session_id, text).await
+    }
+
+    /// A message one of the daemon's own surfaces puts to the session it
+    /// belongs to, which is neither a peer session writing to it nor the
+    /// user speaking to it, and so is audited on neither.
+    async fn send_own_input(
+        &self,
+        session_id: u64,
+        text: &str,
+    ) -> Result<SupervisorInputOutcome, DaemonError> {
+        self.send_session_input_inner(
+            session_id,
+            SessionMessage {
+                origin: MessageOrigin::Session,
+                from_session_id: session_id,
+                text,
+                submit: true,
+                expect_reply: false,
+                may_steer: true,
+                idempotency_key: None,
+                record_item_note: false,
+            },
+        )
+        .await
     }
 
     async fn send_session_input_inner(
         &self,
-        from_session_id: u64,
         session_id: u64,
-        text: &str,
-        submit: bool,
-        expect_reply: bool,
-        record_item_note: bool,
+        message: SessionMessage<'_>,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
+        let SessionMessage {
+            origin,
+            from_session_id,
+            text,
+            submit,
+            expect_reply,
+            may_steer,
+            idempotency_key,
+            record_item_note,
+        } = message;
         let session = self.storage.get_session(session_id)?;
         if !session.state.is_live() {
             return Ok(SupervisorInputOutcome::not_delivered(
@@ -7042,18 +7411,35 @@ impl Daemon {
                 now_unix_ms() + REPLY_CAPABILITY_LIFETIME_MS,
             )
         });
-        let (body, message_id) = match &reply {
-            None => (text.to_string(), None),
-            Some((token, expires)) => {
-                let id = self.storage.record_agent_message(
-                    from_session_id,
-                    session_id,
-                    text,
-                    "",
-                    Some((token.as_str(), *expires)),
-                )?;
-                (reply_instructions(text, id, token), Some(id))
-            }
+        // A message from the user is recorded whether or not it asked for
+        // an answer: it is the only record that the user said this to the
+        // agent, and it is what a retried send matches its key against.
+        let message_id = if reply.is_some() || origin != MessageOrigin::Session {
+            Some(
+                self.storage
+                    .record_agent_message(crate::storage::NewAgentMessage {
+                        origin,
+                        from_session_id,
+                        to_session_id: session_id,
+                        body: text,
+                        transport: "",
+                        reply: reply
+                            .as_ref()
+                            .map(|(token, expires)| (token.as_str(), *expires)),
+                        idempotency_key,
+                    })?,
+            )
+        } else {
+            None
+        };
+        let asked = if origin == MessageOrigin::Voice {
+            voice_instructions(text)
+        } else {
+            text.to_string()
+        };
+        let body = match (&reply, message_id) {
+            (Some((token, _)), Some(id)) => reply_instructions(&asked, id, token),
+            _ => asked,
         };
         let text = body.as_str();
         let plan = self.agent_message_plan(session_id, text, submit)?;
@@ -7083,7 +7469,7 @@ impl Daemon {
         let confirm_events = self.wait_events_tx.subscribe();
         let confirm_baseline = self.session_lifecycle_baseline(session_id);
         let delivery = match self
-            .deliver_agent_message(session_id, text, submit, plan, true, true)
+            .deliver_agent_message(session_id, text, submit, plan, may_steer, true)
             .await
         {
             Ok(delivery) => delivery,
@@ -7179,13 +7565,22 @@ impl Daemon {
         outcome.message_id = message_id;
         if record_item_note {
             let preview: String = text.chars().take(SUPERVISOR_NOTE_PREVIEW).collect();
-            self.supervised_item_note(
-                from_session_id,
-                session_id,
-                &format!(
-                    "supervisor sent input to session {session_id} ({state}): {preview:?}",
-                    state = outcome.input_state
+            let state = outcome.input_state;
+            let note = match origin {
+                MessageOrigin::Session => {
+                    format!("supervisor sent input to session {session_id} ({state}): {preview:?}")
+                }
+                MessageOrigin::User => {
+                    format!("the user sent input to session {session_id} ({state}): {preview:?}")
+                }
+                MessageOrigin::Voice => format!(
+                    "the user sent input to session {session_id} by voice ({state}): {preview:?}"
                 ),
+            };
+            self.session_item_note(
+                (origin == MessageOrigin::Session).then_some(from_session_id),
+                session_id,
+                &note,
             );
         }
         Ok(outcome)
@@ -9922,6 +10317,9 @@ impl Daemon {
                 // Not about a session, and the point of it is that the user is
                 // told, so a narrow scope must not be what hides it.
                 Event::SecurityNotice(_) => true,
+                // The user asked for this answer, so a scope narrowed to
+                // something else must not be what swallows it.
+                Event::AgentReplyArrived(_) => true,
                 _ => false,
             },
             Scope::Project(pid) => match event {
@@ -9960,6 +10358,7 @@ impl Daemon {
                     .map(|s| s.project_id == pid)
                     .unwrap_or(false),
                 Event::SecurityNotice(_) => true,
+                Event::AgentReplyArrived(_) => true,
                 _ => false,
             },
             Scope::Bucket(bid) => match event {
@@ -10031,6 +10430,7 @@ impl Daemon {
                 // point of it is that the user is told, so no scope filters it
                 // out.
                 Event::SecurityNotice(_) => true,
+                Event::AgentReplyArrived(_) => true,
             },
         }
     }

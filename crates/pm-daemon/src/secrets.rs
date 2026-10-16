@@ -1,6 +1,6 @@
 //! At-rest sealing for the credentials the daemon stores on the
 //! operator's behalf: device push tokens, model-profile API keys, and
-//! the credential settings in `push::SECRET_SETTINGS`. Values are
+//! the credential settings in [`SECRET_SETTINGS`]. Values are
 //! sealed with ChaCha20-Poly1305 under a key derived from the
 //! generated installation secret, so the database holds only
 //! ciphertext.
@@ -28,6 +28,11 @@ use crate::fsperm::{create_private_dir, restrict_file, PRIVATE_FILE_MODE};
 /// file. Still read once, to carry an existing installation across.
 const INSTALLATION_SECRET_KEY: &str = "installation.secret";
 const INSTALLATION_SECRET_BYTES: usize = 32;
+
+/// Settings whose value is a credential: sealed on the way in, never
+/// read back by the API, and redacted from the logs. Listed here rather
+/// than beside any one feature, because sealing is this module's job.
+pub const SECRET_SETTINGS: &[&str] = &[crate::voice::tts::API_KEY_SETTING];
 
 /// The sealing secret sits beside the database it protects, so a daemon
 /// pointed at a different database finds that one's secret.
@@ -266,7 +271,7 @@ impl Daemon {
     /// rest, so reading one needs the installation secret.
     pub(crate) fn setting_value(&self, key: &str) -> Option<String> {
         let stored = self.storage().get_setting(key).ok().flatten()?;
-        if !crate::push::SECRET_SETTINGS.contains(&key) {
+        if !SECRET_SETTINGS.contains(&key) {
             return Some(stored);
         }
         let opened = open_stored(&self.installation_secret(), &stored);
@@ -287,7 +292,7 @@ impl Daemon {
     /// is what the warning tells the operator.
     pub fn seal_stored_credential_settings(&self) {
         let secret = self.installation_secret();
-        for key in crate::push::SECRET_SETTINGS {
+        for key in SECRET_SETTINGS {
             let Some(stored) = self.storage().get_setting(key).ok().flatten() else {
                 continue;
             };

@@ -388,6 +388,7 @@ fn dashboard_router(daemon: Arc<Daemon>) -> Router {
         )
         .route("/api/plans/{id}/messages", post(post_plan_message))
         .route("/api/settings", get(list_settings))
+        .route("/api/voice/speech-models", get(list_speech_models))
         .route("/api/settings/{key}", put(update_setting))
         .route("/api/user/settings", get(list_user_settings))
         .route(
@@ -1582,6 +1583,27 @@ async fn list_settings(State(daemon): State<Arc<Daemon>>, headers: HeaderMap) ->
     }
     match daemon.settings() {
         Ok(settings) => Json(serde_json::json!({ "settings": settings })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// The models the configured speech provider can speak with.
+///
+/// Asked for on demand rather than included in the settings listing: it
+/// is a round trip to the provider with a credential, and a settings
+/// page should not wait on one or need one to load at all.
+async fn list_speech_models(State(daemon): State<Arc<Daemon>>, headers: HeaderMap) -> Response {
+    if authed_user(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match daemon.voice().speech_models(&daemon).await {
+        Ok(models) => Json(serde_json::json!({ "options": models })).into_response(),
+        // The provider's own reason, which names a missing permission
+        // when a key is scoped to speaking only.
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": e.to_string() })),

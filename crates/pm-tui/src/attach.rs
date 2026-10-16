@@ -83,6 +83,8 @@ pub(crate) async fn passthrough(
                     }
                 }
                 Some(ServerMsg::CommandResult { .. }) => {}
+                // Speech is for a client with a speaker.
+                Some(ServerMsg::VoiceDelta(_)) => {}
                 None => return Ok(AttachEnd::ConnectionLost),
             },
             data = input_rx.recv() => match data {

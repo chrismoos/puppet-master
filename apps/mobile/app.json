@@ -48,7 +48,8 @@
         }
       ],
       "./plugins/push-crypto",
-      "./plugins/ui-tests"
+      "./plugins/ui-tests",
+      "./plugins/voice"
     ]
   }
 }

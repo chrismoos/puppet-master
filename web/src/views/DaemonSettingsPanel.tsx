@@ -2,10 +2,15 @@ import { useMemo, useState, type KeyboardEvent } from "react";
 import {
   CATEGORY_DESCRIPTIONS,
   CATEGORY_ORDER,
+  fetchChoices,
   isBooleanSetting,
   isNumericSetting,
+  isSecretSetting,
+  settingChoicesUrl,
   settingMetadata,
+  settingOptions,
   type DaemonSetting,
+  type FetchedChoice,
   type SettingMeta,
 } from "../api/settings";
 import { copyTextToClipboard } from "../clipboard";
@@ -22,6 +27,29 @@ export function DaemonSettingsPanel({ settings, onWriteSetting }: DaemonSettings
   const [query, setQuery] = useState("");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  /// Choices fetched from a provider, by setting key. Never fetched on
+  /// load: it costs a credentialed round trip the user has to ask for.
+  const [fetched, setFetched] = useState<Record<string, FetchedChoice[]>>({});
+  const [fetching, setFetching] = useState<string | null>(null);
+  const [fetchTrouble, setFetchTrouble] = useState<Record<string, string>>({});
+
+  const loadChoices = async (setting: DaemonSetting, url: string) => {
+    setFetching(setting.key);
+    setFetchTrouble((current) => ({ ...current, [setting.key]: "" }));
+    try {
+      const choices = await fetchChoices(url);
+      setFetched((current) => ({ ...current, [setting.key]: choices }));
+    } catch (err) {
+      // The provider's own reason, which names a missing permission
+      // when a key cannot list what it can speak with.
+      setFetchTrouble((current) => ({
+        ...current,
+        [setting.key]: err instanceof Error ? err.message : String(err),
+      }));
+    } finally {
+      setFetching(null);
+    }
+  };
 
   const categorized = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -121,6 +149,20 @@ export function DaemonSettingsPanel({ settings, onWriteSetting }: DaemonSettings
     }
   };
 
+  /// A credential is written only when something was typed. An empty
+  /// box means "leave the stored one alone", because the stored value is
+  /// never shown and an empty commit would silently erase it.
+  const commitSecretDraft = (setting: DaemonSetting) => {
+    const typed = drafts[setting.key];
+    if (typed === undefined || typed === "") return;
+    onWriteSetting(setting.key, typed);
+    setDrafts((current) => {
+      const next = { ...current };
+      delete next[setting.key];
+      return next;
+    });
+  };
+
   const handleStringKeyDown = (e: KeyboardEvent<HTMLInputElement>, setting: DaemonSetting) => {
     if (e.key === "Enter") {
       e.currentTarget.blur();
@@ -187,8 +229,17 @@ export function DaemonSettingsPanel({ settings, onWriteSetting }: DaemonSettings
               const meta = settingMetadata(setting.key);
               const isBool = isBooleanSetting(setting);
               const isNum = isNumericSetting(setting);
+              const secret = isSecretSetting(setting);
+              const choices = settingOptions(setting);
+              const choicesUrl = settingChoicesUrl(setting);
+              const loaded = fetched[setting.key];
+              const loadFailed = fetchTrouble[setting.key];
               const effectiveVal = drafts[setting.key] ?? setting.value;
-              const command = `pm config set ${setting.key} ${setting.value}`;
+              // A credential is never echoed, so the command cannot
+              // carry one the way an ordinary setting's does.
+              const command = secret
+                ? `pm config set ${setting.key} <value>`
+                : `pm config set ${setting.key} ${setting.value}`;
 
               return (
                 <div
@@ -267,16 +318,114 @@ export function DaemonSettingsPanel({ settings, onWriteSetting }: DaemonSettings
                         </span>
                         {meta.unit}
                       </span>
-                    ) : (
-                      <input
-                        type="text"
+                    ) : choices.length > 0 ? (
+                      <select
                         className="ui-input ui-w-md"
-                        value={effectiveVal}
                         aria-label={meta.title}
-                        onChange={(e) => updateDraft(setting.key, e.target.value)}
-                        onBlur={() => commitStringDraft(setting)}
-                        onKeyDown={(e) => handleStringKeyDown(e, setting)}
-                      />
+                        value={effectiveVal}
+                        onChange={(e) => onWriteSetting(setting.key, e.target.value || null)}
+                      >
+                        {/* The stored value is always offered, even when
+                            it is not one of the choices: a select whose
+                            value is absent displays a different one,
+                            which would show a setting as something it
+                            is not. */}
+                        {(choices.includes(effectiveVal)
+                          ? choices
+                          : [effectiveVal, ...choices]
+                        ).map((choice) => (
+                          <option key={choice} value={choice}>
+                            {choice === "" ? "not set" : choice}
+                          </option>
+                        ))}
+                      </select>
+                    ) : secret ? (
+                      <span className="set-secret">
+                        <input
+                          type="password"
+                          className="ui-input ui-w-md"
+                          autoComplete="new-password"
+                          // Never the stored value, which the daemon does
+                          // not return: only what is being typed now.
+                          value={drafts[setting.key] ?? ""}
+                          placeholder={setting.set ? "stored" : "not set"}
+                          aria-label={meta.title}
+                          onChange={(e) => updateDraft(setting.key, e.target.value)}
+                          onBlur={() => commitSecretDraft(setting)}
+                          onKeyDown={(e) => handleStringKeyDown(e, setting)}
+                        />
+                        {setting.set && (
+                          <button
+                            type="button"
+                            className="btn"
+                            aria-label={`Clear ${meta.title}`}
+                            onClick={() => {
+                              updateDraft(setting.key, "");
+                              onWriteSetting(setting.key, null);
+                            }}
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="set-choosable">
+                        <input
+                          type="text"
+                          className="ui-input ui-w-md"
+                          list={loaded ? `${setting.key}-choices` : undefined}
+                          value={effectiveVal}
+                          aria-label={meta.title}
+                          onChange={(e) => updateDraft(setting.key, e.target.value)}
+                          onBlur={() => commitStringDraft(setting)}
+                          onKeyDown={(e) => handleStringKeyDown(e, setting)}
+                        />
+                        {/* The field stays typable whatever happens to
+                            the fetch: a model newer than the provider's
+                            own listing is still selectable, and a key
+                            that cannot list does not lock the setting. */}
+                        {choicesUrl && (
+                          <button
+                            type="button"
+                            className="btn"
+                            title={`List the choices for ${meta.title}`}
+                            aria-label={`List choices for ${meta.title}`}
+                            disabled={fetching === setting.key}
+                            onClick={() => void loadChoices(setting, choicesUrl)}
+                          >
+                            {fetching === setting.key ? "..." : "List"}
+                          </button>
+                        )}
+                        {loaded && (
+                          <>
+                            <datalist id={`${setting.key}-choices`}>
+                              {loaded.map((choice) => (
+                                <option key={choice.id} value={choice.id}>
+                                  {choice.name}
+                                </option>
+                              ))}
+                            </datalist>
+                            <select
+                              className="ui-input ui-w-sm"
+                              aria-label={`Choose ${meta.title}`}
+                              value=""
+                              onChange={(e) => {
+                                if (!e.target.value) return;
+                                updateDraft(setting.key, e.target.value);
+                                onWriteSetting(setting.key, e.target.value);
+                              }}
+                            >
+                              <option value="">{loaded.length} available</option>
+                              {loaded.map((choice) => (
+                                <option key={choice.id} value={choice.id}>
+                                  {choice.name}
+                                </option>
+                              ))}
+                            </select>
+                          </>
+                        )}
+                        {loadFailed && <span className="set-trouble">{loadFailed}</span>}
+                      </span>
                     )}
                   </div>
                 </div>

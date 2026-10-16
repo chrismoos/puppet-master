@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -14,6 +15,9 @@ import {
 } from "react";
 import { fetchMe, fetchVersion, logout, type BuildInfo } from "./api/auth";
 import { BuildStamp } from "./components/UpdateNotice";
+import { VoicePanel } from "./views/VoicePanel";
+import { VoiceController } from "@puppet-master/client-core/voice/controller";
+import { WebAudioSink } from "./voice/webAudioSink";
 import { securityNoticeTitle } from "./securityNotice";
 import { fetchItem } from "./api/items";
 import { createWorkspace, deleteWorkspace, listWorkspaces, reorderWorkspaces, updateWorkspace, type SavedWorkspace } from "./api/workspaces";
@@ -363,6 +367,14 @@ function Shell({
   const [workspaceDialog, setWorkspaceDialog] = useState<{ kind: "create" } | { kind: "rename"; workspace: SavedWorkspace } | null>(null);
   const [workspaceDelete, setWorkspaceDelete] = useState<SavedWorkspace | null>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  // Outlives the panel: an agent's answer can arrive minutes after it was
+  // asked for, and closing the panel must not throw it away.
+  const voice = useMemo(() => new VoiceController(client, new WebAudioSink()), [client]);
+  useEffect(() => {
+    voice.start();
+    return () => voice.dispose();
+  }, [voice]);
   const [homeSessionId, setHomeSessionId] = useState<string | null>(() => readString(SELECTED_SESSION_KEY));
   const [boardViews, setBoardViews] = useState<BoardViewMemory>(() => new Map());
   const [settingsReturnTarget, setSettingsReturnTarget] = useState(() =>
@@ -998,6 +1010,19 @@ function Shell({
         <ApprovalsButton pending={pendingApprovals} />
         <button
           type="button"
+          className="btn topbar-icon voice-toggle"
+          title={voiceOpen ? "close voice" : "talk to Puppet Master"}
+          aria-label={voiceOpen ? "close voice" : "talk to Puppet Master"}
+          aria-pressed={voiceOpen}
+          onClick={() => setVoiceOpen((open) => !open)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" />
+            <path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3" />
+          </svg>
+        </button>
+        <button
+          type="button"
           className="btn topbar-icon focus-mode-toggle"
           title={focusMode ? "exit focus mode (Escape)" : "enter focus mode"}
           aria-label={focusMode ? "exit focus mode" : "enter focus mode"}
@@ -1181,6 +1206,9 @@ function Shell({
             );
           })}
         </main>
+        {voiceOpen && (
+          <VoicePanel controller={voice} onClose={() => setVoiceOpen(false)} />
+        )}
         <ConnectionSessionPanel sessionId={selectedRouteId} />
       </div>
       {spawn && (

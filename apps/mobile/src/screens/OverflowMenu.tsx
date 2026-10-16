@@ -126,6 +126,15 @@ function ShieldCheckIcon({ color }: { color: string }) {
   );
 }
 
+function MicrophoneIcon({ color }: { color: string }) {
+  return (
+    <Svg width={20} height={20} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M8 1.5a2 2 0 0 0-2 2V8a2 2 0 0 0 4 0V3.5a2 2 0 0 0-2-2z" />
+      <Path d="M3.5 7.5V8a4.5 4.5 0 0 0 9 0v-.5M8 12.5v2" />
+    </Svg>
+  );
+}
+
 function XIcon({ color }: { color: string }) {
   return (
     <View style={iconStyles.box}>
@@ -158,6 +167,7 @@ const ICON_MAP: Record<string, (props: { color: string }) => React.JSX.Element> 
   copy: CopyIcon,
   warning: WarningIcon,
   shieldCheck: ShieldCheckIcon,
+  microphone: MicrophoneIcon,
   x: XIcon,
   link: LinkIcon,
 };

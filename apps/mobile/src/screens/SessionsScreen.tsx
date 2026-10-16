@@ -136,6 +136,7 @@ export function SessionsScreen({
   onOpenTerminal,
   onOpenSettings,
   onOpenApprovals,
+  onOpenVoice,
   pendingApprovals = 0,
 }: {
   client: PmClient;
@@ -144,6 +145,7 @@ export function SessionsScreen({
   onOpenTerminal: (target: TerminalTarget) => void;
   onOpenSettings: () => void;
   onOpenApprovals: () => void;
+  onOpenVoice: () => void;
   pendingApprovals?: number;
 }) {
   const state = useSyncExternalStore(client.subscribe, client.getState);
@@ -432,8 +434,9 @@ export function SessionsScreen({
     { key: "search", label: "Search", icon: "search", onPress: () => { setSearchActive(true); setTimeout(() => searchInputRef.current?.focus(), 100); } },
     { key: "ended", label: showEnded ? "Hide ended" : "Show ended", icon: "eye", onPress: toggleShowEnded },
     { key: "approvals", label: "Approvals", icon: "shieldCheck", badge: pendingApprovals || undefined, onPress: onOpenApprovals },
+    { key: "voice", label: "Voice", icon: "microphone", onPress: onOpenVoice },
     { key: "settings", label: "Settings", icon: "gear", onPress: onOpenSettings },
-  ], [filterCount, showEnded, toggleShowEnded, onOpenSettings, onOpenApprovals, pendingApprovals]);
+  ], [filterCount, showEnded, toggleShowEnded, onOpenSettings, onOpenApprovals, onOpenVoice, pendingApprovals]);
 
   return (
     <View style={styles.root}>

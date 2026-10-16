@@ -4,6 +4,8 @@
    set to, rather than in a second copy of the palette. Light is the
    first argument. */
 :root {
+  /* Read by anything hanging off the topbar, such as the voice overlay. */
+  --topbar-height: 46px;
   color-scheme: light dark;
 }
 
@@ -427,7 +429,7 @@ a.btn:hover,
   align-items: center;
   gap: 14px;
   padding: 0 16px;
-  height: 46px;
+  height: var(--topbar-height);
   flex: none;
   background: var(--chrome-bg);
   border-bottom: 1px solid var(--chrome-line);

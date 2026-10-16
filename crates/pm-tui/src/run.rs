@@ -99,6 +99,8 @@ pub async fn run(target: Target) -> Result<(), TuiError> {
                 Some(ServerMsg::Event(event)) => app.apply_event(event),
                 Some(ServerMsg::PtyOutput { .. }) => {}
                 Some(ServerMsg::CommandResult { .. }) => {}
+                // Speech is for a client with a speaker.
+                Some(ServerMsg::VoiceDelta(_)) => {}
                 None => mark_disconnected(&mut app, &mut conn),
             },
             _ = tick.tick() => {}

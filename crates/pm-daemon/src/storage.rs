@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS supervisor_snoozes (
     silent_revision INTEGER
 );";
 
-const SCHEMA_VERSION: i64 = 56;
+const SCHEMA_VERSION: i64 = 57;
 pub const SESSION_RECENT_GRACE_MS: i64 = 60_000;
 pub const SESSION_PAGE_SIZE: u32 = 50;
 pub const SESSION_PAGE_LIMIT_MAX: u32 = 50;
@@ -940,6 +940,20 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_session_id
 CREATE INDEX IF NOT EXISTS idx_agent_messages_from ON agent_messages(from_session_id);
 ";
 
+/// Records who a message came from, so an answer can be attributed to
+/// the user rather than to a peer session. A message from the user
+/// stores no session id, and `origin` is what says so.
+///
+/// The idempotency key is unique where present, so a client that
+/// retries after a lost acknowledgment gets the message it already
+/// created instead of delivering the same words twice.
+const AGENT_MESSAGE_ORIGIN_SCHEMA: &str = "
+ALTER TABLE agent_messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'session';
+ALTER TABLE agent_messages ADD COLUMN idempotency_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_messages_idempotency
+    ON agent_messages(idempotency_key) WHERE idempotency_key IS NOT NULL;
+";
+
 const MIGRATE_V48_TO_V49: &str = crate::plan_store::PLAN_SCHEMA;
 
 // One-retry rule for refresh tokens: a lost-response retry returns the
@@ -1143,9 +1157,21 @@ pub struct AgentMessage {
     pub reply_used_at_unix_ms: Option<i64>,
     pub reply_body: Option<String>,
     pub replied_at_unix_ms: Option<i64>,
+    pub origin: pm_protocol::domain::MessageOrigin,
+    pub idempotency_key: Option<String>,
 }
 
 impl AgentMessage {
+    /// The session that sent this, or `None` when the user did. A
+    /// user's message stores no session id, so reading the field
+    /// without this would report session 0 as the sender.
+    pub fn from_session(&self) -> Option<u64> {
+        match self.origin {
+            pm_protocol::domain::MessageOrigin::Session => Some(self.from_session_id),
+            _ => None,
+        }
+    }
+
     /// Whether this message can still be answered: it asked for a
     /// reply, nothing has spent the capability, and it has not aged out.
     pub fn awaits_reply(&self, now_unix_ms: i64) -> bool {
@@ -1155,6 +1181,20 @@ impl AgentMessage {
                 .reply_expires_at_unix_ms
                 .is_none_or(|expires| now_unix_ms < expires)
     }
+}
+
+/// One message to record. Grouped rather than passed positionally
+/// because origin and sender are only meaningful together.
+pub struct NewAgentMessage<'a> {
+    pub origin: pm_protocol::domain::MessageOrigin,
+    /// Ignored unless `origin` is `Session`.
+    pub from_session_id: u64,
+    pub to_session_id: u64,
+    pub body: &'a str,
+    pub transport: &'a str,
+    /// The reply token and when it expires, when an answer was asked for.
+    pub reply: Option<(&'a str, i64)>,
+    pub idempotency_key: Option<&'a str>,
 }
 
 fn row_to_agent_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentMessage> {
@@ -1169,6 +1209,10 @@ fn row_to_agent_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentMessag
         reply_used_at_unix_ms: row.get(7)?,
         reply_body: row.get(8)?,
         replied_at_unix_ms: row.get(9)?,
+        origin: row
+            .get::<_, String>(10)
+            .map(|o| pm_protocol::domain::MessageOrigin::parse(&o).unwrap_or_default())?,
+        idempotency_key: row.get(11)?,
     })
 }
 
@@ -2649,6 +2693,21 @@ impl Storage {
         )?;
         if has_users > 0 && socket_ticket_device_required > 0 {
             conn.execute_batch(MIGRATE_SOCKET_TICKETS_WITHOUT_A_DEVICE)?;
+        }
+        let has_agent_messages: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_messages'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_agent_messages > 0 {
+            let has_origin: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_messages') WHERE name='origin'",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_origin == 0 {
+                conn.execute_batch(AGENT_MESSAGE_ORIGIN_SCHEMA)?;
+            }
         }
         conn.execute_batch(crate::connections::SCHEMA)?;
         crate::connections::migrate(&conn)?;
@@ -5191,31 +5250,44 @@ impl Storage {
 
     /// Records a message handed to a session, and mints its one-time
     /// reply capability when the sender asked for an answer.
-    pub fn record_agent_message(
-        &self,
-        from_session_id: u64,
-        to_session_id: u64,
-        body: &str,
-        transport: &str,
-        reply: Option<(&str, i64)>,
-    ) -> Result<u64> {
+    pub fn record_agent_message(&self, message: NewAgentMessage<'_>) -> Result<u64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO agent_messages \
              (from_session_id, to_session_id, body, transport, reply_token, \
-              reply_expires_at_unix_ms, created_at_unix_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+              reply_expires_at_unix_ms, created_at_unix_ms, origin, idempotency_key) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
-                from_session_id as i64,
-                to_session_id as i64,
-                body,
-                transport,
-                reply.map(|(token, _)| token),
-                reply.map(|(_, expires)| expires),
+                message.from_session_id as i64,
+                message.to_session_id as i64,
+                message.body,
+                message.transport,
+                message.reply.map(|(token, _)| token),
+                message.reply.map(|(_, expires)| expires),
                 now_unix_ms(),
+                message.origin.as_str(),
+                message.idempotency_key,
             ],
         )?;
         Ok(conn.last_insert_rowid() as u64)
+    }
+
+    /// The message a key already created, so a retried send returns the
+    /// first one instead of delivering the same words again.
+    pub fn agent_message_by_idempotency_key(&self, key: &str) -> Result<Option<AgentMessage>> {
+        Ok(self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT id, from_session_id, to_session_id, body, transport, reply_token, \
+                 reply_expires_at_unix_ms, reply_used_at_unix_ms, reply_body, replied_at_unix_ms, \
+                 origin, idempotency_key \
+                 FROM agent_messages WHERE idempotency_key = ?1",
+                params![key],
+                row_to_agent_message,
+            )
+            .optional()?)
     }
 
     pub fn agent_message(&self, id: u64) -> Result<AgentMessage> {
@@ -5224,7 +5296,8 @@ impl Storage {
             .unwrap()
             .query_row(
                 "SELECT id, from_session_id, to_session_id, body, transport, reply_token, \
-                 reply_expires_at_unix_ms, reply_used_at_unix_ms, reply_body, replied_at_unix_ms \
+                 reply_expires_at_unix_ms, reply_used_at_unix_ms, reply_body, replied_at_unix_ms, \
+                 origin, idempotency_key \
                  FROM agent_messages WHERE id = ?1",
                 params![id as i64],
                 row_to_agent_message,
@@ -11263,6 +11336,83 @@ mod tests {
         assert_eq!(project.default_agent, None);
         assert_eq!(session.agent, AgentKind::Codex);
         assert_eq!(session.agent_source, AgentSelectionSource::Explicit);
+    }
+
+    /// A database written before messages recorded who sent them. Every
+    /// row in one came from a session, because the user had no way to
+    /// send anything.
+    #[test]
+    fn agent_message_origin_migration_reads_existing_rows_as_sent_by_a_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("agent-messages-without-origin.db");
+        {
+            let storage = Storage::open(&db).unwrap();
+            drop(storage);
+            let conn = Connection::open(&db).unwrap();
+            // The partial unique index names the column, and SQLite will
+            // not drop an indexed one.
+            conn.execute_batch(
+                "DROP INDEX idx_agent_messages_idempotency;
+                 ALTER TABLE agent_messages DROP COLUMN idempotency_key;
+                 ALTER TABLE agent_messages DROP COLUMN origin;
+                 INSERT INTO agent_messages
+                   (id, from_session_id, to_session_id, body, transport, created_at_unix_ms)
+                   VALUES (1, 7, 9, 'how is it going', '', 1000);",
+            )
+            .unwrap();
+        }
+
+        let storage = Storage::open(&db).unwrap();
+        let message = storage.agent_message(1).unwrap();
+        assert_eq!(message.origin, pm_protocol::domain::MessageOrigin::Session);
+        assert_eq!(
+            message.from_session(),
+            Some(7),
+            "a row written before origin existed came from a session"
+        );
+        assert_eq!(message.to_session_id, 9);
+        assert_eq!(message.idempotency_key, None);
+    }
+
+    /// One key names one message. Without this a client that retried a
+    /// send could say the same thing to an agent twice.
+    #[test]
+    fn an_idempotency_key_cannot_name_two_messages() {
+        let storage = store();
+        let first = storage
+            .record_agent_message(NewAgentMessage {
+                origin: pm_protocol::domain::MessageOrigin::Voice,
+                from_session_id: 0,
+                to_session_id: 4,
+                body: "what is left",
+                transport: "",
+                reply: None,
+                idempotency_key: Some("key-1"),
+            })
+            .unwrap();
+        let again = storage.record_agent_message(NewAgentMessage {
+            origin: pm_protocol::domain::MessageOrigin::Voice,
+            from_session_id: 0,
+            to_session_id: 4,
+            body: "what is left",
+            transport: "",
+            reply: None,
+            idempotency_key: Some("key-1"),
+        });
+        assert!(again.is_err(), "the second insert has to be refused");
+        assert_eq!(
+            storage
+                .agent_message_by_idempotency_key("key-1")
+                .unwrap()
+                .map(|m| m.id),
+            Some(first),
+            "the key still names the message it first created"
+        );
+        assert_eq!(
+            storage.agent_message_by_idempotency_key("key-2").unwrap(),
+            None,
+            "an unused key names nothing"
+        );
     }
 
     /// The schema as it stood before model profiles, so a migration

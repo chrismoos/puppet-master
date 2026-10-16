@@ -811,3 +811,23 @@
     flex-wrap: wrap;
   }
 }
+
+.set-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.set-choosable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.set-trouble {
+  color: var(--red);
+  font-size: 0.78rem;
+  max-width: 320px;
+}

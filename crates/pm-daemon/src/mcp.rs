@@ -2406,10 +2406,17 @@ async fn call_tool(
             {
                 Ok(message) => tool_text(
                     false,
-                    format!(
-                        "replied to message {} from session {}. The capability is now spent.",
-                        message.id, message.from_session_id
-                    ),
+                    match message.from_session() {
+                        Some(from) => format!(
+                            "replied to message {} from session {from}. The capability is now \
+                             spent.",
+                            message.id
+                        ),
+                        None => format!(
+                            "replied to message {} from the user. The capability is now spent.",
+                            message.id
+                        ),
+                    },
                 ),
                 Err(e) => tool_text(true, e.to_string()),
             },

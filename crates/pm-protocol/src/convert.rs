@@ -1992,6 +1992,33 @@ impl From<ClientEnvelope> for wire::ClientMessage {
             ClientMsg::SessionForwardInventory { session_token } => {
                 Msg::SessionForwardInventory(wire::SessionForwardInventory { session_token })
             }
+            ClientMsg::MessageSession {
+                session_id,
+                text,
+                reply,
+                mode,
+                idempotency_key,
+                voice,
+            } => Msg::MessageSession(wire::MessageSession {
+                session_id,
+                text,
+                reply,
+                mode: wire::AgentInboxMode::from(mode) as i32,
+                idempotency_key,
+                voice,
+            }),
+            ClientMsg::VoiceTurn {
+                text,
+                conversation_id,
+                wants_audio,
+            } => Msg::VoiceTurn(wire::VoiceTurn {
+                text,
+                conversation_id: conversation_id.unwrap_or_default(),
+                wants_audio,
+            }),
+            ClientMsg::VoiceCancel { conversation_id } => {
+                Msg::VoiceCancel(wire::VoiceCancel { conversation_id })
+            }
             ClientMsg::CloseForward { forward_id } => {
                 Msg::CloseForward(wire::CloseForward { forward_id })
             }
@@ -2427,6 +2454,22 @@ impl TryFrom<wire::ClientMessage> for ClientEnvelope {
             Msg::SessionForwardInventory(m) => ClientMsg::SessionForwardInventory {
                 session_token: m.session_token,
             },
+            Msg::MessageSession(m) => ClientMsg::MessageSession {
+                session_id: m.session_id,
+                text: m.text,
+                reply: m.reply,
+                mode: m.mode.try_into()?,
+                idempotency_key: m.idempotency_key,
+                voice: m.voice,
+            },
+            Msg::VoiceTurn(m) => ClientMsg::VoiceTurn {
+                text: m.text,
+                conversation_id: (m.conversation_id != 0).then_some(m.conversation_id),
+                wants_audio: m.wants_audio,
+            },
+            Msg::VoiceCancel(m) => ClientMsg::VoiceCancel {
+                conversation_id: m.conversation_id,
+            },
             Msg::CloseForward(m) => ClientMsg::CloseForward {
                 forward_id: m.forward_id,
             },
@@ -2624,6 +2667,11 @@ impl From<Event> for wire::Event {
                 subject: notice.subject,
                 detail: notice.detail,
             }),
+            Event::AgentReplyArrived(reply) => W::AgentReplyArrived(wire::AgentReplyArrived {
+                message_id: reply.message_id,
+                session_id: reply.session_id,
+                body: reply.body,
+            }),
         };
         wire::Event { event: Some(event) }
     }
@@ -2672,6 +2720,11 @@ impl TryFrom<wire::Event> for Event {
                 kind: notice.kind.try_into()?,
                 subject: notice.subject,
                 detail: notice.detail,
+            }),
+            W::AgentReplyArrived(reply) => Event::AgentReplyArrived(AgentReplyArrived {
+                message_id: reply.message_id,
+                session_id: reply.session_id,
+                body: reply.body,
             }),
         })
     }
@@ -2733,6 +2786,15 @@ impl From<ServerMsg> for wire::ServerMessage {
                     data: data.to_vec(),
                 })
             }
+            ServerMsg::VoiceDelta(d) => Msg::VoiceDelta(wire::VoiceDelta {
+                conversation_id: d.conversation_id,
+                text: d.text,
+                audio: d.audio.to_vec(),
+                audio_codec: d.audio_codec,
+                audio_sample_rate: d.audio_sample_rate,
+                done: d.done,
+                error: d.error,
+            }),
         };
         wire::ServerMessage { msg: Some(msg) }
     }
@@ -2826,6 +2888,15 @@ impl TryFrom<wire::ServerMessage> for ServerMsg {
                     result: if r.ok { Ok(r.created_id) } else { Err(r.error) },
                     data: r.data.into(),
                 },
+                Msg::VoiceDelta(d) => ServerMsg::VoiceDelta(VoiceDelta {
+                    conversation_id: d.conversation_id,
+                    text: d.text,
+                    audio: d.audio.into(),
+                    audio_codec: d.audio_codec,
+                    audio_sample_rate: d.audio_sample_rate,
+                    done: d.done,
+                    error: d.error,
+                }),
             },
         )
     }
@@ -3926,6 +3997,20 @@ mod tests {
             ClientMsg::SessionForwardInventory {
                 session_token: "tok-307".into(),
             },
+            ClientMsg::MessageSession {
+                session_id: 42,
+                text: "how is the migration going".into(),
+                reply: true,
+                mode: AgentInboxMode::Steer,
+                idempotency_key: "voice-7f3c".into(),
+                voice: true,
+            },
+            ClientMsg::VoiceTurn {
+                text: "what needs me".into(),
+                conversation_id: Some(9),
+                wants_audio: true,
+            },
+            ClientMsg::VoiceCancel { conversation_id: 9 },
             ClientMsg::CloseForward { forward_id: 11 },
             ClientMsg::UpsertItem(Box::new(ItemWrite {
                 bucket_id: 1,

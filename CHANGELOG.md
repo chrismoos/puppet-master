@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- [Web] Talk to Puppet Master from the topbar: ask what needs you, what a session is doing, or tell it to start work, across every bucket you can see. Answers are read aloud when a speech provider is configured, and typing does the same thing.
+- [iOS] A voice screen in the overflow menu, with tap to talk or a call that keeps the microphone open and sends what you say as you say it. Speech is transcribed on the device, so no audio leaves the phone.
+- [Daemon] A message can be handed to any session's agent as the user, and the answer it sends back is read out in the agent's own words.
+- [Daemon] New voice settings choose the model profile the voice agent reasons with and the provider that renders its speech, under `voice.model.profile` and `voice.tts.*`. The credential is sealed at rest and never read back.
+
+## 0.10.3 — 2026-10-14
+
 - [Web] The build stamp in the topbar shows the version alone, with the git rev in its tooltip, and turns into a button when a newer build is published. It opens a dialog with the command that fetches the update and the restart that applies it.
 - [Web] New Settings page, About, with the build this controller runs, the channel it follows, the newest published version, and when the daemon last looked.
 - [Daemon] `/api/version` reports when the release manifest was last read, so the dashboard can say how old the published version beside it is.

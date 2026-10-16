@@ -114,6 +114,9 @@ impl World {
             // The TUI has no notice band to raise one in. The daemon logs
             // every notice, which is where a terminal-only operator reads them.
             Event::SecurityNotice(_) => false,
+            // The TUI has no voice surface to speak an answer on, and the
+            // answer stays on the message for anything that does.
+            Event::AgentReplyArrived(_) => false,
             Event::BucketChanged(b) => {
                 upsert(&mut self.buckets, b, |b| b.id);
                 self.buckets.sort_by_key(|b| (b.position, b.id));

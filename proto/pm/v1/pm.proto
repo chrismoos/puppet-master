@@ -647,6 +647,9 @@ message ClientMessage {
     ResolveRev resolve_rev = 67;
     ReplyReviewThread reply_review_thread = 68;
     SessionForwardInventory session_forward_inventory = 69;
+    MessageSession message_session = 70;
+    VoiceTurn voice_turn = 71;
+    VoiceCancel voice_cancel = 72;
   }
 }
 
@@ -1249,6 +1252,71 @@ message SessionForward {
   string source_path = 11;
 }
 
+// Hands a message to a session's agent from the user rather than from
+// another session. Reaches any session the user can see, because the
+// dashboard already does: this carries no authority the control socket
+// does not already have.
+message MessageSession {
+  uint64 session_id = 1;
+  string text = 2;
+  // Asks for one answer back, delivered as an AgentReplyArrived event.
+  bool reply = 3;
+  // Honored only where the agent's channel distinguishes the two. The
+  // result reports the mode that actually carried the message.
+  AgentInboxMode mode = 4;
+  // Replaying a key returns the message it first created instead of
+  // delivering twice, so a retry after a lost acknowledgment is safe.
+  string idempotency_key = 5;
+  // Wraps the text in the instruction that the answer is spoken aloud,
+  // so it comes back in two sentences without code or paths.
+  bool voice = 6;
+}
+
+// One utterance from the user to the voice agent. The transcript
+// arrives as text because speech recognition runs on the client, so no
+// audio is uploaded.
+message VoiceTurn {
+  string text = 1;
+  // Continues an existing conversation; 0 starts one.
+  uint64 conversation_id = 2;
+  // Whether the client can play speech, so the daemon renders it only
+  // where it is wanted.
+  bool wants_audio = 3;
+}
+
+// Stops the turn in flight, including synthesis that has not finished,
+// so interrupting also stops paying for the rest of it.
+message VoiceCancel {
+  uint64 conversation_id = 1;
+}
+
+// A piece of one voice answer. Text arrives before the audio for it, so
+// a client can show the answer while speech is still being rendered.
+message VoiceDelta {
+  uint64 conversation_id = 1;
+  // Appended to the answer so far.
+  string text = 2;
+  // Frames in the codec named at stream start.
+  bytes audio = 3;
+  // Names the codec carrying the frames that follow, sent once before
+  // the first of them.
+  string audio_codec = 4;
+  uint32 audio_sample_rate = 5;
+  // No more of this answer is coming.
+  bool done = 6;
+  // Why the turn stopped, when it stopped for a reason the user needs.
+  string error = 7;
+}
+
+// An answer to a message the user sent with reply set. Not persisted as
+// a notification: it reaches whoever is connected, and the message row
+// keeps the answer for anyone who reads it later.
+message AgentReplyArrived {
+  uint64 message_id = 1;
+  uint64 session_id = 2;
+  string body = 3;
+}
+
 message CreateShell { uint64 session_id = 1; string title = 2; }
 message RestartTerminal { uint64 terminal_id = 1; }
 message CloseTerminal { uint64 terminal_id = 1; }
@@ -1428,6 +1496,7 @@ message ServerMessage {
     Event event = 2;
     PtyOutput pty_output = 3;
     CommandResult command_result = 4;
+    VoiceDelta voice_delta = 5;
   }
 }
 
@@ -1553,6 +1622,7 @@ message Event {
     uint64 plan_removed = 24;
     SessionAlert session_alert = 25;
     SecurityNotice security_notice = 26;
+    AgentReplyArrived agent_reply_arrived = 27;
   }
 }
 

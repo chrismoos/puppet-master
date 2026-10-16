@@ -1,0 +1,91 @@
+/* A panel down the right rather than a column in the layout: it runs
+   from under the topbar to the bottom of the window, and overlays the
+   dashboard rather than reflowing it. */
+.voice-panel {
+  position: fixed;
+  top: var(--topbar-height);
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, 100vw);
+  padding: 12px;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: -10px 0 30px rgb(0 0 0 / 35%);
+}
+
+.voice-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-panel-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.voice-speak-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.voice-transcript {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.voice-line {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  max-width: 85%;
+  white-space: pre-wrap;
+}
+
+.voice-line-user {
+  align-self: flex-end;
+  background: var(--accent-soft, rgba(125, 125, 255, 0.18));
+}
+
+.voice-line-agent {
+  align-self: flex-start;
+  background: var(--raised, rgba(125, 125, 125, 0.14));
+}
+
+.voice-pending {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.voice-trouble {
+  margin: 0;
+  color: var(--danger, #c0392b);
+  font-size: 0.85rem;
+}
+
+.voice-compose {
+  display: flex;
+  gap: 6px;
+}
+
+.voice-compose input {
+  flex: 1;
+  min-width: 0;
+}

@@ -205,6 +205,11 @@ function applyEvent(state: AppState, event: Event): AppState {
     // told, not a thing to be listed.
     case "securityNotice":
       return state;
+    // An answer to something the user asked a session. Handed to
+    // listeners as it arrives: the message itself keeps it, so there is
+    // nothing here for a later reader to need.
+    case "agentReplyArrived":
+      return state;
     case "contextChanged": {
       const key = ev.value.sessionId.toString();
       if (!state.sessions.has(key)) return state;

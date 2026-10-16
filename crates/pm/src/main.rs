@@ -1943,10 +1943,10 @@ async fn main() -> anyhow::Result<()> {
                     },
                 )
                 .await?;
-                if pm_daemon::push::SECRET_SETTINGS.contains(&key.as_str()) {
-                    println!("{key} set (applies to sessions spawned from now on)");
-                } else {
+                if config_set_echoes_value(&key) {
                     println!("{key} = {value} (applies to sessions spawned from now on)");
+                } else {
+                    println!("{key} set (applies to sessions spawned from now on)");
                 }
                 Ok(())
             }
@@ -2369,6 +2369,13 @@ fn payload_field(json: &serde_json::Value, keys: &[&str]) -> String {
 /// entry still launches this. It answers there as a server with no
 /// tools rather than exiting, so the agent reports a healthy connection
 /// instead of a failed one.
+/// Whether `pm config set` prints the value back. A credential is
+/// confirmed as set without being echoed into a terminal or a shell
+/// history, so the test and the handler ask the same question.
+fn config_set_echoes_value(key: &str) -> bool {
+    !pm_daemon::secrets::SECRET_SETTINGS.contains(&key)
+}
+
 async fn run_mcp_bridge() -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -3521,14 +3528,17 @@ mod tests {
 
     #[test]
     fn every_secret_setting_is_one_the_cli_will_not_echo() {
-        // The Set handler decides whether to print the value by asking
-        // this list, so a new secret must be added here to stay unprinted.
-        for key in pm_daemon::push::SECRET_SETTINGS {
+        for key in pm_daemon::secrets::SECRET_SETTINGS {
             assert!(
-                key.starts_with("push."),
-                "unexpected secret setting {key}, check the echo guard still covers it"
+                !config_set_echoes_value(key),
+                "setting {key} holds a credential and must not be printed back"
             );
         }
+    }
+
+    #[test]
+    fn an_ordinary_setting_is_echoed_so_the_user_sees_what_took_effect() {
+        assert!(config_set_echoes_value("spawn.fullscreen"));
     }
     use clap::CommandFactory;
 
