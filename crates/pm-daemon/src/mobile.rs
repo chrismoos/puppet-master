@@ -245,19 +245,50 @@ impl Daemon {
         refresh_token: &str,
     ) -> Result<(MobileTokens, u64), MobileAuthError> {
         let now = now_unix_ms();
-        let stored = self
+        let Some(stored) = self
             .storage()
             .lookup_mobile_refresh_token(&hash_token(refresh_token))
             .map_err(|_| MobileAuthError::Internal)?
-            .ok_or(MobileAuthError::InvalidToken)?;
-        let device = self
-            .storage()
-            .get_mobile_device(stored.device_id)
-            .map_err(|_| MobileAuthError::InvalidToken)?;
+        else {
+            warn!("mobile refresh refused: this daemon never issued that token");
+            return Err(MobileAuthError::InvalidToken);
+        };
+        // A storage failure here is not evidence against the token, and
+        // answering it as one logs the device out for good: the app drops
+        // its credentials on a refusal and asks the user to enroll again.
+        let device = match self.storage().get_mobile_device(stored.device_id) {
+            Ok(device) => device,
+            Err(StorageError::NotFound(..)) => {
+                warn!(
+                    device = stored.device_id,
+                    "mobile refresh refused: the device it names is gone"
+                );
+                return Err(MobileAuthError::InvalidToken);
+            }
+            Err(e) => {
+                warn!(
+                    device = stored.device_id,
+                    error = %e,
+                    "mobile refresh could not read the device"
+                );
+                return Err(MobileAuthError::Internal);
+            }
+        };
         if device.revoked_at_unix_ms.is_some() {
+            warn!(
+                device = device.id,
+                user = device.user_id,
+                "mobile refresh refused: the device is already revoked"
+            );
             return Err(MobileAuthError::InvalidToken);
         }
         if now > stored.expires_at_unix_ms {
+            warn!(
+                device = device.id,
+                user = device.user_id,
+                expired_for_ms = now - stored.expires_at_unix_ms,
+                "mobile refresh refused: the token is past its expiry"
+            );
             return Err(MobileAuthError::InvalidToken);
         }
         if stored.used_at_unix_ms.is_some() {
@@ -928,6 +959,32 @@ mod tests {
             .unwrap()
             .revoked_at_unix_ms
             .is_none());
+    }
+
+    /// A token this daemon never issued says nothing about the device
+    /// holding one that works. Revoking on it would let a stale copy of
+    /// the app, or anything that kept an old token, log the phone out.
+    #[test]
+    fn a_token_the_daemon_never_issued_leaves_the_device_alone() {
+        let d = daemon();
+        d.auth_setup("testuser", "hunter2hunter2").unwrap();
+        let enrollment = d.mobile_enroll(enroll_request(password_proof())).unwrap();
+
+        assert_eq!(
+            expect_err(d.mobile_refresh("not-a-token-this-daemon-minted")),
+            MobileAuthError::InvalidToken
+        );
+
+        assert!(d
+            .storage()
+            .get_mobile_device(enrollment.device.id)
+            .unwrap()
+            .revoked_at_unix_ms
+            .is_none());
+        let (rotated, _) = d
+            .mobile_refresh(&enrollment.tokens.refresh_token)
+            .expect("the device's own token still rotates");
+        assert!(d.access_token_verify(&rotated.access_token).is_some());
     }
 
     #[test]

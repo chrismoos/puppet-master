@@ -6,6 +6,10 @@
 - [iOS] A voice screen in the overflow menu, with tap to talk or a call that keeps the microphone open and sends what you say as you say it. Speech is transcribed on the device, so no audio leaves the phone, and answers come out of the speaker or the earpiece, whichever you pick.
 - [Daemon] A message can be handed to any session's agent as the user, and the short answer it sends back is read out in the agent's own words.
 - [Daemon] New voice settings choose the model profile the voice agent reasons with and the provider that renders its speech, under `voice.model.profile` and `voice.tts.*`. The credential is sealed at rest and never read back.
+- [iOS] A token refresh that is slow to answer no longer logs the device out. The app waits for the attempt it already made instead of asking again with the same token, which the daemon treats as a stolen one.
+- [iOS] The connection header says which credential the daemon refused, with its status code and the daemon's own reason, instead of only reporting that access was revoked. It also reports a 401 that did not come from the daemon as a connection problem rather than dropping the device's credentials for it, and says so when the daemon's clock trails the phone's, which expires tokens on arrival.
+- [iOS] A short `mobile.access_token_ttl_minutes` no longer makes the app refresh the moment it stores a token: the refresh lead is bounded by the lifetime the daemon issues.
+- [Daemon] A refused device token refresh now says why in the log: an unknown token, a device that is gone or already revoked, an expired token, or reuse. A storage failure during a refresh answers as a server error rather than as a bad token, so it no longer costs the device its credentials.
 - [Web] Copying a terminal selection no longer carries the spaces an agent paints across the rest of each row, so pasting several lines keeps its shape. Selecting past the last line of output no longer appends the blank rows below it, and a selection holding only blank space leaves the clipboard as it was. An agent's own OSC 52 copy is still written exactly as sent.
 
 ## 0.10.3 — 2026-10-14

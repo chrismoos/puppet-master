@@ -158,6 +158,9 @@ export default function App() {
     const recover = async () => {
       const baseUrl = configRef.current?.baseUrl;
       if (!baseUrl || cancelled) return;
+      // The daemon reports a refused access token by closing the socket,
+      // so this is the only place that learns of one.
+      auth.accessRefused();
       if (auth.status().kind !== "enrolled") {
         setLegacyRejected(true);
         return;
@@ -223,6 +226,14 @@ export default function App() {
   const authStatus = useSyncExternalStore(
     auth?.subscribe ?? (() => () => {}),
     auth?.status ?? (() => UNENROLLED),
+  );
+  const authFailure = useSyncExternalStore(
+    auth?.subscribe ?? (() => () => {}),
+    auth?.lastFailure ?? (() => null),
+  );
+  const clockDisagreementMs = useSyncExternalStore(
+    auth?.subscribe ?? (() => () => {}),
+    auth?.clockDisagreement ?? (() => 0),
   );
   const connPhase = useSyncExternalStore(client.subscribe, () => client.getState().conn);
 
@@ -362,6 +373,8 @@ export default function App() {
   const banner = connectionBanner(connPhase, authStatus, {
     hasLegacySession: Boolean(config?.sessionToken),
     legacyRejected,
+    failure: authFailure,
+    clockDisagreementMs,
   });
 
   // Persisting the controller config and leaving the screen you are on are

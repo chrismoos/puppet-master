@@ -24,6 +24,14 @@ export class AuthHttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * Whether the daemon itself refused the request. It names every
+     * refusal in a JSON `error` field, so a bare status came from
+     * something between the app and it: a proxy, a gateway, or a
+     * network that answers for one. Those are not the daemon's verdict
+     * on a credential.
+     */
+    readonly fromDaemon = true,
   ) {
     super(message);
     this.name = "AuthHttpError";
@@ -104,11 +112,11 @@ async function postJson(
 
 function failUnlessOk(status: number, payload: unknown): void {
   if (status >= 200 && status < 300) return;
-  const detail =
+  const named =
     payload && typeof payload === "object" && typeof (payload as { error?: unknown }).error === "string"
       ? (payload as { error: string }).error
-      : `request failed (${status})`;
-  throw new AuthHttpError(status, detail);
+      : null;
+  throw new AuthHttpError(status, named ?? `request failed (${status})`, named !== null);
 }
 
 function field(payload: unknown, key: string): unknown {

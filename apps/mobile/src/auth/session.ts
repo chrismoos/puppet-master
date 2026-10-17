@@ -28,18 +28,41 @@ const ACCESS_EXPIRY_SLACK_MS = 30_000;
 /** Proactive refresh fires this long before expiry so an open never waits. */
 const PROACTIVE_REFRESH_SLACK_MS = 60_000;
 
-/** A suspended or dead refresh request surfaces as a network error
- * after this many milliseconds so the stored tokens stay valid. */
+/**
+ * The most of a token's life either lead may claim. A daemon configured
+ * with a short access lifetime would otherwise hand out tokens that are
+ * already inside a fixed lead, so the app would refresh the moment it
+ * stored one and rotate without pause.
+ */
+const LEAD_SHARE_OF_LIFETIME = 4;
+
+/** How long a caller waits for a refresh before it gives up. The request
+ * itself is left to finish: the daemon accepts a refresh token once and
+ * tolerates a single repeat, so handing it the same token again while the
+ * first attempt is still outstanding is what costs the device its
+ * credentials. */
 const REFRESH_TIMEOUT_MS = 15_000;
 
 const DEVICE_ID_BYTES = 16;
+
+/** Which credential the daemon refused, which is what decides the fix. */
+export type AuthStep = "refresh" | "access";
+
+/** One refusal, kept so the user is told which credential failed and
+ * what the daemon answered rather than only that something is wrong. */
+export interface AuthFailure {
+  step: AuthStep;
+  /** The HTTP status, or 0 when the request never got an answer. */
+  status: number;
+  reason: string;
+}
 
 export type DeviceAuthStatus =
   | { kind: "unenrolled" }
   | { kind: "enrolled" }
   /** The daemon definitively refused the refresh token: the device was
    * revoked or the token family expired, so the user must re-enroll. */
-  | { kind: "rejected"; reason: string };
+  | { kind: "rejected"; reason: string; status: number; step: AuthStep };
 
 /** Raised when authentication cannot recover without re-enrolling. */
 export class AuthRejectedError extends Error {
@@ -74,6 +97,9 @@ export class DeviceAuthSession {
   private statusValue: DeviceAuthStatus;
   private listeners = new Set<() => void>();
   private refreshInFlight: Promise<MobileTokens> | null = null;
+  private failure: AuthFailure | null = null;
+  private accessLifetimeMs = 0;
+  private clockDisagreementMs = 0;
   private refreshTimeoutMs: number;
   private proactiveTimer: ReturnType<typeof setTimeout> | null = null;
   private proactiveBaseUrl: string | null = null;
@@ -91,6 +117,32 @@ export class DeviceAuthSession {
   }
 
   status = (): DeviceAuthStatus => this.statusValue;
+
+  /** The most recent refusal, kept after a failure the device can still
+   * recover from so the connection header can say what went wrong. */
+  lastFailure = (): AuthFailure | null => this.failure;
+
+  /**
+   * How far the daemon's clock is behind this device's, measured from an
+   * access token that was already expiring when it arrived. Zero when
+   * the two agree. A disagreement makes every token look spent on
+   * arrival, so the app refreshes without pause and nothing else it
+   * reports makes sense until it is fixed.
+   */
+  clockDisagreement = (): number => this.clockDisagreementMs;
+
+  /**
+   * Records that the daemon refused the access token this device holds,
+   * which it reports by closing a socket rather than by answering a
+   * request.
+   */
+  accessRefused(): void {
+    this.noteFailure({
+      step: "access",
+      status: 401,
+      reason: "the daemon refused this device's access token",
+    });
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -153,7 +205,7 @@ export class DeviceAuthSession {
   async freshAccessToken(baseUrl: string): Promise<string> {
     const token = this.accessToken();
     const expiresAt = Number(this.storage.getItem(AUTH_KEYS.accessExpiresAt) ?? "0");
-    if (token && this.now() < expiresAt - ACCESS_EXPIRY_SLACK_MS) return token;
+    if (token && this.now() < expiresAt - this.lead(ACCESS_EXPIRY_SLACK_MS)) return token;
     const rotated = await this.refresh(baseUrl);
     return rotated.accessToken;
   }
@@ -181,7 +233,7 @@ export class DeviceAuthSession {
     if (!baseUrl) return;
     const expiresAt = Number(this.storage.getItem(AUTH_KEYS.accessExpiresAt) ?? "0");
     if (expiresAt === 0) return;
-    const refreshAt = expiresAt - PROACTIVE_REFRESH_SLACK_MS;
+    const refreshAt = expiresAt - this.lead(PROACTIVE_REFRESH_SLACK_MS);
     const delay = Math.max(0, refreshAt - this.now());
     this.proactiveTimer = setTimeout(() => {
       this.proactiveTimer = null;
@@ -215,15 +267,34 @@ export class DeviceAuthSession {
     }
   }
 
-  /** Rotates the refresh token now; used when the daemon reported the
-   * current access token invalid. Single-flight across callers. */
+  /**
+   * Rotates the refresh token now; used when the daemon reported the
+   * current access token invalid. One rotation is outstanding at a time,
+   * and a caller that stops waiting joins that one instead of starting
+   * another: a second presentation of a token the daemon is already
+   * rotating spends the one repeat it tolerates, and the next revokes
+   * the device.
+   */
   refresh(baseUrl: string): Promise<MobileTokens> {
-    if (this.refreshInFlight) return this.refreshInFlight;
-    const flight = this.rotate(baseUrl).finally(() => {
-      this.refreshInFlight = null;
+    if (!this.refreshInFlight) {
+      const rotating = this.rotate(baseUrl);
+      this.refreshInFlight = rotating;
+      void rotating
+        .catch(() => {})
+        .finally(() => {
+          if (this.refreshInFlight === rotating) this.refreshInFlight = null;
+        });
+    }
+    return withTimeout(this.refreshInFlight, this.refreshTimeoutMs).catch((err: unknown) => {
+      if (err instanceof RefreshTimeout) {
+        this.noteFailure({
+          step: "refresh",
+          status: 0,
+          reason: `the daemon did not answer within ${Math.round(this.refreshTimeoutMs / 1000)}s`,
+        });
+      }
+      throw err;
     });
-    this.refreshInFlight = flight;
-    return flight;
   }
 
   private async rotate(baseUrl: string): Promise<MobileTokens> {
@@ -234,22 +305,38 @@ export class DeviceAuthSession {
     let tokens: MobileTokens;
     let refreshedDeviceId: string | null = null;
     try {
-      const abort = new AbortController();
-      const refreshed = await withTimeout(
-        refreshTokens(baseUrl, refreshToken, this.fetchImpl, abort.signal),
-        this.refreshTimeoutMs,
-        abort,
-      );
+      const refreshed = await refreshTokens(baseUrl, refreshToken, this.fetchImpl);
       tokens = refreshed.tokens;
       refreshedDeviceId = refreshed.deviceId;
     } catch (err) {
-      if (err instanceof AuthHttpError && err.status === 401) {
+      // Only the daemon's own refusal is a verdict on this device. A 401
+      // from a proxy, a gateway or a network standing in for one says
+      // nothing about the credential, and dropping it on one of those
+      // makes the user enroll again for a stranger's answer.
+      if (err instanceof AuthHttpError && err.status === 401 && err.fromDaemon) {
         this.clearTokens();
-        this.setStatus({ kind: "rejected", reason: err.message });
+        // Set before the status, which is the one notification listeners
+        // need: the banner reads both.
+        this.failure = { step: "refresh", status: err.status, reason: err.message };
+        this.setStatus({
+          kind: "rejected",
+          reason: err.message,
+          status: err.status,
+          step: "refresh",
+        });
         throw new AuthRejectedError(err.message);
       }
-      // Network, server, or timeout failure: the stored tokens stay
-      // valid, the caller may retry later.
+      if (err instanceof AuthHttpError) {
+        this.noteFailure({ step: "refresh", status: err.status, reason: err.message });
+      } else {
+        this.noteFailure({
+          step: "refresh",
+          status: 0,
+          reason: err instanceof Error ? err.message : "the refresh failed",
+        });
+      }
+      // Network or server failure: the stored tokens stay valid and the
+      // daemon has not rotated them, so the caller may retry later.
       throw err;
     }
     this.storeTokens(tokens);
@@ -279,6 +366,16 @@ export class DeviceAuthSession {
     this.storage.setItem(AUTH_KEYS.refreshExpiresAt, String(tokens.refreshTokenExpiresAtUnixMs));
     this.storage.setItem(AUTH_KEYS.accessToken, tokens.accessToken);
     this.storage.setItem(AUTH_KEYS.accessExpiresAt, String(tokens.accessTokenExpiresAtUnixMs));
+    // An access token that is already inside the expiry slack when it
+    // arrives cannot have come from a clock this device agrees with, and
+    // the app would refresh again at once, rotating without pause.
+    this.accessLifetimeMs = Math.max(0, tokens.accessTokenExpiresAtUnixMs - this.now());
+    const short = this.now() - (tokens.accessTokenExpiresAtUnixMs - this.lead(ACCESS_EXPIRY_SLACK_MS));
+    const disagreement = short > 0 ? short : 0;
+    const changed = disagreement !== this.clockDisagreementMs || this.failure !== null;
+    this.clockDisagreementMs = disagreement;
+    this.failure = null;
+    if (changed) this.notify();
     // Reschedule proactive refresh with the new expiry.
     if (this.proactiveBaseUrl) this.scheduleProactiveRefresh();
   }
@@ -296,6 +393,22 @@ export class DeviceAuthSession {
     this.storage.setItem(AUTH_KEYS.refreshExpiresAt, "");
   }
 
+  private noteFailure(failure: AuthFailure | null): void {
+    const was = this.failure;
+    if (
+      was === failure ||
+      (was &&
+        failure &&
+        was.step === failure.step &&
+        was.status === failure.status &&
+        was.reason === failure.reason)
+    ) {
+      return;
+    }
+    this.failure = failure;
+    this.notify();
+  }
+
   private setStatus(status: DeviceAuthStatus): void {
     if (
       status.kind === this.statusValue.kind &&
@@ -305,16 +418,32 @@ export class DeviceAuthSession {
       return;
     }
     this.statusValue = status;
+    this.notify();
+  }
+
+  /// Bounded by the lifetime the daemon actually issues, which is a
+  /// setting and can be shorter than the lead this would otherwise take.
+  private lead(preferredMs: number): number {
+    if (this.accessLifetimeMs <= 0) return preferredMs;
+    return Math.min(preferredMs, Math.floor(this.accessLifetimeMs / LEAD_SHARE_OF_LIFETIME));
+  }
+
+  private notify(): void {
     for (const listener of this.listeners) listener();
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, abort?: AbortController): Promise<T> {
+/** The caller gave up waiting; the request itself is still outstanding. */
+class RefreshTimeout extends Error {
+  constructor() {
+    super("refresh request timed out");
+    this.name = "RefreshTimeout";
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      abort?.abort();
-      reject(new Error("refresh request timed out"));
-    }, ms);
+    const timer = setTimeout(() => reject(new RefreshTimeout()), ms);
     promise.then(
       (v) => {
         clearTimeout(timer);

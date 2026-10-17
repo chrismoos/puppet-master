@@ -226,10 +226,120 @@ describe("DeviceAuthSession", () => {
       name: "AuthRejectedError",
       message: "invalid or expired token",
     });
-    expect(session.status()).toEqual({ kind: "rejected", reason: "invalid or expired token" });
+    expect(session.status()).toEqual({
+      kind: "rejected",
+      reason: "invalid or expired token",
+      status: 401,
+      step: "refresh",
+    });
     expect(notified).toBe(1);
     expect(session.accessToken()).toBeNull();
     expect(storage.getItem(AUTH_KEYS.refreshToken)).toBe("");
+  });
+
+  /**
+   * A proxy, a gateway or a captive portal can answer 401 for the daemon,
+   * and it is not the daemon's verdict on this device. Dropping the
+   * credentials on one makes the user enroll again because something in
+   * the way said no.
+   */
+  it("keeps the device enrolled when a 401 did not come from the daemon", async () => {
+    const storage = memoryStorage();
+    storage.setItem(AUTH_KEYS.accessToken, "acc-old");
+    storage.setItem(AUTH_KEYS.refreshToken, "ref-live");
+    const fetchImpl: JsonFetchLike = () =>
+      Promise.resolve(jsonResponse(401, { message: "Unauthorized" }));
+    const session = new DeviceAuthSession(storage, fetchImpl, () => 0);
+
+    await expect(session.refresh("https://pm.example")).rejects.toMatchObject({
+      name: "AuthHttpError",
+      status: 401,
+    });
+    expect(session.status().kind).toBe("enrolled");
+    expect(storage.getItem(AUTH_KEYS.refreshToken)).toBe("ref-live");
+  });
+
+  /// A refusal the device can recover from still has to be reportable:
+  /// which credential, what the daemon answered, and its status.
+  it("keeps the last refusal with its status", async () => {
+    const storage = memoryStorage();
+    storage.setItem(AUTH_KEYS.refreshToken, "ref-live");
+    const fetchImpl: JsonFetchLike = () =>
+      Promise.resolve(jsonResponse(500, { error: "internal auth error" }));
+    const session = new DeviceAuthSession(storage, fetchImpl, () => 0);
+
+    await expect(session.refresh("https://pm.example")).rejects.toThrow(/internal auth error/);
+    expect(session.lastFailure()).toEqual({
+      step: "refresh",
+      status: 500,
+      reason: "internal auth error",
+    });
+    expect(session.status().kind).toBe("enrolled");
+  });
+
+  it("reports a refresh that never answered without a status", async () => {
+    const storage = memoryStorage();
+    storage.setItem(AUTH_KEYS.refreshToken, "ref-live");
+    const fetchImpl: JsonFetchLike = () => new Promise(() => {});
+    const session = new DeviceAuthSession(storage, fetchImpl, Date.now, 1);
+
+    await expect(session.refresh("https://pm.example")).rejects.toThrow(/timed out/);
+    expect(session.lastFailure()).toMatchObject({ step: "refresh", status: 0 });
+  });
+
+  it("reports the daemon refusing the access token on a socket", () => {
+    const storage = memoryStorage();
+    const session = new DeviceAuthSession(storage, () => Promise.reject(new Error("no fetch")));
+    let notified = 0;
+    session.subscribe(() => {
+      notified += 1;
+    });
+    session.accessRefused();
+    expect(session.lastFailure()).toMatchObject({ step: "access", status: 401 });
+    expect(notified).toBe(1);
+  });
+
+  /**
+   * An access token inside the expiry slack on arrival cannot have come
+   * from a clock this device agrees with. Without measuring it the app
+   * refreshes without pause and reports the symptom instead of the cause.
+   */
+  it("measures a daemon clock that trails this device", async () => {
+    const storage = memoryStorage();
+    storage.setItem(AUTH_KEYS.refreshToken, "ref-live");
+    // The daemon says the token expires at 900s, a quarter hour of life.
+    const fetchImpl: JsonFetchLike = () =>
+      Promise.resolve(jsonResponse(200, tokensPayload("new", 900_000, 90_000_000)));
+
+    const agreeing = new DeviceAuthSession(storage, fetchImpl, () => 0);
+    await agreeing.refresh("https://pm.example");
+    expect(agreeing.clockDisagreement()).toBe(0);
+
+    // This device reads 1000s, so the token it was just handed expired
+    // a hundred seconds ago by its own clock.
+    const skewed = new DeviceAuthSession(storage, fetchImpl, () => 1_000_000);
+    await skewed.refresh("https://pm.example");
+    expect(skewed.clockDisagreement()).toBe(130_000);
+  });
+
+  it("forgets a refusal once a refresh succeeds", async () => {
+    const storage = memoryStorage();
+    storage.setItem(AUTH_KEYS.refreshToken, "ref-live");
+    let answers = 0;
+    const fetchImpl: JsonFetchLike = () => {
+      answers += 1;
+      return Promise.resolve(
+        answers === 1
+          ? jsonResponse(500, { error: "internal auth error" })
+          : jsonResponse(200, tokensPayload("new")),
+      );
+    };
+    const session = new DeviceAuthSession(storage, fetchImpl, () => 0);
+
+    await expect(session.refresh("https://pm.example")).rejects.toThrow();
+    expect(session.lastFailure()).not.toBeNull();
+    await session.refresh("https://pm.example");
+    expect(session.lastFailure()).toBeNull();
   });
 
   it("keeps tokens and enrolled status through a network refresh failure", async () => {
@@ -344,6 +454,56 @@ describe("DeviceAuthSession", () => {
     expect(storage.getItem(AUTH_KEYS.refreshToken)).toBe("ref-live");
   });
 
+  /**
+   * The daemon accepts a refresh token once and tolerates one repeat. A
+   * client that gave up waiting and presented it again would spend that
+   * repeat, and the attempt after it revokes the device, which reads out
+   * as being logged out with the token reported invalid.
+   */
+  it("does not present the same refresh token again while an attempt is outstanding", async () => {
+    const storage = memoryStorage();
+    storage.setItem(AUTH_KEYS.refreshToken, "ref-live");
+    let presentations = 0;
+    let answer: (() => void) | null = null;
+    const fetchImpl: JsonFetchLike = () => {
+      presentations += 1;
+      return new Promise((resolve) => {
+        answer = () => resolve(jsonResponse(200, tokensPayload("new")));
+      });
+    };
+    const session = new DeviceAuthSession(storage, fetchImpl, Date.now, 1);
+
+    await expect(session.refresh("https://pm.example")).rejects.toThrow(/timed out/);
+    await expect(session.refresh("https://pm.example")).rejects.toThrow(/timed out/);
+    expect(presentations).toBe(1);
+
+    answer?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(storage.getItem(AUTH_KEYS.refreshToken)).toBe("ref-new");
+    expect(presentations).toBe(1);
+  });
+
+  /// Giving up waiting is not giving up on the answer: the pair a slow
+  /// rotation returns is the only one the daemon will still accept.
+  it("keeps the pair a refresh returns after the caller stopped waiting", async () => {
+    const storage = memoryStorage();
+    storage.setItem(AUTH_KEYS.refreshToken, "ref-live");
+    let answer: (() => void) | null = null;
+    const fetchImpl: JsonFetchLike = () =>
+      new Promise((resolve) => {
+        answer = () => resolve(jsonResponse(200, tokensPayload("late")));
+      });
+    const session = new DeviceAuthSession(storage, fetchImpl, Date.now, 1);
+
+    await expect(session.refresh("https://pm.example")).rejects.toThrow(/timed out/);
+    answer?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(storage.getItem(AUTH_KEYS.accessToken)).toBe("acc-late");
+    expect(session.accessToken()).toBe("acc-late");
+    expect(session.status().kind).toBe("enrolled");
+  });
+
   it("writes refresh token before access token when storing rotated tokens", async () => {
     const writes: string[] = [];
     const map = new Map<string, string>();
@@ -434,10 +594,50 @@ describe("proactive token refresh", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(refreshCount).toBe(1);
 
-    // After refresh, new expiry is 60_000 + 120_000 = 180_000
-    // Next proactive at 180_000 - 60_000 = 120_000, which is 60_000 from now
-    now = 120_000;
-    await vi.advanceTimersByTimeAsync(60_000);
+    // After refresh, new expiry is 60_000 + 120_000 = 180_000. The lead
+    // is a quarter of the lifetime the daemon issued, so the next one is
+    // at 180_000 - 30_000, which is 90_000 from now.
+    now = 150_000;
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(refreshCount).toBe(2);
+
+    session.stopProactiveRefresh();
+  });
+
+  /**
+   * The lead is bounded by the lifetime the daemon issues, which is a
+   * setting. A lifetime shorter than a fixed lead would put every token
+   * inside it on arrival, and the app would refresh the moment it stored
+   * one, rotating its refresh token without pause.
+   */
+  it("does not refresh at once when the daemon issues a short-lived token", async () => {
+    const storage = memoryStorage();
+    let now = 0;
+    storage.setItem(AUTH_KEYS.refreshToken, "ref");
+    let refreshCount = 0;
+    const fetchImpl: JsonFetchLike = () => {
+      refreshCount += 1;
+      return Promise.resolve(
+        jsonResponse(200, tokensPayload(`new-${refreshCount}`, now + 60_000)),
+      );
+    };
+    const session = new DeviceAuthSession(storage, fetchImpl, () => now);
+
+    await session.refresh("https://pm.example");
+    expect(refreshCount).toBe(1);
+    session.startProactiveRefresh("https://pm.example");
+
+    // A minute of life, so nothing is due for the first 45 seconds of it.
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(refreshCount).toBe(1);
+
+    // A token stored a moment ago is also still good enough to use.
+    now = 1_000;
+    await expect(session.freshAccessToken("https://pm.example")).resolves.toBe("acc-new-1");
+    expect(refreshCount).toBe(1);
+
+    now = 45_000;
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(refreshCount).toBe(2);
 
     session.stopProactiveRefresh();
