@@ -21,13 +21,13 @@ function ui(over: Partial<VoiceUi> = {}): VoiceUi {
 
 describe("where the controls sit", () => {
   it("keeps the call at the top and talking at the bottom", () => {
-    expect(headControls(ui())).toEqual(["call"]);
+    expect(headControls(ui())).toEqual(["route", "call"]);
     expect(composeControls(ui())).toEqual(["talk"]);
   });
 
-  it("puts the route beside the call, and only while on one", () => {
+  it("offers the route whether or not a call is running", () => {
     expect(headControls(ui({ inCall: true }))).toEqual(["route", "call"]);
-    expect(headControls(ui())).not.toContain("route");
+    expect(headControls(ui())).toContain("route");
   });
 
   it("drops tapping to talk during a call, which listens on its own", () => {
@@ -35,7 +35,9 @@ describe("where the controls sit", () => {
   });
 
   it("offers nothing to talk with in a build that cannot listen", () => {
-    expect(headControls(ui({ canTalk: false }))).toEqual([]);
+    // A typed question is still answered out loud, so where it comes
+    // out is the one control such a build keeps.
+    expect(headControls(ui({ canTalk: false }))).toEqual(["route"]);
     expect(composeControls(ui({ canTalk: false }))).toEqual([]);
   });
 

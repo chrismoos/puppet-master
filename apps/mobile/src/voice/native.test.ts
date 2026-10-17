@@ -6,7 +6,8 @@ vi.mock("expo-modules-core", () => ({
   },
 }));
 
-const { base64, NativeAudioSink, Dictation, dictationAvailable } = await import("./native");
+const { base64, NativeAudioSink, Dictation, dictationAvailable, releaseAudio } =
+  await import("./native");
 
 describe("base64", () => {
   // Frames are raw audio, so every byte value has to survive and the
@@ -35,6 +36,10 @@ describe("without the native module", () => {
     expect(() => new Dictation().nextUtterance()).not.toThrow();
   });
 
+  it("hands the microphone back without failing", () => {
+    expect(() => releaseAudio()).not.toThrow();
+  });
+
   it("swallows playback calls rather than crashing the panel", () => {
     const sink = new NativeAudioSink();
     expect(() => {
@@ -59,14 +64,16 @@ describe("without the native module", () => {
 function slowToPermit() {
   let grant: (allowed: boolean) => void = () => {};
   const calls: string[] = [];
+  const expected: string[][] = [];
   const native = {
     dictationAvailable: () => true,
     requestPermissions: () =>
       new Promise<boolean>((resolve) => {
         grant = resolve;
       }),
-    startListening: async () => {
+    startListening: async (inCall: boolean, vocabulary: string[]) => {
       calls.push("start");
+      expected.push(vocabulary);
     },
     stopListening: () => calls.push("stop"),
     endUtterance: () => calls.push("utterance"),
@@ -76,7 +83,7 @@ function slowToPermit() {
     stopSpeech: () => {},
     addListener: () => ({ remove: () => {} }),
   };
-  return { native, calls, grant: (allowed: boolean) => grant(allowed) };
+  return { native, calls, expected, grant: (allowed: boolean) => grant(allowed) };
 }
 
 describe("holding to talk", () => {
@@ -115,6 +122,25 @@ describe("holding to talk", () => {
     await holding;
 
     expect(calls).toContain("start");
+  });
+
+  /// The words recognition is told to expect have to reach it, or a name
+  /// it has never heard arrives as the nearest ordinary word.
+  it("hands the vocabulary to recognition", async () => {
+    const { native, expected, grant } = slowToPermit();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dictation = new Dictation(native as any);
+
+    const holding = dictation.start(
+      () => {},
+      () => {},
+      false,
+      ["iDEN", "phone 1000"],
+    );
+    grant(true);
+    await holding;
+
+    expect(expected).toEqual([["iDEN", "phone 1000"]]);
   });
 });
 

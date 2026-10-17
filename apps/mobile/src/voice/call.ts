@@ -61,9 +61,9 @@ function runs(text: string): Set<string> {
 
 /**
  * Whether an utterance is the agent's own speech coming back through the
- * microphone. On the speaker, echo cancellation leaves enough of a
- * sentence to pass for a whole turn, and acting on it asks the agent
- * about what it just said.
+ * microphone. On the speaker the microphone hears the answer being read
+ * out, and what recognition makes of it passes for a whole turn, so
+ * acting on it asks the agent about what it just said.
  *
  * Scored on short runs of characters rather than on whole words, because
  * recognition does not return speech verbatim: it mishears words, splits

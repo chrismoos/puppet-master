@@ -228,6 +228,73 @@ async fn a_question_is_answered_in_words_and_in_speech() {
     assert!(codec, "the codec is named before the frames it describes");
 }
 
+/// The voice agent's own answers are held to the same length as an
+/// agent's: a paragraph is handed back once, and the short version is
+/// what the user hears.
+#[tokio::test]
+async fn a_long_answer_from_the_voice_agent_is_asked_for_again() {
+    let env = daemon_env();
+    let paragraph = "So I went and looked at the femtocell and what I found was that the \
+                     handover logic was holding the old reference for a little too long, \
+                     which is why the second call dropped, and I have now changed it to \
+                     release that reference as soon as the new one is up, and I am running \
+                     the suite again to see whether that was the whole story.";
+    let script = Script::new(vec![
+        json!([{ "type": "text", "text": paragraph }]),
+        json!([{ "type": "text", "text": "Both lanes passed." }]),
+    ]);
+    let model = model_server(script.clone()).await;
+    configure_model(&env, &model);
+
+    let (_, sent) = turn(&env, "how did the suite go", false).await;
+
+    assert_eq!(spoken(&sent), "Both lanes passed.");
+    assert_eq!(
+        script.calls.load(Ordering::SeqCst),
+        2,
+        "the first answer was handed back once"
+    );
+    let again = &script.requests()[1];
+    let asked = again["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        asked.contains("words"),
+        "it is told what was wrong: {asked}"
+    );
+    assert!(
+        asked.contains("thirty words"),
+        "and the budget to answer within: {asked}"
+    );
+    assert!(
+        again.get("tools").is_none(),
+        "no tools on a round whose only job is to say it again: {again}"
+    );
+}
+
+/// An answer inside the budget is spoken as the model wrote it, without
+/// a second round nobody is waiting for.
+#[tokio::test]
+async fn a_short_answer_is_spoken_as_it_stands() {
+    let env = daemon_env();
+    let script = Script::new(vec![json!([
+        { "type": "text", "text": "Three sessions are working and nothing needs you." }
+    ])]);
+    let model = model_server(script.clone()).await;
+    configure_model(&env, &model);
+
+    let (_, sent) = turn(&env, "what is happening", false).await;
+
+    assert_eq!(
+        spoken(&sent),
+        "Three sessions are working and nothing needs you."
+    );
+    assert_eq!(script.calls.load(Ordering::SeqCst), 1);
+}
+
 /// The digest is what the agent knows. A session waiting on the user has
 /// to be in it, or the agent cannot answer the one question that matters
 /// most.

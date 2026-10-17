@@ -708,13 +708,17 @@ fn reply_instructions(text: &str, message_id: u64, token: &str) -> String {
 fn voice_instructions(text: &str) -> String {
     format!(
         "{text}\n\n---\nThis message came from the user by voice. Your answer is spoken to \
-         them exactly as you write it, so write speech, not writing.\n\nAt most two \
-         sentences. No code, no code blocks, no file paths, no URLs, no markdown and no \
-         lists. If the detail needs any of those, say that it does and leave it in your \
-         terminal.\n\nAnswer now rather than when the work is done. If a complete answer \
-         would take you more than a few seconds, say where you are up to instead: a short \
-         true sentence about what you are doing now is worth more to someone listening than \
-         a full answer they wait a minute for."
+         them exactly as you write it, so write speech, not writing.\n\nOne sentence, or two \
+         if the second says something the first cannot. Thirty words at the most. No code, no \
+         code blocks, no file paths, no URLs, no markdown and no lists. If the detail needs \
+         any of those, say that it does and leave it in your terminal.\n\nLead with the \
+         answer and stop there. No preamble, no repeating back what they asked, no account of \
+         what you did to find out, and no offer to do more. An answer too long to listen to \
+         is handed back to you to say again, so the short one is the one they hear.\n\nAnswer \
+         now rather than when the work is done. If a complete answer would take you more than \
+         a few seconds, say where you are up to instead: a short true sentence about what you \
+         are doing now is worth more to someone listening than a full answer they wait a \
+         minute for."
     )
 }
 

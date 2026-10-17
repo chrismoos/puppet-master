@@ -12,6 +12,7 @@ import "./VoicePanel.css";
  *
  * The controller outlives the panel, because an agent's answer can arrive
  * minutes after it was asked for and closing the panel must not lose it.
+ * Closing does stop whatever is being read out at the time.
  *
  * It hangs off the topbar as an overlay rather than taking a column in
  * the layout: it is opened for a question and dismissed, so it should
@@ -31,7 +32,16 @@ export function VoicePanel({
   const [, bump] = useState(0);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => controller.subscribe(() => bump((n) => n + 1)), [controller]);
+  useEffect(() => {
+    const stop = controller.subscribe(() => bump((n) => n + 1));
+    return () => {
+      stop();
+      // Closing the panel stops an answer being read out. The user is
+      // done listening, and speech carrying on behind a panel that is
+      // no longer there is not what closing means.
+      void controller.cancel();
+    };
+  }, [controller]);
 
   // An overlay is dismissed the way every other overlay is: Escape, or
   // a click past it. The toggle it hangs from is excluded, or opening

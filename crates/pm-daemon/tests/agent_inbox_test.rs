@@ -141,8 +141,8 @@ async fn a_user_message_records_no_sending_session() {
     for required in [
         // Its answer is spoken, as written, so it writes speech.
         "spoken",
-        // Short enough to listen to.
-        "two sentences",
+        // Short enough to listen to, in a unit it can count.
+        "thirty words at the most",
         // None of what cannot be read aloud.
         "no file paths",
         // Where it is up to beats a finished answer the user waits for.

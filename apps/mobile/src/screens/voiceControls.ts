@@ -2,10 +2,10 @@
  * The controls on the voice screen: where each one sits and what it
  * reads as.
  *
- * The call, and where its answers come out, sit beside the title,
- * because a call is the state the screen is in rather than something
- * done to a message. Talking and stopping sit beside the compose box,
- * with the keyboard and the thumbs.
+ * The call, and where answers come out, sit beside the title, because
+ * both are the state the screen is in rather than something done to a
+ * message. Talking and stopping sit beside the compose box, with the
+ * keyboard and the thumbs.
  */
 export type VoiceControl = "call" | "route" | "talk" | "stop";
 
@@ -13,15 +13,18 @@ export type VoiceUi = {
   canTalk: boolean;
   inCall: boolean;
   listening: boolean;
-  /// Where a call sends the answer, which is only askable during one.
+  /// Whether the answer comes out of the handset's own speaker.
   speaker: boolean;
   /// Whether the agent is working on a turn or reading one out.
   busy: boolean;
 };
 
 export function headControls(ui: VoiceUi): VoiceControl[] {
-  if (!ui.canTalk) return [];
-  return ui.inCall ? ["route", "call"] : ["call"];
+  // Where the answer comes out matters whenever there is one to hear,
+  // which includes a question that was typed rather than spoken.
+  const controls: VoiceControl[] = ["route"];
+  if (ui.canTalk) controls.push("call");
+  return controls;
 }
 
 export function composeControls(ui: VoiceUi): VoiceControl[] {

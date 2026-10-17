@@ -43,6 +43,7 @@ import { ApprovalsScreen } from "./src/screens/ApprovalsScreen";
 import { VoiceScreen } from "./src/screens/VoiceScreen";
 import { VoiceController } from "@puppet-master/client-core/voice/controller";
 import { NativeAudioSink } from "./src/voice/native";
+import { spokenVocabulary } from "./src/voice/vocabulary";
 import { usePendingApprovalCount } from "./src/api/pendingApprovals";
 import { SessionsScreen, type TerminalTarget } from "./src/screens/SessionsScreen";
 import { TerminalScreen } from "./src/screens/TerminalScreen";
@@ -426,7 +427,11 @@ export default function App() {
           pendingApprovals={pendingApprovals}
         />
       ) : screen.kind === "voice" ? (
-        <VoiceScreen controller={voice} onClose={() => setScreen({ kind: "sessions" })} />
+        <VoiceScreen
+          controller={voice}
+          onClose={() => setScreen({ kind: "sessions" })}
+          vocabulary={() => spokenVocabulary(client.getState().sessions.values())}
+        />
       ) : screen.kind === "approvals" && config ? (
         <ApprovalsScreen
           config={config}

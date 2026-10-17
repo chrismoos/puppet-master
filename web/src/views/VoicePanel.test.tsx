@@ -125,6 +125,44 @@ it("shows why a turn stopped badly", async () => {
   expect(host.textContent).toContain("no model profile is set for the voice agent");
 });
 
+/// Closing the panel while an answer is being read out has to silence
+/// it: the speech is already in the sink, so stopping the turn alone
+/// would leave it talking behind a panel that is gone.
+it("stops an answer being read out when the panel is closed", async () => {
+  const client = fakeClient();
+  let stopped = 0;
+  const sink = {
+    begin: () => {},
+    push: () => {},
+    end: () => {},
+    stop: () => {
+      stopped += 1;
+    },
+  };
+  const own = new VoiceController(client, sink);
+  own.start();
+  await act(async () => {
+    root.render(<VoicePanel controller={own} onClose={() => {}} />);
+  });
+  await act(async () => type("status"));
+  await act(async () => submit());
+  await act(async () => {
+    emit(
+      create(VoiceDeltaSchema, {
+        conversationId: 3n,
+        audioCodec: "pcm_s16le",
+        audioSampleRate: 24_000,
+      }),
+    );
+  });
+  const beforeClose = stopped;
+
+  await act(async () => root.unmount());
+
+  expect(stopped).toBeGreaterThan(beforeClose);
+  expect(client.voiceCancel).toHaveBeenCalledWith(3n);
+});
+
 it("does not send an empty utterance", async () => {
   const client = fakeClient();
   await act(async () => {

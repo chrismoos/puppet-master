@@ -101,13 +101,18 @@ impl ModelClient {
             ));
         }
         let url = format!("{}/v1/messages", endpoint.base_url.trim_end_matches('/'));
-        let body = json!({
+        let mut body = json!({
             "model": endpoint.model,
             "max_tokens": MAX_TOKENS,
             "system": system,
             "messages": messages,
-            "tools": tools,
         });
+        // A round with nothing left to do but answer carries no tools,
+        // and a provider is within its rights to refuse an empty list,
+        // so the field is left out rather than sent empty.
+        if !tools.as_array().is_some_and(|tools| tools.is_empty()) {
+            body["tools"] = tools.clone();
+        }
         let response = self
             .client
             .post(&url)

@@ -18,7 +18,7 @@ use super::config::{self, VoiceConfig};
 use super::digest::digest;
 use super::model::{sentences, ModelClient, ModelError};
 use super::tools::{self, VoiceState};
-use super::tts::{SpeechCache, TtsRegistry};
+use super::tts::{SpeechCache, SpeechStream, TtsRegistry};
 use crate::daemon::Daemon;
 
 /// How many tool rounds one utterance may take before the agent has to
@@ -37,14 +37,17 @@ You are Puppet Master's voice. The user is talking to you out loud, away from th
 screen, and your answer is read aloud to them.
 
 Write for the ear, never for the eye. One sentence is usually right and two is the \
-most, unless the user asks for more. Use contractions. Say numbers as words. Never say \
-a file path, a commit hash, a URL, a bracket, or a markdown character. Never read out a \
-list of more than three things: say how many there are and offer the ones that matter.
+most, thirty words at the outside, unless the user asks for more. Use contractions. Say \
+numbers as words. Never say a file path, a commit hash, a URL, a bracket, or a markdown \
+character. Never read out a list of more than three things: say how many there are and \
+offer the ones that matter.
 
 Answer the question and stop. Do not say what you just did, do not repeat the question \
-back, and do not explain how any of this works: the user asked about their work, not \
-about you. \"I asked it and it is queued\" is three facts they did not ask for where \
-\"I have asked it\" is the answer.
+back, do not explain how any of this works, and do not offer to do more: the user asked \
+about their work, not about you, and they will ask for the rest if they want it. \"I \
+asked it and it is queued\" is three facts they did not ask for where \"I have asked \
+it\" is the answer. Anything you say while a tool call is going out is a handful of \
+words, because your answer follows it.
 
 Refer to a session by what it is doing, not by its number. Refer to a board item by its \
 title. Item numbers repeat across buckets, so a number said out loud is ambiguous.
@@ -131,6 +134,13 @@ impl Default for VoiceAgent {
 }
 
 impl VoiceAgent {
+    /// An agent that renders with the given providers, for a test that
+    /// drives speech without a provider account.
+    #[cfg(test)]
+    fn with_tts(tts: TtsRegistry) -> Self {
+        Self { tts, ..Self::new() }
+    }
+
     pub fn new() -> Self {
         Self {
             conversations: Mutex::new(HashMap::new()),
@@ -312,6 +322,9 @@ impl VoiceAgent {
             if answer.trim().is_empty() {
                 answer = "I did that.".to_string();
             }
+            let answer = self
+                .shortened(&config, &system, &mut messages, answer)
+                .await;
             self.say(&config, id, &answer, wants_audio, out).await?;
         }
 
@@ -330,6 +343,56 @@ impl VoiceAgent {
             }))
             .await;
         Ok(())
+    }
+
+    /// An answer the user can listen to. The model's own words go out
+    /// as they are in the usual case: this asks it again only when what
+    /// it wrote is too long to hear or carries something that cannot be
+    /// spoken, and once only, because a long answer beats silence while
+    /// a third one is asked for.
+    async fn shortened(
+        &self,
+        config: &VoiceConfig,
+        system: &str,
+        messages: &mut Vec<Value>,
+        answer: String,
+    ) -> String {
+        let Some(reason) = super::speakable::trouble(&answer) else {
+            return answer;
+        };
+        warn!(
+            words = answer.split_whitespace().count(),
+            reason = reason.as_str(),
+            "asking the voice agent to say that in fewer words"
+        );
+        // Asked on a copy, so a round that fails leaves the
+        // conversation as it was rather than holding a question the
+        // model never answered.
+        let mut asked = messages.clone();
+        asked.push(json!({
+            "role": "user",
+            "content": super::speakable::ask_for_less(&reason),
+        }));
+        // No tools on this round: the only thing left to do is say it
+        // again in fewer words.
+        let turn = match self
+            .model
+            .turn(&config.model, system, &asked, &json!([]))
+            .await
+        {
+            Ok(turn) => turn,
+            Err(error) => {
+                warn!(%error, "could not ask the voice agent to say it again");
+                return answer;
+            }
+        };
+        let again = turn.text.trim().to_string();
+        if again.is_empty() {
+            return answer;
+        }
+        asked.push(json!({ "role": "assistant", "content": turn.content }));
+        *messages = asked;
+        again
     }
 
     /// The models the configured provider can speak with, asked of the
@@ -429,7 +492,9 @@ impl VoiceAgent {
     }
 
     /// Sends words, then the speech for them a sentence at a time, so
-    /// playback starts before the whole answer is rendered.
+    /// playback starts before the whole answer is rendered. One sentence
+    /// runs ahead of the one being sent, so the client always has
+    /// something left to play.
     async fn say(
         &self,
         config: &VoiceConfig,
@@ -455,63 +520,116 @@ impl VoiceAgent {
             return Ok(());
         };
         let provider = self.tts.get(&speech.provider)?;
-        for sentence in sentences(text) {
+        let said = sentences(text);
+        let mut ready: Option<SpeechStream> = None;
+        for (index, sentence) in said.iter().enumerate() {
+            let stream = match ready.take() {
+                Some(stream) => stream,
+                None => self.render(provider, speech, sentence).await?,
+            };
+            // The next sentence is rendered while this one is being
+            // sent, because a client that runs out of audio part way
+            // through an answer plays silence and clicks when the rest
+            // of it arrives.
+            let upcoming = async {
+                match said.get(index + 1) {
+                    Some(next) => Some(self.render(provider, speech, next).await),
+                    None => None,
+                }
+            };
+            let (sent, rendered) =
+                tokio::join!(self.forward(id, stream, sentence, speech, out), upcoming);
+            if !sent? {
+                return Ok(());
+            }
+            match rendered {
+                Some(Ok(stream)) => ready = Some(stream),
+                // What failed is the sentence the listener would have
+                // heard next, so the answer stops here rather than
+                // skipping a sentence of it.
+                Some(Err(error)) => return Err(error),
+                None => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// One sentence's speech, from the cache when it is there.
+    async fn render(
+        &self,
+        provider: &dyn super::tts::TtsProvider,
+        speech: &config::SpeechConfig,
+        sentence: &str,
+    ) -> Result<SpeechStream, VoiceError> {
+        let key = super::tts::SpeechKey {
+            provider: &speech.provider,
+            voice: &speech.voice,
+            format: &speech.format,
+            text: sentence,
+        };
+        if let Some(stream) = self.cache.as_ref().and_then(|cache| cache.get(key)) {
+            return Ok(stream);
+        }
+        Ok(provider
+            .speak(super::tts::SpeakRequest {
+                text: sentence,
+                voice: &speech.voice,
+                api_key: &speech.api_key,
+                base_url: &speech.base_url,
+                format: &speech.format,
+                model: &speech.model,
+            })
+            .await?)
+    }
+
+    /// Sends one sentence's speech on as it is rendered, and answers
+    /// whether the client is still listening.
+    async fn forward(
+        &self,
+        id: u64,
+        mut stream: SpeechStream,
+        sentence: &str,
+        speech: &config::SpeechConfig,
+        out: &mpsc::Sender<ServerMsg>,
+    ) -> Result<bool, VoiceError> {
+        let codec = stream.codec.clone();
+        let sample_rate = stream.sample_rate;
+        // Naming the codec before the first frame is what lets a
+        // client know how to play what follows.
+        let _ = out
+            .send(ServerMsg::VoiceDelta(VoiceDelta {
+                conversation_id: id,
+                audio_codec: codec.clone(),
+                audio_sample_rate: sample_rate,
+                ..VoiceDelta::default()
+            }))
+            .await;
+        let mut rendered = Vec::new();
+        while let Some(frame) = stream.frames.recv().await {
+            let frame = frame?;
+            rendered.push(frame.clone());
+            if out
+                .send(ServerMsg::VoiceDelta(VoiceDelta {
+                    conversation_id: id,
+                    audio: frame,
+                    ..VoiceDelta::default()
+                }))
+                .await
+                .is_err()
+            {
+                return Ok(false);
+            }
+        }
+        if let Some(cache) = self.cache.as_ref() {
             let key = super::tts::SpeechKey {
                 provider: &speech.provider,
                 voice: &speech.voice,
                 format: &speech.format,
-                text: &sentence,
+                text: sentence,
             };
-            let cached = self.cache.as_ref().and_then(|cache| cache.get(key));
-            let mut stream = match cached {
-                Some(stream) => stream,
-                None => {
-                    provider
-                        .speak(super::tts::SpeakRequest {
-                            text: &sentence,
-                            voice: &speech.voice,
-                            api_key: &speech.api_key,
-                            base_url: &speech.base_url,
-                            format: &speech.format,
-                            model: &speech.model,
-                        })
-                        .await?
-                }
-            };
-            let codec = stream.codec.clone();
-            let sample_rate = stream.sample_rate;
-            // Naming the codec before the first frame is what lets a
-            // client know how to play what follows.
-            let _ = out
-                .send(ServerMsg::VoiceDelta(VoiceDelta {
-                    conversation_id: id,
-                    audio_codec: codec.clone(),
-                    audio_sample_rate: sample_rate,
-                    ..VoiceDelta::default()
-                }))
-                .await;
-            let mut rendered = Vec::new();
-            while let Some(frame) = stream.frames.recv().await {
-                let frame = frame?;
-                rendered.push(frame.clone());
-                if out
-                    .send(ServerMsg::VoiceDelta(VoiceDelta {
-                        conversation_id: id,
-                        audio: frame,
-                        ..VoiceDelta::default()
-                    }))
-                    .await
-                    .is_err()
-                {
-                    // Nobody is listening any more.
-                    return Ok(());
-                }
-            }
-            if let Some(cache) = self.cache.as_ref() {
-                cache.put(key, &codec, sample_rate, rendered);
-            }
+            cache.put(key, &codec, sample_rate, rendered);
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -527,8 +645,16 @@ pub enum VoiceError {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use tokio::sync::Notify;
+
     use super::*;
     use crate::voice::model::ModelEndpoint;
+    use crate::voice::tts::{
+        frame_channel, SpeakRequest, TtsError, TtsProvider, DEFAULT_SAMPLE_RATE, PCM16_CODEC,
+    };
 
     /// No speech provider, so `say` sends the words and stops. The
     /// routing is what these tests are about, not the synthesis.
@@ -545,12 +671,77 @@ mod tests {
 
     /// Registers a conversation that is listening, as a turn would.
     fn listening(agent: &VoiceAgent, id: u64) -> mpsc::Receiver<ServerMsg> {
-        let (out, rx) = mpsc::channel(16);
+        attend(agent, id, false)
+    }
+
+    fn attend(agent: &VoiceAgent, id: u64, wants_audio: bool) -> mpsc::Receiver<ServerMsg> {
+        let (out, rx) = mpsc::channel(64);
         let mut conversations = agent.conversations.lock().unwrap();
         let conversation = conversations.entry(id).or_insert_with(Conversation::new);
         conversation.out = Some(out);
-        conversation.wants_audio = false;
+        conversation.wants_audio = wants_audio;
         rx
+    }
+
+    /// Renders with the stand-in below rather than a real account.
+    fn speaking_config() -> VoiceConfig {
+        VoiceConfig {
+            speech: Some(config::SpeechConfig {
+                provider: "lockstep".into(),
+                voice: "v".into(),
+                base_url: "http://127.0.0.1".into(),
+                api_key: String::new(),
+                format: String::new(),
+                model: String::new(),
+            }),
+            ..silent_config()
+        }
+    }
+
+    /// A provider that holds the first sentence's audio until a second
+    /// sentence has been asked for. An answer that comes out at all is
+    /// then proof the two requests overlapped, and one that renders a
+    /// sentence at a time waits here forever instead.
+    struct Lockstep {
+        asked: Arc<Mutex<Vec<String>>>,
+        second: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl TtsProvider for Lockstep {
+        fn id(&self) -> &'static str {
+            "lockstep"
+        }
+
+        fn needs_api_key(&self) -> bool {
+            false
+        }
+
+        async fn speak(&self, request: SpeakRequest<'_>) -> Result<SpeechStream, TtsError> {
+            let first = {
+                let mut asked = self.asked.lock().unwrap();
+                asked.push(request.text.to_string());
+                asked.len() == 1
+            };
+            let (frames_out, frames) = frame_channel();
+            let second = Arc::clone(&self.second);
+            tokio::spawn(async move {
+                if first {
+                    second.notified().await;
+                }
+                let _ = frames_out.send(Ok(Bytes::from_static(&[0, 0]))).await;
+            });
+            if !first {
+                // A permit is stored, so the wait above is released
+                // whether or not it has started yet.
+                self.second.notify_one();
+            }
+            Ok(SpeechStream {
+                codec: PCM16_CODEC.to_string(),
+                sample_rate: DEFAULT_SAMPLE_RATE,
+                frames,
+            })
+        }
     }
 
     /// The agent's words reach the speaker unchanged. By the time a
@@ -606,6 +797,41 @@ mod tests {
             agent.take_awaited(42).is_none(),
             "a replayed answer is not spoken twice"
         );
+    }
+
+    /// A client that runs out of audio part way through an answer plays
+    /// silence and clicks when the rest arrives, so the sentence after
+    /// the one being sent is already being rendered.
+    #[tokio::test]
+    async fn the_next_sentence_is_rendered_while_the_current_one_is_sent() {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let second = Arc::new(Notify::new());
+        let mut providers = TtsRegistry::empty();
+        providers.register(Box::new(Lockstep {
+            asked: Arc::clone(&asked),
+            second: Arc::clone(&second),
+        }));
+        let agent = VoiceAgent::with_tts(providers);
+        let mut rx = attend(&agent, 7, true);
+
+        let spoke = tokio::time::timeout(
+            Duration::from_secs(10),
+            agent.deliver_agent_reply(7, "One thing. Another thing.", &speaking_config()),
+        )
+        .await
+        .expect("the second sentence is asked for before the first is sent");
+
+        assert!(spoke);
+        assert_eq!(
+            asked.lock().unwrap().len(),
+            2,
+            "both sentences were rendered"
+        );
+        let mut frames = 0;
+        while let Ok(ServerMsg::VoiceDelta(delta)) = rx.try_recv() {
+            frames += usize::from(!delta.audio.is_empty());
+        }
+        assert_eq!(frames, 2, "both sentences reached the client");
     }
 
     /// Asking the agent to say it again waits on the new message for

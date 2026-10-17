@@ -24,10 +24,11 @@ interface TranscriptEvent {
 interface VoiceNativeModule {
   dictationAvailable(): boolean;
   requestPermissions(): Promise<boolean>;
-  startListening(inCall: boolean): Promise<void>;
+  startListening(inCall: boolean, vocabulary: string[]): Promise<void>;
   stopListening(): void;
   endUtterance(): void;
   prepareSpeech(): void;
+  releaseAudio(): void;
   setOutputToSpeaker(on: boolean): void;
   audioRoute(): string;
   beginSpeech(codec: string, sampleRate: number): void;
@@ -71,6 +72,20 @@ export function prepareSpeech(): void {
     voiceModule()?.prepareSpeech();
   } catch {
     // Nothing readied. The first answer starts it instead.
+  }
+}
+
+/**
+ * Hands the microphone and the audio session back, which is what turns
+ * the system's microphone indicator off. The next answer takes them
+ * again, so this is for the moments when nothing is listening and
+ * nothing is being read out.
+ */
+export function releaseAudio(): void {
+  try {
+    voiceModule()?.releaseAudio();
+  } catch {
+    // Nothing held, or nothing to hand back.
   }
 }
 
@@ -166,13 +181,19 @@ export class Dictation {
   }
 
   /**
-   * Holds the microphone open. In a call the speaker is live at the same
-   * time, so the native side keeps echo cancellation on for it.
+   * Holds the microphone open. A call also keeps the speaker live, and
+   * what it hears of its own answer is dropped by the turn rules rather
+   * than by the audio path.
+   *
+   * The vocabulary is phrases recognition weighs more heavily, which is
+   * what keeps a name it has never heard from arriving as the nearest
+   * ordinary word.
    */
   async start(
     onTranscript: (text: string, isFinal: boolean) => void,
     onError: (message: string) => void,
     inCall = false,
+    vocabulary: string[] = [],
   ): Promise<void> {
     const native = this.native;
     if (!native) {
@@ -199,7 +220,7 @@ export class Dictation {
       ),
     );
     try {
-      await native.startListening(inCall);
+      await native.startListening(inCall, vocabulary);
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
       this.stop();

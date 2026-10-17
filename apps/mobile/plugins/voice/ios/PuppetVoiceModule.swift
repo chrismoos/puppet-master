@@ -87,126 +87,6 @@ private enum VoiceSession {
     }
 }
 
-/// The one audio engine, used for both the microphone and the speaker.
-///
-/// Apple's echo canceller lives in an engine's voice-processing unit and
-/// cancels only what that engine plays, so recording on one engine while
-/// speaking on another leaves it nothing to cancel against and a call on
-/// the speaker hears its own answer back.
-///
-/// One engine at a time, but not one for the life of the process:
-/// switching the canceller means building another engine. Voice
-/// processing cannot be switched on a unit that has already been
-/// initialized — `setVoiceProcessingEnabled` answers
-/// `kAudioUnitErr_Initialized`, -10849 — and nothing un-initializes
-/// one. `stop()` leaves the unit initialized, and `prepare()` and
-/// `start()` are what initialize it, so readying playback when the voice
-/// screen opens is on its own enough to make every later switch throw.
-/// A graph that toggles in place is one whose canceller silently never
-/// comes on. So each toggle builds an engine, sets the flag on it before
-/// anything prepares it, and leaves whoever holds a node on the old one
-/// to attach to the new one.
-private final class VoiceGraph {
-    static let shared = VoiceGraph()
-
-    /// The engine in use and the toggle that produced it. Written when
-    /// the canceller is switched, which runs on the module's async
-    /// queue, and read by playback on the JavaScript thread, so both are
-    /// held under the lock and handed out together.
-    private var live = AVAudioEngine()
-    private var gen = 0
-    /// Set when the engine's graph is torn down under us, which a
-    /// session change, a route change and the canceller being switched
-    /// all do. Written from the notification's own thread, so it is read
-    /// and written under the lock.
-    private var stale = false
-    private let flag = NSLock()
-    private var watch: NSObjectProtocol?
-
-    private init() {
-        observe()
-    }
-
-    deinit {
-        if let watch {
-            NotificationCenter.default.removeObserver(watch)
-        }
-    }
-
-    /// The engine to use, with the generation it belongs to. Read as one
-    /// value, because a toggle replaces both and a caller that read them
-    /// apart could attach a node to one engine and record the other.
-    func current() -> (engine: AVAudioEngine, generation: Int) {
-        flag.lock()
-        defer { flag.unlock() }
-        return (live, gen)
-    }
-
-    func markStale() {
-        flag.lock()
-        stale = true
-        flag.unlock()
-    }
-
-    func takeStale() -> Bool {
-        flag.lock()
-        let was = stale
-        stale = false
-        flag.unlock()
-        return was
-    }
-
-    /// Watches the engine in use. The notification is registered against
-    /// one engine object, so a replacement would otherwise leave the
-    /// registration listening to an engine nobody plays through.
-    private func observe() {
-        if let watch {
-            NotificationCenter.default.removeObserver(watch)
-        }
-        watch = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: current().engine,
-            queue: nil
-        ) { [weak self] _ in
-            self?.markStale()
-        }
-    }
-
-    /// Turns the echo canceller on or off, by building the engine it
-    /// applies to. The switch is only accepted before anything prepares
-    /// or starts the engine, so it is made on an engine nothing has
-    /// touched yet and that engine becomes the one in use.
-    func canceller(_ on: Bool) {
-        let old = current().engine
-        guard old.inputNode.isVoiceProcessingEnabled != on else { return }
-        if old.isRunning {
-            old.stop()
-        }
-        let next = AVAudioEngine()
-        do {
-            if next.inputNode.isVoiceProcessingEnabled != on {
-                try next.inputNode.setVoiceProcessingEnabled(on)
-            }
-            if next.outputNode.isVoiceProcessingEnabled != on {
-                try next.outputNode.setVoiceProcessingEnabled(on)
-            }
-        } catch {
-            // Left as it was, on the engine already in use. The
-            // canceller is an improvement on what the microphone hears,
-            // not a requirement for hearing it.
-            return
-        }
-        flag.lock()
-        live = next
-        gen += 1
-        // Everything connected to the engine just replaced has to be
-        // built again on this one.
-        stale = true
-        flag.unlock()
-        observe()
-    }
-}
-
 /// Int16.min is one step further from zero than Int16.max, so dividing by
 /// the maximum puts the quietest-possible sample past full scale.
 private let int16FullScale: Float = 32768
@@ -232,8 +112,13 @@ public class PuppetVoiceModule: Module {
 
         /// Listens until `stopListening`, reporting the transcript as it
         /// firms up. The final one arrives with `isFinal` set.
-        AsyncFunction("startListening") { (inCall: Bool) in
-            try self.recognizer.start(inCall: inCall) { [weak self] text, isFinal in
+        ///
+        /// The vocabulary is phrases to weigh more heavily, which is how
+        /// a name recognition has never heard is not heard as the
+        /// nearest ordinary word.
+        AsyncFunction("startListening") { (inCall: Bool, vocabulary: [String]) in
+            try self.recognizer.start(inCall: inCall, vocabulary: vocabulary) {
+                [weak self] text, isFinal in
                 self?.sendEvent("onTranscript", ["text": text, "isFinal": isFinal])
             } onError: { [weak self] message in
                 self?.sendEvent("onDictationError", ["message": message])
@@ -277,10 +162,19 @@ public class PuppetVoiceModule: Module {
             self.player.warm()
         }
 
+        /// Hands the microphone and the audio session back. An active
+        /// recording session is what lights the system's microphone
+        /// indicator, so it is given up as soon as nothing needs it
+        /// rather than held for the life of the app.
+        Function("releaseAudio") { () in
+            self.recognizer.stop()
+            self.player.release()
+        }
+
         /// Sends output to the handset's speaker, or hands the choice
         /// back to the system, which is what picks headphones or a car.
         Function("setOutputToSpeaker") { (on: Bool) in
-            VoiceSession.toSpeaker(on)
+            self.player.prefer(speaker: on)
         }
 
         /// Where output is going now, so a call can say which it is.
@@ -298,8 +192,15 @@ public class PuppetVoiceModule: Module {
 /// On-device dictation. Nothing here reaches the network: the request
 /// requires on-device recognition, so a phone that cannot do it reports
 /// unavailable rather than quietly sending audio away.
+///
+/// Its own engine, separate from playback's. Apple's echo canceller
+/// would need both on one engine, because it cancels only what its own
+/// engine plays, and routing playback through the voice-processing unit
+/// makes a call's answer tick and pump. A call's own speaker is taken
+/// off the microphone in the turn rules instead, by weighing what is
+/// heard against what is being read out.
 private final class DictationRecognizer {
-    private let graph = VoiceGraph.shared
+    private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private let recognizer = SFSpeechRecognizer(locale: Locale.current)
@@ -311,12 +212,6 @@ private final class DictationRecognizer {
     /// partial results are appended to this, so the text only grows.
     private var committed = ""
     private var restarts = 0
-    /// The engine carrying the microphone tap, or nil for a microphone
-    /// that has not been opened. Reaching for an engine's input node
-    /// without the permission to record raises inside the engine, so
-    /// nothing touches it until a tap is on, and the tap comes off the
-    /// engine it went on rather than whichever is current by then.
-    private var tappedEngine: AVAudioEngine?
     /// Which utterance a task belongs to. A task cancelled part way
     /// through still reports once more, and that report carries words
     /// that have already been sent. Recognition reports on a queue of
@@ -325,6 +220,9 @@ private final class DictationRecognizer {
     private let turn = NSLock()
     private var onTranscript: ((String, Bool) -> Void)?
     private var onError: ((String) -> Void)?
+    /// Phrases recognition weighs more heavily, carried here because
+    /// every task of an utterance is given them, not just the first.
+    private var vocabulary: [String] = []
 
     /// A recognizer that fails immediately would otherwise restart in a
     /// tight loop for as long as the button is held.
@@ -346,6 +244,7 @@ private final class DictationRecognizer {
 
     func start(
         inCall: Bool,
+        vocabulary: [String],
         onTranscript: @escaping (String, Bool) -> Void,
         onError: @escaping (String) -> Void
     ) throws {
@@ -358,25 +257,18 @@ private final class DictationRecognizer {
         }
         self.onTranscript = onTranscript
         self.onError = onError
+        self.vocabulary = vocabulary
         committed = ""
         restarts = 0
         listening = true
         let mine = beginUtterance()
 
-        // Voice chat for a call, where the speaker is live while the
-        // microphone is open, and measurement for tap to talk, whose
-        // processing-off input recognizes better.
+        // Voice chat for a call, which plays while it records, and
+        // measurement for tap to talk, whose processing-off input
+        // recognizes better.
         try VoiceSession.configure(mode: inCall ? .voiceChat : .measurement)
-        // The canceller for a call only: it takes the answer being read
-        // out back off the microphone, at some cost to recognition and
-        // to what playback sounds like through it.
-        graph.canceller(inCall)
 
-        let engine = graph.current().engine
         let input = engine.inputNode
-        // Prepared first, because the canceller changes the input format
-        // and a tap installed at the old one is refused.
-        engine.prepare()
         let format = input.outputFormat(forBus: 0)
         // Appends to whichever request is current rather than to the one
         // installed with: a finalized request is replaced while the tap
@@ -385,7 +277,7 @@ private final class DictationRecognizer {
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.request?.append(buffer)
         }
-        tappedEngine = engine
+        engine.prepare()
         try engine.start()
         listen(with: recognizer, as: mine)
     }
@@ -414,6 +306,7 @@ private final class DictationRecognizer {
         // saying a search term.
         request.taskHint = .dictation
         request.addsPunctuation = true
+        request.contextualStrings = vocabulary
         self.request = request
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self, self.listening, self.isCurrent(mine) else { return }
@@ -476,34 +369,66 @@ private final class DictationRecognizer {
         task = nil
         request?.endAudio()
         request = nil
-        // The tap goes, the engine stays: it is the same engine that
-        // plays, and an answer may still be being read out. Switching
-        // the canceller off does replace it, and playback is told to
-        // rebuild on the replacement rather than being stopped.
-        if let tapped = tappedEngine {
-            tapped.inputNode.removeTap(onBus: 0)
-            tappedEngine = nil
-            graph.canceller(false)
+        if engine.isRunning {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
         }
     }
 }
 
 /// Plays rendered speech as it arrives.
 private final class SpeechPlayer {
-    private let graph = VoiceGraph.shared
-    /// Replaced along with the engine: a node attached to one engine
-    /// cannot be attached to another, and the engine this was attached
-    /// to is thrown away whenever the canceller is switched.
-    private var node = AVAudioPlayerNode()
+    private let engine = AVAudioEngine()
+    private let node = AVAudioPlayerNode()
     private var format: AVAudioFormat?
-    /// The graph generation `node` is attached to, nil until it is
-    /// attached to anything.
-    private var attachedAt: Int?
+    private var attached = false
     /// The rate the node is connected at. A buffer scheduled at any
     /// other rate plays at that rate, so a changed one reconnects first.
     private var connected: AVAudioFormat?
     /// An odd trailing byte, because a frame can split a sample in half.
     private var partial = Data()
+    /// Where the user wants answers. Asked for again with each answer,
+    /// because the system drops an override on a route change.
+    private var wantsSpeaker = true
+    /// Set when the engine's graph is torn down under us, which a
+    /// session or route change does. Written from the notification's own
+    /// thread, so it is read and written under the lock.
+    private var needsReconnect = false
+    private let flag = NSLock()
+    private var configurationWatch: NSObjectProtocol?
+
+    init() {
+        configurationWatch = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            // A connection made before this no longer carries audio, and
+            // the engine has stopped. Reconnecting is the documented
+            // recovery, and without it every later answer is silent.
+            self?.markStale()
+        }
+    }
+
+    deinit {
+        if let configurationWatch {
+            NotificationCenter.default.removeObserver(configurationWatch)
+        }
+    }
+
+    private func markStale() {
+        flag.lock()
+        needsReconnect = true
+        flag.unlock()
+    }
+
+    private func takeStale() -> Bool {
+        flag.lock()
+        let stale = needsReconnect
+        needsReconnect = false
+        flag.unlock()
+        return stale
+    }
 
     func begin(codec: String, sampleRate: Double) {
         guard codec == pcm16Codec else { return }
@@ -518,16 +443,12 @@ private final class SpeechPlayer {
             )
         else { return }
         self.format = format
-        // A connection made before the graph went stale no longer
-        // carries audio, so reconnecting is what keeps a later answer
-        // from being silent.
-        let stale = graph.takeStale()
-        let (engine, generation) = graph.current()
-        if attachedAt != generation {
-            // Another engine. The node belongs to the one being
-            // discarded, so this takes a new node on the new engine
-            // rather than reconnecting the old one.
-            attach(to: engine, at: generation, format: format)
+        let stale = takeStale()
+        if !attached {
+            engine.attach(node)
+            engine.connect(node, to: engine.mainMixerNode, format: format)
+            connected = format
+            attached = true
         } else if stale || connected?.sampleRate != format.sampleRate {
             // Reconnecting costs about 3 dB through the mixer and does
             // not recover for the life of the process, so it is done
@@ -538,7 +459,7 @@ private final class SpeechPlayer {
             connected = format
         }
         do {
-            try VoiceSession.configure(mode: .voiceChat, toSpeaker: true)
+            try VoiceSession.configure(mode: .voiceChat, toSpeaker: wantsSpeaker)
             if !engine.isRunning {
                 try engine.start()
             }
@@ -546,16 +467,6 @@ private final class SpeechPlayer {
         } catch {
             // Nothing to play through. The text already reached the UI.
         }
-    }
-
-    /// Puts a fresh player node on an engine, connected to its mixer.
-    private func attach(to engine: AVAudioEngine, at generation: Int, format: AVAudioFormat) {
-        let fresh = AVAudioPlayerNode()
-        engine.attach(fresh)
-        engine.connect(fresh, to: engine.mainMixerNode, format: format)
-        node = fresh
-        connected = format
-        attachedAt = generation
     }
 
     func push(_ frame: Data) {
@@ -598,6 +509,13 @@ private final class SpeechPlayer {
         node.stop()
     }
 
+    /// Where the user wants answers to come out, which every answer asks
+    /// for again because the system drops an override on a route change.
+    func prefer(speaker: Bool) {
+        wantsSpeaker = speaker
+        VoiceSession.toSpeaker(speaker)
+    }
+
     /// Readies the session and the engine before there is anything to
     /// say, so the first answer does not pay for starting them.
     func warm() {
@@ -609,11 +527,13 @@ private final class SpeechPlayer {
         )
         guard let ready else { return }
         format = ready
-        let (engine, generation) = graph.current()
         do {
-            try VoiceSession.configure(mode: .voiceChat, toSpeaker: true)
-            if attachedAt != generation {
-                attach(to: engine, at: generation, format: ready)
+            try VoiceSession.configure(mode: .voiceChat, toSpeaker: wantsSpeaker)
+            if !attached {
+                engine.attach(node)
+                engine.connect(node, to: engine.mainMixerNode, format: ready)
+                connected = ready
+                attached = true
             }
             if !engine.isRunning {
                 try engine.start()
@@ -624,12 +544,9 @@ private final class SpeechPlayer {
     }
 
     /// Gives up the engine and the session, which is what stops the
-    /// recording indicator once the user leaves. Safe to leave the
-    /// microphone's tap to the recognizer, which removes it before this
-    /// runs.
+    /// recording indicator once the user leaves.
     func release() {
         stop()
-        let engine = graph.current().engine
         if engine.isRunning {
             engine.stop()
         }

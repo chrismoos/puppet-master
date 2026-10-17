@@ -15,6 +15,7 @@ import {
   audioRoute,
   dictationAvailable,
   prepareSpeech,
+  releaseAudio,
   setOutputToSpeaker,
 } from "../voice/native";
 import { CallTurns } from "../voice/call";
@@ -47,12 +48,19 @@ const SENTENCE_ENDED_MS = 1_500;
  *
  * A call keeps the microphone open instead. Utterances send themselves,
  * the answer can be talked over, and anything said while the agent is
- * working is held and sent as one turn when it finishes. The native
- * side keeps echo cancellation on for a call, because the speaker is
- * live while the microphone is listening.
+ * working is held and sent as one turn when it finishes. A call on the
+ * speaker hears its own answer, so what is heard is weighed against
+ * what is being read out and an echo of it is dropped rather than
+ * answered.
  *
  * Either way the microphone is never open without the user opening it,
- * and what it hears fills the compose box as it goes.
+ * and it is handed back, along with the audio session that lights the
+ * system's indicator, as soon as nothing is listening and no answer is
+ * coming. Closing the screen stops whatever is being read out and hands
+ * the microphone back too. What it hears fills the compose box as it
+ * goes. Answers come out
+ * of the speaker unless the user sends them to the earpiece, which
+ * holds for a typed question as much as a spoken one.
  *
  * The controller outlives this screen, because an agent's answer can
  * arrive minutes after it was asked for and leaving the screen must not
@@ -61,9 +69,13 @@ const SENTENCE_ENDED_MS = 1_500;
 export function VoiceScreen({
   controller,
   onClose,
+  vocabulary,
 }: {
   controller: VoiceController;
   onClose: () => void;
+  /// Phrases recognition weighs more heavily, read when the microphone
+  /// opens so work started since the screen did is included.
+  vocabulary?: () => string[];
 }) {
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
@@ -93,6 +105,14 @@ export function VoiceScreen({
       stop();
       dictation.stop();
       silence.cancel();
+      // Leaving the screen stops an answer being read out. The user is
+      // done listening, and speech carrying on over whatever they open
+      // next is not what closing means.
+      void controller.cancel();
+      // And hands the microphone back, which is what turns the system's
+      // indicator off: an active recording session keeps it lit however
+      // long ago the microphone was last open.
+      releaseAudio();
     };
   }, [controller, dictation, silence]);
 
@@ -104,8 +124,11 @@ export function VoiceScreen({
 
   useEffect(() => {
     // The audio path is readied while the screen opens, so the first
-    // answer is not waiting on the engine to start.
+    // answer is not waiting on the engine to start. Readying it is also
+    // what decides the route, so where answers come out is read back
+    // rather than assumed.
     prepareSpeech();
+    setSpeaker(audioRoute() === "speaker");
   }, []);
 
   const state = controller.state();
@@ -163,7 +186,13 @@ export function VoiceScreen({
     if (!callRef.current) {
       setListening(false);
       dictation.stop();
-      if (said) await send(said);
+      if (said) {
+        await send(said);
+      } else {
+        // Nothing heard, so no answer is coming and nothing needs the
+        // microphone until the user asks for it again.
+        releaseAudio();
+      }
       return;
     }
     setDraft("");
@@ -211,9 +240,10 @@ export function VoiceScreen({
           callRef.current = false;
         },
         forCall,
+        vocabulary?.() ?? [],
       );
     },
-    [dictation, silence],
+    [dictation, silence, vocabulary],
   );
 
   /// Tapping the microphone takes the floor, so an answer being read out
@@ -226,9 +256,8 @@ export function VoiceScreen({
   /// Starts a call: the microphone stays open, utterances send
   /// themselves, and the answer can be talked over.
   const startCall = useCallback(async () => {
-    // Starting a call switches the echo canceller on, which rebuilds the
-    // audio graph, so an answer still being read out stops here rather
-    // than part way through a sentence.
+    // Pressing Call takes the floor, so an answer still being read out
+    // stops rather than talking over the start of the call.
     if (state.status !== "idle") await controller.cancel();
     turns.reset();
     setInCall(true);
@@ -250,6 +279,9 @@ export function VoiceScreen({
     dictation.stop();
     turns.reset();
     await controller.cancel();
+    // Ending the call gives the microphone back rather than holding it
+    // for as long as the screen stays open.
+    releaseAudio();
   }, [controller, dictation, silence, turns]);
 
   const ui: VoiceUi = { canTalk, inCall, listening, speaker, busy: state.status !== "idle" };
