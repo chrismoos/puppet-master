@@ -14,6 +14,8 @@
 - [Web] A REST connection activates without passing a test, after a prompt saying it was not verified, because its operations come from the OpenAPI document rather than from the test. It reads as active and unverified until a test passes, and an MCP connection still waits for the test that discovers its tools.
 - [Web] The connection test offers the read operations the OpenAPI document reports, with the one that needs no arguments ready to run, instead of only the operations already classified as read by hand.
 - [Daemon] Editing a connection's OpenAPI document reimports its operations straight away, so its tools match the document it was saved with.
+- [Web] A refused connection test says what it asked the API for and what the API answered, with the status code and the start of the response, rather than one line naming the endpoint and the credentials. The daemon logs the same detail.
+- [Web] A read operation that answers tests a REST connection even when its base URL refuses, and the connection reads as tested from then on.
 
 ## 0.10.3 — 2026-10-14
 

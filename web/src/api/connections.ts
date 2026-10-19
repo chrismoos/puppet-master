@@ -101,6 +101,23 @@ export interface ConnectionCall {
   has_result?: boolean;
   error: string | null;
 }
+/** What the daemon answered when it refused a setup request. */
+export interface ConnectionRefusal {
+  attempt?: string;
+  status?: number | null;
+  body?: string | null;
+  reason?: string;
+}
+
+export class ConnectionRequestError extends Error {
+  readonly refusal?: ConnectionRefusal;
+  constructor(message: string, refusal?: ConnectionRefusal) {
+    super(message);
+    this.name = "ConnectionRequestError";
+    this.refusal = refusal;
+  }
+}
+
 export async function connectionRequest<T>(
   path: string,
   body?: unknown,
@@ -118,8 +135,9 @@ export async function connectionRequest<T>(
   );
   const value = await response.json();
   if (!response.ok)
-    throw new Error(
+    throw new ConnectionRequestError(
       value.error ?? `Connection request failed (${response.status})`,
+      value.detail,
     );
   return value as T;
 }

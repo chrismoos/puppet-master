@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { connectionRoutePath, type ConnectionView } from "@puppet-master/client-core/router";
 import {
   connectionRequest,
+  ConnectionRequestError,
   effectivePolicy,
   type Access,
   type Connection,
   type ConnectionCall,
   type ConnectionConfig,
+  type ConnectionRefusal,
   type Policy,
 } from "../api/connections";
 import { copyTextToClipboard } from "../clipboard";
@@ -518,6 +520,7 @@ function ConnectionPage({
   const [editingDefaults, setEditingDefaults] = useState(false);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
   const [confirmingUnverified, setConfirmingUnverified] = useState(false);
+  const [refusal, setRefusal] = useState<ConnectionRefusal>();
   const [toolQuery, setToolQuery] = useState("");
   const [toolFilter, setToolFilter] = useState<ToolFilter>("all");
   const [toolPage, setToolPage] = useState(0);
@@ -530,6 +533,7 @@ function ConnectionPage({
   const run = async (task: () => Promise<string | void>) => {
     setBusy(true);
     setError("");
+    setRefusal(undefined);
     setMessage("");
     try {
       const said = await task();
@@ -537,6 +541,7 @@ function ConnectionPage({
       refresh();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Connection update failed");
+      if (error instanceof ConnectionRequestError) setRefusal(error.refusal);
     } finally {
       setBusy(false);
     }
@@ -803,6 +808,9 @@ function ConnectionPage({
         <p className="cx-status" role="alert">
           {error}
         </p>
+      )}
+      {error && refusal?.body && (
+        <pre aria-label="What the API answered">{refusal.body}</pre>
       )}
       {message && (
         <p className="cx-status" role="status">

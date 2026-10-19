@@ -446,3 +446,22 @@ it("still holds an MCP connection until a test discovers its tools", () => {
     null,
   );
 });
+
+it("shows the status and the body the API answered when a test is refused", async () => {
+  vi.spyOn(api, "connectionRequest").mockRejectedValue(
+    new api.ConnectionRequestError(
+      "GET https://api.example.com/v1 answered 403. The API refused these credentials.",
+      {
+        attempt: "GET https://api.example.com/v1",
+        status: 403,
+        body: '{"error":"project scope missing"}',
+      },
+    ),
+  );
+  act(() => root.render(editor(rest())));
+  await act(async () => button("Test connection").click());
+  expect(host.querySelector('[role="alert"]')!.textContent).toContain("answered 403");
+  expect(
+    host.querySelector('pre[aria-label="What the API answered"]')!.textContent,
+  ).toContain("project scope missing");
+});

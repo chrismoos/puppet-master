@@ -38,11 +38,62 @@ impl std::fmt::Display for Lost {
     }
 }
 
+/// Enough of a refusal to show what the API said without holding a whole payload.
+const PROBE_EXCERPT_BYTES: usize = 2_000;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(20);
 /// Tool calls get longer than setup traffic because downstream tools such as
 /// generated answers routinely take tens of seconds, and the agent polls the
 /// call rather than holding a request open.
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// What a refused setup request answered, for the operator log and the setup view.
+#[derive(Debug)]
+pub(super) struct Refusal {
+    pub attempt: String,
+    pub status: Option<u16>,
+    pub body: Option<String>,
+    pub reason: String,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.status {
+            Some(status) => write!(f, "{} answered {}. {}", self.attempt, status, self.reason),
+            None => write!(f, "{} did not answer. {}", self.attempt, self.reason),
+        }
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// Reads the start of a response so a refusal can quote what the API said.
+async fn excerpt(mut response: reqwest::Response, credential: &Credential) -> Option<String> {
+    let mut body = Vec::new();
+    while body.len() < PROBE_EXCERPT_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    body.truncate(PROBE_EXCERPT_BYTES);
+    let text = String::from_utf8_lossy(&body).trim().to_owned();
+    if text.is_empty() {
+        return None;
+    }
+    redact(json!(text), credential)
+        .ok()?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn unreachable_endpoint(attempt: &str, error: &dyn std::fmt::Display) -> Refusal {
+    Refusal {
+        attempt: attempt.to_owned(),
+        status: None,
+        body: None,
+        reason: error.to_string(),
+    }
+}
 
 pub(super) fn headers(credential: &Credential) -> Result<reqwest::header::HeaderMap> {
     use reqwest::header::{HeaderName, HeaderValue, AUTHORIZATION};
@@ -161,31 +212,51 @@ async fn mcp_tools(
 pub(super) async fn discover(config: &Config, credential: &Credential) -> Result<Vec<Tool>> {
     if config.kind == Kind::Openapi {
         let tools = super::openapi::import(config.schema.as_ref().context("Missing schema")?)?;
+        // A GET rather than a HEAD, so a refusal carries the API's own explanation.
+        let attempt = format!("GET {}", config.endpoint);
         let response = client()?
-            .head(&config.endpoint)
+            .get(&config.endpoint)
             .headers(headers(credential)?)
             .send()
-            .await?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            || response.status() == reqwest::StatusCode::FORBIDDEN
+            .await
+            .map_err(|error| unreachable_endpoint(&attempt, &error))?;
+        let status = response.status();
+        let reason = if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
         {
-            bail!("Credentials were refused by the API");
-        }
-        if response.status().is_server_error() {
-            bail!("The API is unavailable");
-        }
-        if response.status().is_redirection() {
-            bail!("API redirected. Configure the final API endpoint");
+            Some(
+                "The API refused these credentials. An OAuth connection may need signing in again.",
+            )
+        } else if status.is_server_error() {
+            Some("The API is unavailable.")
+        } else if status.is_redirection() {
+            Some("The API redirected. Configure the final API endpoint.")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(Refusal {
+                attempt,
+                status: Some(status.as_u16()),
+                body: excerpt(response, credential).await,
+                reason: reason.into(),
+            }
+            .into());
         }
         return Ok(tools);
     }
-    let service = mcp(config, credential).await?;
+    let service = mcp(config, credential).await.map_err(|error| {
+        unreachable_endpoint(&format!("MCP initialize at {}", config.endpoint), &error)
+    })?;
     let result = tokio::time::timeout(NETWORK_TIMEOUT, mcp_tools(&service))
         .await
         .context("MCP discovery timed out")?;
     let _ = service.cancel().await;
     let mut names = std::collections::HashSet::new();
-    let mut tools = result?
+    let mut tools = result
+        .map_err(|error| {
+            unreachable_endpoint(&format!("MCP tools/list at {}", config.endpoint), &error)
+        })?
         .into_iter()
         .map(|tool| {
             if !names.insert(tool.name.to_string()) {
@@ -501,6 +572,58 @@ mod tests {
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn a_refused_rest_endpoint_reports_its_status_and_what_it_said() {
+        let endpoint = serve(axum::Router::new().route(
+            "/",
+            get(|headers: axum::http::HeaderMap| async move {
+                let sent = headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_owned();
+                (
+                    StatusCode::FORBIDDEN,
+                    json!({"error":"project scope missing","sent":sent}).to_string(),
+                )
+            }),
+        ))
+        .await;
+        let config: Config = serde_json::from_value(json!({
+            "name":"api","project_id":1,"kind":"openapi","endpoint":endpoint,
+            "schema":{"openapi":"3.1.0","paths":{"/pets":{"get":{"operationId":"list_pets"}}}},
+        }))
+        .unwrap();
+        let credential = Credential::Bearer {
+            token: "secret-token".into(),
+        };
+        let error = match discover(&config, &credential).await {
+            Ok(_) => panic!("a 403 was taken as a working endpoint"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("answered 403"), "{error}");
+        let refusal = error.downcast_ref::<Refusal>().unwrap();
+        assert_eq!(refusal.status, Some(403));
+        assert_eq!(refusal.attempt, format!("GET {endpoint}"));
+        let body = refusal.body.as_deref().unwrap();
+        assert!(body.contains("project scope missing"), "{body}");
+        assert!(body.contains("[redacted]"), "{body}");
+        assert!(!body.contains("secret-token"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_rest_endpoint_that_answers_at_all_imports_its_document() {
+        let endpoint =
+            serve(axum::Router::new().route("/", get(|| async { StatusCode::NOT_FOUND }))).await;
+        let config: Config = serde_json::from_value(json!({
+            "name":"api","project_id":1,"kind":"openapi","endpoint":endpoint,
+            "schema":{"openapi":"3.1.0","paths":{"/pets":{"get":{"operationId":"list_pets"}}}},
+        }))
+        .unwrap();
+        let tools = discover(&config, &Credential::None).await.unwrap();
+        assert_eq!(tools[0].name, "list_pets");
     }
 
     fn connection(kind: &str, endpoint: String, operation: Option<Value>) -> Connection {

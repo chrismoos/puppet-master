@@ -159,6 +159,27 @@ struct TestCall {
     arguments: Value,
 }
 
+/// What a refused setup request tells the setup view beyond its message.
+fn refusal_detail(error: &anyhow::Error) -> Value {
+    match error.downcast_ref::<super::transport::Refusal>() {
+        Some(refusal) => json!({
+            "attempt": refusal.attempt,
+            "status": refusal.status,
+            "body": refusal.body,
+            "reason": refusal.reason,
+        }),
+        None => json!({"reason": error.to_string()}),
+    }
+}
+
+fn refused(error: &anyhow::Error) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error":error.to_string(),"detail":refusal_detail(error)})),
+    )
+        .into_response()
+}
+
 async fn test(
     State(daemon): State<Arc<Daemon>>,
     headers: HeaderMap,
@@ -168,36 +189,76 @@ async fn test(
     if authed_user(&daemon, &headers).is_none() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let result = daemon.test_connection(id).await;
-    if let Ok(connection) = &result {
-        if let Some(session) = connection.created_by_session {
-            let _=daemon.send_connection_input(session,&format!("Connection {} tested successfully. Inspect get_connection and propose a tool policy for native user review. Server annotations and HTTP methods are classification suggestions only.",connection.id)).await;
-        }
-    }
-    let result=async {
-        let connection=result.map_err(|_|anyhow::anyhow!("Connection test failed. Check the endpoint and credentials. OAuth connections may need sign-in."))?;
-        let mut value=connection_view(&daemon, connection.clone())?;
-        if let Some(tool)=body.tool {
-            let lock=daemon.connection_lock(id);
-            let _guard=lock.lock().await;
-            let current=daemon.storage.connection(id)?;
-            if current.revision!=connection.revision { anyhow::bail!("Connection changed during testing"); }
-            let definition = current.tools.iter().find(|candidate| candidate.name == tool).ok_or_else(||anyhow::anyhow!("Unknown test tool"))?;
-            let access = match current.config.rules.get(&tool).map(|rule|&rule.access) {
-                Some(super::Access::Unknown) | None => &definition.suggested_access,
-                Some(access) => access,
-            };
-            if access != &super::Access::Read { anyhow::bail!("Choose a tool the schema reports as read-only, or classify it as read"); }
-            super::transport::validate_arguments(definition, &body.arguments)?;
-            let credential=daemon.fresh_connection_credential(id).await?;
-            match super::transport::execute(&current,&credential,&tool,&body.arguments).await? {
-                super::transport::Execution::Complete(result)=>{value["test_result"]=result;},
-                super::transport::Execution::Unknown(lost)=>anyhow::bail!("{lost}. The test call was not retried"),
+    let probe = daemon.test_connection(id).await;
+    match &probe {
+        Ok(connection) => {
+            if let Some(session) = connection.created_by_session {
+                let _=daemon.send_connection_input(session,&format!("Connection {} tested successfully. Inspect get_connection and propose a tool policy for native user review. Server annotations and HTTP methods are classification suggestions only.",connection.id)).await;
             }
         }
+        Err(error) => tracing::warn!(connection = id, "connection test failed: {error:#}"),
+    }
+    let Some(tool) = body.tool else {
+        return match probe {
+            Ok(connection) => connection_response(&daemon, Ok(connection)),
+            Err(error) => refused(&error),
+        };
+    };
+    let result = async {
+        let lock = daemon.connection_lock(id);
+        let _guard = lock.lock().await;
+        let current = daemon.storage.connection(id)?;
+        match &probe {
+            // A read operation is the stronger check, so a refused base URL does not
+            // veto it. An MCP connection has no catalog without a successful probe.
+            Err(error) if current.config.kind != super::Kind::Openapi => anyhow::bail!("{error}"),
+            Ok(connection) if current.revision != connection.revision => {
+                anyhow::bail!("Connection changed during testing")
+            }
+            _ => {}
+        }
+        let definition = current
+            .tools
+            .iter()
+            .find(|candidate| candidate.name == tool)
+            .ok_or_else(|| anyhow::anyhow!("Unknown test tool"))?;
+        let access = match current.config.rules.get(&tool).map(|rule| &rule.access) {
+            Some(super::Access::Unknown) | None => &definition.suggested_access,
+            Some(access) => access,
+        };
+        if access != &super::Access::Read {
+            anyhow::bail!("Choose a tool the schema reports as read-only, or classify it as read");
+        }
+        super::transport::validate_arguments(definition, &body.arguments)?;
+        let credential = daemon.fresh_connection_credential(id).await?;
+        let outcome =
+            match super::transport::execute(&current, &credential, &tool, &body.arguments).await? {
+                super::transport::Execution::Complete(result) => result,
+                super::transport::Execution::Unknown(lost) => {
+                    anyhow::bail!("{lost}. The test call was not retried")
+                }
+            };
+        // An operation that answered is a stronger test than the base URL probe.
+        if outcome["isError"] != json!(true) {
+            daemon
+                .storage
+                .record_connection_test(id, current.revision, current.tools.clone())?;
+        }
+        let mut value = connection_view(&daemon, daemon.storage.connection(id)?)?;
+        value["test_result"] = outcome;
         Ok(value)
-    }.await;
-    response(result)
+    }
+    .await;
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => {
+            tracing::warn!(
+                connection = id,
+                "connection read operation test failed: {error:#}"
+            );
+            refused(&error)
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -599,7 +660,30 @@ async fn import(
 
 #[cfg(test)]
 mod tests {
-    use super::display_endpoint;
+    use super::{display_endpoint, refusal_detail};
+
+    #[test]
+    fn a_refusal_carries_its_status_and_body_to_the_setup_view() {
+        let detail = refusal_detail(
+            &super::super::transport::Refusal {
+                attempt: "GET https://api.example.com/v1".into(),
+                status: Some(403),
+                body: Some("{\"error\":\"project scope missing\"}".into()),
+                reason: "The API refused these credentials.".into(),
+            }
+            .into(),
+        );
+        assert_eq!(detail["attempt"], "GET https://api.example.com/v1");
+        assert_eq!(detail["status"], 403);
+        assert!(detail["body"]
+            .as_str()
+            .unwrap()
+            .contains("project scope missing"));
+        assert_eq!(detail["reason"], "The API refused these credentials.");
+        let plain = refusal_detail(&anyhow::anyhow!("Connection was removed"));
+        assert_eq!(plain["reason"], "Connection was removed");
+        assert!(plain["status"].is_null());
+    }
 
     #[test]
     fn an_approval_shows_the_endpoint_without_credentials_or_query() {

@@ -11,6 +11,7 @@ import { connectionRoutePath } from "@puppet-master/client-core/router";
 import {
   blankConnection,
   connectionRequest,
+  ConnectionRequestError,
   effectivePolicy,
   listConnectionCalls,
   listConnections,
@@ -20,6 +21,7 @@ import {
   type Connection,
   type ConnectionCall,
   type ConnectionConfig,
+  type ConnectionRefusal,
   type CredentialMode,
   type Policy,
   type PolicyDraft,
@@ -344,6 +346,7 @@ export function ConnectionEditor({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [refusal, setRefusal] = useState<ConnectionRefusal>();
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const tested = Boolean(saved && saved.tested_revision === saved.revision);
@@ -399,6 +402,7 @@ export function ConnectionEditor({
   const run = async (task: () => Promise<boolean | void>) => {
     setBusy(true);
     setError("");
+    setRefusal(undefined);
     setMessage("");
     try {
       const completed = (await task()) === true;
@@ -407,6 +411,7 @@ export function ConnectionEditor({
       setError(
         error instanceof Error ? error.message : "Connection update failed",
       );
+      if (error instanceof ConnectionRequestError) setRefusal(error.refusal);
     } finally {
       setBusy(false);
     }
@@ -969,7 +974,7 @@ export function ConnectionEditor({
                     keep(result);
                     setTestResult(result.test_result);
                     setMessage(
-                      "Read tool test completed. Review its response below.",
+                      "Read operation completed. Review its response below.",
                     );
                   })
                 }
@@ -1297,6 +1302,9 @@ export function ConnectionEditor({
         <p className="cx-status form-error" role="alert">
           {error}
         </p>
+      )}
+      {error && refusal?.body && (
+        <pre aria-label="What the API answered">{refusal.body}</pre>
       )}
       {message && (
         <p className="cx-status connection-feedback" role="status">

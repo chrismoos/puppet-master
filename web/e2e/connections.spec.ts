@@ -421,3 +421,79 @@ test("an agent's update to an active connection is reviewed and applied in the s
     );
   }
 });
+
+test("a refused base URL reports what the API answered, and a read operation tests the connection in its place", async ({
+  page,
+  isolatedDaemon,
+}) => {
+  const upstream = createServer((request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    if (request.url === "/orders") {
+      response.end(JSON.stringify({ orders: [] }));
+      return;
+    }
+    // Most REST base URLs hold no resource, and some refuse one outright.
+    response.writeHead(403, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "project scope missing" }));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("Missing upstream address");
+    await logIn(page);
+    const headers = await apiHeaders(page);
+    const base = process.env.PM_E2E_BASE_URL!;
+    const cwd = isolatedDaemon.session("browser-e2e")!.cwd;
+    await writeFile(
+      join(cwd, "scoped-openapi.json"),
+      JSON.stringify({
+        openapi: "3.1.0",
+        paths: { "/orders": { get: { operationId: "list_orders", summary: "List orders" } } },
+      }),
+    );
+    const draft = JSON.parse(
+      await isolatedDaemon.callAgentTool("browser-e2e", "seed_connection", {
+        name: "Scoped API",
+        kind: "openapi",
+        endpoint: `http://127.0.0.1:${address.port}`,
+        schema_path: "scoped-openapi.json",
+      }),
+    );
+
+    const refused = await page.request.post(`${base}/api/connections/${draft.id}/test`, {
+      headers,
+      data: {},
+    });
+    expect(refused.status()).toBe(400);
+    const refusal = await refused.json();
+    expect(refusal.error).toContain("answered 403");
+    expect(refusal.detail.status).toBe(403);
+    expect(refusal.detail.body).toContain("project scope missing");
+    expect(refusal.detail.attempt).toBe(`GET http://127.0.0.1:${address.port}`);
+
+    await page.goto(`${base}/#/settings/connections/${draft.id}/setup`);
+    const setup = page.getByRole("region", { name: "Connection setup" });
+    await setup.getByRole("button", { name: "Test connection", exact: true }).click();
+    await expect(setup.getByRole("alert")).toContainText("answered 403");
+    await expect(setup.getByLabel("What the API answered")).toContainText(
+      "project scope missing",
+    );
+
+    // The operation answers, so it stands in for the probe the base URL failed.
+    await setup
+      .getByLabel("Verify credentials with a read operation")
+      .selectOption("list_orders");
+    await setup
+      .getByRole("button", { name: "Test selected read operation", exact: true })
+      .click();
+    await expect(setup.getByRole("status")).toContainText("Read operation completed");
+    const passed = await (
+      await page.request.get(`${base}/api/connections/${draft.id}`, { headers })
+    ).json();
+    expect(passed.tested_revision).toBe(passed.revision);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      upstream.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
