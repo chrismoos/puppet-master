@@ -370,3 +370,79 @@ it("lays the panel out with compact tabs, a link to the full page, and no reques
   expect(host.textContent).not.toContain("Ask the agent");
   expect(button("Activate").disabled).toBe(false);
 });
+
+const restTools: Connection["tools"] = [
+  {
+    name: "get_pet",
+    description: "",
+    input_schema: { required: ["path"] },
+    suggested_access: "read",
+    operation: { method: "GET", path: "/pets/{id}" },
+  },
+  {
+    name: "list_pets",
+    description: "",
+    input_schema: { required: [] },
+    suggested_access: "read",
+    operation: { method: "GET", path: "/pets" },
+  },
+  {
+    name: "add_pet",
+    description: "",
+    input_schema: {},
+    suggested_access: "write",
+    operation: { method: "POST", path: "/pets" },
+  },
+  {
+    name: "export_pets",
+    description: "",
+    input_schema: {},
+    suggested_access: "read",
+    operation: { method: "GET", path: "/pets/export", unsupported: "Unsupported serialization" },
+  },
+];
+
+function rest(patch: Partial<Connection> = {}): Connection {
+  const base = draft(restTools, patch);
+  return {
+    ...base,
+    config: { ...base.config, kind: "openapi", name: "Petstore", endpoint: "https://api.example.com/v1" },
+  };
+}
+
+it("offers the document's read operations for the test before anything is classified", () => {
+  act(() => root.render(editor(rest())));
+  const operations = host.querySelector<HTMLSelectElement>(
+    'select[aria-label="Verify credentials with a read operation"]',
+  )!;
+  expect([...operations.options].map((option) => option.textContent!.trim())).toEqual([
+    "Select a read operation",
+    "GET /pets/{id}",
+    "GET /pets",
+  ]);
+  expect(operations.value).toBe("list_pets");
+});
+
+it("activates a REST connection that never passed a test once the warning is confirmed", async () => {
+  const connection = rest();
+  const request = vi
+    .spyOn(api, "connectionRequest")
+    .mockResolvedValue({ ...connection, active: true });
+  act(() => root.render(editor(connection)));
+  expect(button("Activate connection").disabled).toBe(false);
+  act(() => button("Activate connection").click());
+  expect(host.textContent).toContain("come from the OpenAPI document");
+  await act(async () => button("activate anyway").click());
+  expect(request).toHaveBeenLastCalledWith("/api/connections/1/active", {
+    revision: 1,
+    active: true,
+  });
+});
+
+it("still holds an MCP connection until a test discovers its tools", () => {
+  act(() => root.render(editor(draft(discovered))));
+  expect(button("Activate connection").disabled).toBe(true);
+  expect(host.querySelector('select[aria-label="Verify credentials with a read operation"]')).toBe(
+    null,
+  );
+});

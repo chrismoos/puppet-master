@@ -517,6 +517,7 @@ function ConnectionPage({
   const [error, setError] = useState("");
   const [editingDefaults, setEditingDefaults] = useState(false);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+  const [confirmingUnverified, setConfirmingUnverified] = useState(false);
   const [toolQuery, setToolQuery] = useState("");
   const [toolFilter, setToolFilter] = useState<ToolFilter>("all");
   const [toolPage, setToolPage] = useState(0);
@@ -560,6 +561,18 @@ function ConnectionPage({
   const setRule = (tool: string, rule: ConnectionConfig["rules"][string]) =>
     update({ rules: { ...config.rules, [tool]: rule } });
   const tested = full.tested_revision === full.revision;
+  // A REST connection's tools come from its document, so its test never gates activation.
+  const verifyOptional = config.kind === "openapi";
+  const activate = () =>
+    run(async () => {
+      setFull(
+        await connectionRequest<Connection>(`/api/connections/${full.id}/active`, {
+          revision: full.revision,
+          active: true,
+        }),
+      );
+      return "Connection activated. Agents can now use its tools.";
+    });
   const counts = toolCounts(full.tools, config);
   const tools = paginate(
     full.tools.filter((tool) => toolMatches(tool, config, toolQuery, toolFilter)),
@@ -582,8 +595,14 @@ function ConnectionPage({
       </div>
       <div className="cx-detail-head">
         <h2>{name}</h2>
-        <Badge tone={full.active ? "ok" : "muted"}>
-          {full.deleted_at ? "removed" : full.active ? "active" : "draft"}
+        <Badge tone={full.active ? (tested ? "ok" : "pending") : "muted"}>
+          {full.deleted_at
+            ? "removed"
+            : full.active
+              ? tested
+                ? "active"
+                : "active · unverified"
+              : "draft"}
         </Badge>
         <Badge tone="info">{KIND_LABEL[config.kind]}</Badge>
         <span className="cx-spacer" />
@@ -633,18 +652,8 @@ function ConnectionPage({
           <button
             type="button"
             className="btn btn-loud"
-            disabled={busy || !tested}
-            onClick={() =>
-              void run(async () => {
-                setFull(
-                  await connectionRequest<Connection>(`/api/connections/${full.id}/active`, {
-                    revision: full.revision,
-                    active: true,
-                  }),
-                );
-                return "Connection activated. Agents can now use its tools.";
-              })
-            }
+            disabled={busy || !(tested || verifyOptional)}
+            onClick={() => (tested ? void activate() : setConfirmingUnverified(true))}
           >
             Activate
           </button>
@@ -660,6 +669,27 @@ function ConnectionPage({
           </>
         )}
       </div>
+
+      {confirmingUnverified && (
+        <ConfirmDialog
+          title="activate without a successful test"
+          titleId="connection-unverified-title"
+          confirmLabel="activate anyway"
+          busyLabel="activating…"
+          onClose={() => setConfirmingUnverified(false)}
+          onConfirm={async () => {
+            await activate();
+            setConfirmingUnverified(false);
+          }}
+        >
+          <p>
+            {config.name} has not answered a test at this revision. Its{" "}
+            {full.tools.length} operations come from the OpenAPI document, so agents
+            can call them, and the first call will fail if the endpoint or the
+            credentials are wrong.
+          </p>
+        </ConfirmDialog>
+      )}
 
       {confirmingRemoval && (
         <ConfirmDialog

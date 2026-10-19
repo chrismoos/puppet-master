@@ -182,8 +182,12 @@ async fn test(
             let _guard=lock.lock().await;
             let current=daemon.storage.connection(id)?;
             if current.revision!=connection.revision { anyhow::bail!("Connection changed during testing"); }
-            if current.config.rules.get(&tool).map(|rule|&rule.access)!=Some(&super::Access::Read) { anyhow::bail!("Choose a tool that you have classified as read-only"); }
             let definition = current.tools.iter().find(|candidate| candidate.name == tool).ok_or_else(||anyhow::anyhow!("Unknown test tool"))?;
+            let access = match current.config.rules.get(&tool).map(|rule|&rule.access) {
+                Some(super::Access::Unknown) | None => &definition.suggested_access,
+                Some(access) => access,
+            };
+            if access != &super::Access::Read { anyhow::bail!("Choose a tool the schema reports as read-only, or classify it as read"); }
             super::transport::validate_arguments(definition, &body.arguments)?;
             let credential=daemon.fresh_connection_credential(id).await?;
             match super::transport::execute(&current,&credential,&tool,&body.arguments).await? {

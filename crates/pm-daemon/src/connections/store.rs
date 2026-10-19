@@ -182,6 +182,18 @@ impl Storage {
         if changed != 1 {
             bail!("Connection changed. Reload before saving");
         }
+        if old.kind != config.kind || old.schema != config.schema {
+            let tools = match config.kind {
+                super::Kind::Openapi => super::openapi::import(
+                    config.schema.as_ref().context("Missing OpenAPI document")?,
+                )?,
+                super::Kind::Mcp => Vec::new(),
+            };
+            tx.execute(
+                "UPDATE connections SET tools=?1 WHERE id=?2",
+                params![serde_json::to_string(&tools)?, id],
+            )?;
+        }
         if let Some(credential) = credential {
             tx.execute(
                 "UPDATE connections SET credential=?1 WHERE id=?2",
@@ -239,9 +251,23 @@ impl Storage {
     pub(crate) fn activate_connection(&self, id: u64, revision: u64, active: bool) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let changed = tx.execute("UPDATE connections SET active=?1 WHERE id=?2 AND revision=?3 AND deleted_at IS NULL AND (?1=0 OR tested_revision=revision)", params![active,id,revision])?;
+        let current = tx
+            .query_row(
+                &format!("SELECT {CONNECTION_COLUMNS} FROM connections WHERE id=?1 AND revision=?2 AND deleted_at IS NULL"),
+                params![id, revision],
+                read_connection,
+            )
+            .optional()?;
+        let current = current.context("Connection changed or was removed")?;
+        if active && !current.verified() {
+            bail!("Connection needs a successful test before activation");
+        }
+        let changed = tx.execute(
+            "UPDATE connections SET active=?1 WHERE id=?2 AND revision=?3",
+            params![active, id, revision],
+        )?;
         if changed != 1 {
-            bail!("Connection changed or needs a successful test before activation");
+            bail!("Connection changed before activation");
         }
         if !active {
             tx.execute("UPDATE connection_calls SET status='canceled' WHERE connection_id=?1 AND status IN ('pending','authorized')", [id])?;
@@ -281,7 +307,8 @@ impl Storage {
             let mut conn = self.conn.lock().unwrap();
             let tx = conn.transaction()?;
             if require_active {
-                let valid: bool = tx.query_row("SELECT active AND revision=?2 AND tested_revision=revision FROM connections WHERE id=?1", params![call.connection_id, call.connection_revision], |row|row.get(0))?;
+                // Mirrors Connection::verified, which SQL cannot call.
+                let valid: bool = tx.query_row("SELECT active AND revision=?2 AND (tested_revision=revision OR json_extract(config,'$.kind')='openapi') FROM connections WHERE id=?1", params![call.connection_id, call.connection_revision], |row|row.get(0))?;
                 if !valid {
                     bail!("Connection changed before the request was saved. Inspect it and submit a new request");
                 }

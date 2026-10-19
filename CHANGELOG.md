@@ -11,6 +11,9 @@
 - [iOS] A short `mobile.access_token_ttl_minutes` no longer makes the app refresh the moment it stores a token: the refresh lead is bounded by the lifetime the daemon issues.
 - [Daemon] A refused device token refresh now says why in the log: an unknown token, a device that is gone or already revoked, an expired token, or reuse. A storage failure during a refresh answers as a server error rather than as a bad token, so it no longer costs the device its credentials.
 - [Web] Copying a terminal selection no longer carries the spaces an agent paints across the rest of each row, so pasting several lines keeps its shape. Selecting past the last line of output no longer appends the blank rows below it, and a selection holding only blank space leaves the clipboard as it was. An agent's own OSC 52 copy is still written exactly as sent.
+- [Web] A REST connection activates without passing a test, after a prompt saying it was not verified, because its operations come from the OpenAPI document rather than from the test. It reads as active and unverified until a test passes, and an MCP connection still waits for the test that discovers its tools.
+- [Web] The connection test offers the read operations the OpenAPI document reports, with the one that needs no arguments ready to run, instead of only the operations already classified as read by hand.
+- [Daemon] Editing a connection's OpenAPI document reimports its operations straight away, so its tools match the document it was saved with.
 
 ## 0.10.3 — 2026-10-14
 

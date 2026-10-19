@@ -263,6 +263,15 @@ pub struct Connection {
     pub policy_proposal: Option<Value>,
 }
 
+impl Connection {
+    /// Whether the connection may be used at its current revision. A REST
+    /// connection's tools come from its imported document, so its test reports
+    /// only whether the base URL answered and never gates use.
+    pub(crate) fn verified(&self) -> bool {
+        self.config.kind == Kind::Openapi || self.tested_revision == Some(self.revision)
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize, PartialEq)]
 pub struct Tool {
     pub name: String,
@@ -546,7 +555,7 @@ impl Daemon {
             }
             return Ok(previous);
         }
-        if !c.active || c.tested_revision != Some(c.revision) {
+        if !c.active || !c.verified() {
             bail!("Connection is inactive or needs testing");
         }
         let definition = c
@@ -1244,5 +1253,121 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("A notice is delivered to this session"));
+    }
+
+    fn rest_document(operation: &str) -> Value {
+        json!({"openapi":"3.1.0","paths":{"/pets":{"get":{"operationId":operation}}}})
+    }
+
+    fn connection_project(
+        daemon: &Daemon,
+        temp: &tempfile::TempDir,
+    ) -> pm_protocol::domain::Project {
+        let bucket = daemon.storage.create_bucket("connections").unwrap();
+        daemon
+            .storage
+            .create_project(bucket.id, "rest", temp.path().to_str().unwrap())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_rest_connection_is_usable_without_a_successful_test() {
+        use pm_protocol::domain::{AgentKind, PermissionMode};
+        let (daemon, temp) = authorization_daemon();
+        let project = connection_project(&daemon, &temp);
+        let session = daemon
+            .storage
+            .create_session(
+                project.id,
+                AgentKind::ClaudeCode,
+                "task",
+                "prompt",
+                PermissionMode::Default,
+                0,
+                true,
+                false,
+                None,
+                now_unix_ms(),
+            )
+            .unwrap();
+        let config: Config = serde_json::from_value(json!({
+            "name":"petstore",
+            "project_id":project.id,
+            "kind":"openapi",
+            "endpoint":"http://127.0.0.1/api",
+            "schema":rest_document("list_pets"),
+        }))
+        .unwrap();
+        let connection = daemon
+            .storage
+            .create_connection(config, Some(session.id))
+            .unwrap();
+        assert_eq!(connection.tools.len(), 1);
+        assert!(connection.tested_revision.is_none());
+        daemon
+            .storage
+            .activate_connection(connection.id, connection.revision, true)
+            .unwrap();
+        let daemon = Arc::new(daemon);
+        let call = daemon
+            .request_connection_call(
+                &session,
+                &json!({
+                    "connection_id":connection.id,
+                    "tool":"list_pets",
+                    "arguments":{},
+                    "request_id":"request",
+                    "justification":"Check the catalog",
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(call.status, "pending");
+    }
+
+    #[test]
+    fn an_mcp_connection_still_needs_a_test_before_activation() {
+        let (daemon, temp) = authorization_daemon();
+        let project = connection_project(&daemon, &temp);
+        let config: Config = serde_json::from_value(
+            json!({"name":"mcp","project_id":project.id,"endpoint":"http://127.0.0.1/mcp"}),
+        )
+        .unwrap();
+        let connection = daemon.storage.create_connection(config, None).unwrap();
+        assert!(connection.tools.is_empty());
+        let error = daemon
+            .storage
+            .activate_connection(connection.id, connection.revision, true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("needs a successful test"), "{error}");
+    }
+
+    #[test]
+    fn a_changed_rest_document_reimports_the_catalog() {
+        let (daemon, temp) = authorization_daemon();
+        let project = connection_project(&daemon, &temp);
+        let mut config: Config = serde_json::from_value(json!({
+            "name":"petstore",
+            "project_id":project.id,
+            "kind":"openapi",
+            "endpoint":"http://127.0.0.1/api",
+            "schema":rest_document("list_pets"),
+        }))
+        .unwrap();
+        let connection = daemon
+            .storage
+            .create_connection(config.clone(), None)
+            .unwrap();
+        assert_eq!(connection.tools[0].name, "list_pets");
+        config.schema = Some(rest_document("list_owners"));
+        daemon
+            .storage
+            .update_connection(connection.id, connection.revision, &config, None)
+            .unwrap();
+        let updated = daemon.storage.connection(connection.id).unwrap();
+        assert_eq!(updated.tools.len(), 1);
+        assert_eq!(updated.tools[0].name, "list_owners");
+        assert!(updated.verified());
     }
 }

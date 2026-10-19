@@ -39,8 +39,11 @@ import {
 import {
   agoLabel,
   callStatus,
+  defaultTestTool,
   SETUP_TABS,
   setupTabStates,
+  testableTools,
+  testToolLabel,
   toolAccess,
   toolCounts,
   toolMatches,
@@ -51,6 +54,7 @@ import {
   type ToolFilter,
 } from "./connectionsModel";
 import { Badge, Chips, PolicyBadge, useDecision, useNames } from "./connectionsParts";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Pager } from "./Pager";
 import { DEFAULT_PAGE_SIZE, paginate } from "./pagination";
 import { ConnectionUpdateReview } from "./ConnectionUpdateReview";
@@ -343,6 +347,8 @@ export function ConnectionEditor({
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const tested = Boolean(saved && saved.tested_revision === saved.revision);
+  // A REST connection's tools come from its document, so its test never gates activation.
+  const verifyOptional = saved?.config.kind === "openapi";
   const [tab, setTab] = useState<SetupTab>(
     connection?.policy_proposal || (connection && connection.tested_revision === connection.revision)
       ? "policy"
@@ -352,12 +358,15 @@ export function ConnectionEditor({
   );
   const tools = saved?.tools ?? [];
   const counts = toolCounts(tools, config);
+  const testable = testableTools(tools, config);
   const [query, setQuery] = useState("");
   const [toolFilter, setToolFilter] = useState<ToolFilter | null>(null);
   const [toolPage, setToolPage] = useState(0);
   const [testTool, setTestTool] = useState("");
   const [testArguments, setTestArguments] = useState("{}");
   const [testResult, setTestResult] = useState<unknown>(null);
+  const [confirmingUnverified, setConfirmingUnverified] = useState(false);
+  const selectedTestTool = testTool || defaultTestTool(tools, config);
   // Unclassified tools are the ones that need a decision, so the table opens on them.
   const filter: ToolFilter = toolFilter ?? (counts.unknown ? "unknown" : "all");
   const shown = paginate(
@@ -913,23 +922,26 @@ export function ConnectionEditor({
         )}
       </div>
       {panel && <p style={{ margin: "12px 0 0" }}>{testButton}</p>}
-      {saved && tested && config.kind === "openapi" && (
-        <details className="cx-more" aria-label="Read operation test">
-          <summary>Verify credentials with a read tool</summary>
+      {saved && config.kind === "openapi" && (
+        <section className="cx-more" aria-label="Read operation test">
+          <p className="cx-dim cx-small">
+            Calling a read operation checks the credentials against the API
+            itself, which a reachability check cannot do.
+          </p>
           <div className="cx-fields">
             <label className="cx-field">
-              <span>Read tool</span>
+              <span>Read operation</span>
               <select
-                aria-label="Verify credentials with a reviewed read tool"
-                value={testTool}
+                aria-label="Verify credentials with a read operation"
+                value={selectedTestTool}
                 onChange={(event) => setTestTool(event.target.value)}
               >
-                <option value="">Select a read tool</option>
-                {tools
-                  .filter((tool) => saved.config.rules[tool.name]?.access === "read")
-                  .map((tool) => (
-                    <option key={tool.name}>{tool.name}</option>
-                  ))}
+                <option value="">Select a read operation</option>
+                {testable.map((tool) => (
+                  <option key={tool.name} value={tool.name}>
+                    {testToolLabel(tool)}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="cx-field">
@@ -945,13 +957,13 @@ export function ConnectionEditor({
                 type="button"
                 className="btn"
                 style={{ alignSelf: "flex-start" }}
-                disabled={dirty || !testTool}
+                disabled={dirty || !selectedTestTool}
                 onClick={() =>
                   void run(async () => {
                     const result = await connectionRequest<
                       Connection & { test_result: unknown }
                     >(`/api/connections/${saved.id}/test`, {
-                      tool: testTool,
+                      tool: selectedTestTool,
                       arguments: JSON.parse(testArguments),
                     });
                     keep(result);
@@ -962,14 +974,14 @@ export function ConnectionEditor({
                   })
                 }
               >
-                Test selected read tool
+                Test selected read operation
               </button>
               {testResult !== null && (
                 <pre>{JSON.stringify(testResult, null, 2)}</pre>
               )}
             </div>
           </div>
-        </details>
+        </section>
       )}
     </>
   );
@@ -1316,14 +1328,39 @@ export function ConnectionEditor({
     <button
       type="button"
       className="btn btn-loud"
-      disabled={locked || !tested}
-      onClick={() => void run(() => setActive(true))}
+      disabled={locked || !(tested || verifyOptional)}
+      onClick={() =>
+        tested ? void run(() => setActive(true)) : setConfirmingUnverified(true)
+      }
     >
       {panel ? "Activate" : "Activate connection"}
     </button>
   );
+  const unverifiedDialog = confirmingUnverified && (
+    <ConfirmDialog
+      title="activate without a successful test"
+      titleId="connection-unverified-title"
+      confirmLabel="activate anyway"
+      busyLabel="activating…"
+      onClose={() => setConfirmingUnverified(false)}
+      onConfirm={async () => {
+        await run(() => setActive(true));
+        setConfirmingUnverified(false);
+      }}
+    >
+      <p>
+        {name} has not answered a test at this revision. Its {tools.length}{" "}
+        operations come from the OpenAPI document, so agents can call them, and
+        the first call will fail if the endpoint or the credentials are wrong.
+      </p>
+    </ConfirmDialog>
+  );
   const stateBadge = saved?.active ? (
-    <Badge tone="ok">active</Badge>
+    tested ? (
+      <Badge tone="ok">active</Badge>
+    ) : (
+      <Badge tone="pending">active · unverified</Badge>
+    )
   ) : (
     <Badge tone="muted">draft</Badge>
   );
@@ -1372,6 +1409,7 @@ export function ConnectionEditor({
           <span className="cx-spacer" />
           {activateButton}
         </footer>
+        {unverifiedDialog}
       </section>
     );
 
@@ -1406,7 +1444,9 @@ export function ConnectionEditor({
         <span className="cx-dim cx-small">
           {tested
             ? "Tested at this revision."
-            : "Test the connection before activating it."}
+            : verifyOptional
+              ? "A test here only checks that the API answers. Its operations come from the document."
+              : "Test the connection before activating it."}
         </span>
         <span className="cx-spacer" />
         <button type="button" className="btn btn-quiet" onClick={onClose}>
@@ -1429,6 +1469,7 @@ export function ConnectionEditor({
         </fieldset>
       </div>
       {notices}
+      {unverifiedDialog}
     </section>
   );
 }

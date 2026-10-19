@@ -79,6 +79,37 @@ export function toolSummary(tool: ConnectionTool): string {
   return tool.operation ? `${tool.operation.method.toUpperCase()} ${tool.operation.path}` : "";
 }
 
+/** The tools a connection test may call, read either by the user's classification or by the schema. */
+export function testableTools(
+  tools: readonly ConnectionTool[],
+  config: PolicyDraft,
+): ConnectionTool[] {
+  return tools.filter((tool) => {
+    const classified = config.rules[tool.name]?.access;
+    const access = classified && classified !== "unknown" ? classified : tool.suggested_access;
+    return !tool.operation?.unsupported && access === "read";
+  });
+}
+
+/** How the test's tool list names a tool, by the operation behind it when it has one. */
+export function testToolLabel(tool: ConnectionTool): string {
+  return tool.operation
+    ? `${tool.operation.method.toUpperCase()} ${tool.operation.path}`
+    : tool.name;
+}
+
+/** The first testable tool that takes no arguments, so the test runs as it stands. */
+export function defaultTestTool(
+  tools: readonly ConnectionTool[],
+  config: PolicyDraft,
+): string {
+  const ready = testableTools(tools, config).find((tool) => {
+    const required = (tool.input_schema as { required?: unknown } | null)?.required;
+    return !Array.isArray(required) || required.length === 0;
+  });
+  return ready?.name ?? "";
+}
+
 export type ToolFilter = "all" | Policy | Access;
 
 export function toolMatches(
