@@ -13,6 +13,7 @@ import { wireViewerSize, type ViewerSizeController } from "@puppet-master/client
 import { applyEchoedPtySize } from "@puppet-master/client-core/ws/terminalResize";
 import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, pendingShowVisibility, showLayer, waitForTerminalRender, type HeldInput } from "./terminalLayer";
 import { wireTransientTerminalScrollbar } from "./terminalScrollbar";
+import { resumeRendering } from "./terminalRendering";
 import { TerminalClipboard } from "./terminalClipboard";
 import { registerForegroundCommandHandler, wireTerminalClipboard } from "./terminalHostWiring";
 import { documentVisible, watchDocumentVisibility } from "./documentVisibility";
@@ -105,6 +106,10 @@ const INITIAL_RECHECK_MS = 250;
 const WIDTH_SETTLE_MS = 100;
 const ACK_BATCH_BYTES = 4 * 1024;
 const ACK_BATCH_MS = 8;
+/** Moves a layer outside the stage's clip. xterm pauses rendering only for
+ * a screen that leaves the viewport, and a hidden layer otherwise keeps
+ * drawing every frame its session prints. */
+const PARKED_LAYER_CLASS = "is-parked";
 
 export class TerminalStage {
   private root: HTMLDivElement;
@@ -181,6 +186,7 @@ export class TerminalStage {
       }
     }
     this.visibleId = null;
+    this.parkHiddenLayers();
     this.root.remove();
   }
 
@@ -278,6 +284,7 @@ export class TerminalStage {
         other.webgl?.setVisible(visible || otherKey === key, true);
       }
       if (layer.initialReplayPending) layer.term.focus();
+      this.parkHiddenLayers();
       this.scheduleRefitVisible();
       if (layer.revealTimeout === null) {
         layer.revealTimeout = setTimeout(() => {
@@ -297,6 +304,7 @@ export class TerminalStage {
       other.webgl?.setVisible(visible, true);
       if (!visible) other.viewer?.setVisible(false);
     }
+    this.parkHiddenLayers();
     const viewport = layer.viewport;
     const viewportRevision = layer.viewportRevision;
     layer.term.focus();
@@ -332,7 +340,7 @@ export class TerminalStage {
   private createLayer(sessionId: bigint, addressedTerminal = false): Layer {
     const key = `${addressedTerminal ? "t" : "s"}:${sessionId}`;
     const el = document.createElement("div");
-    el.className = "term-layer";
+    el.className = `term-layer ${PARKED_LAYER_CLASS}`;
     el.style.visibility = "hidden";
     el.style.pointerEvents = "none";
     this.root.appendChild(el);
@@ -835,6 +843,15 @@ export class TerminalStage {
     );
   }
 
+  private parkHiddenLayers(): void {
+    for (const [key, layer] of this.layers) {
+      const parked = key !== this.visibleId && layer.el.style.visibility !== "visible";
+      const wasParked = layer.el.classList.contains(PARKED_LAYER_CLASS);
+      layer.el.classList.toggle(PARKED_LAYER_CLASS, parked);
+      if (wasParked && !parked) resumeRendering(layer.term);
+    }
+  }
+
   /** Says why a pane that has already taken the screen is still empty. A
    * terminal stream reports itself only once it has failed, so a first
    * attach that is merely slow says nothing on its own. */
@@ -872,6 +889,7 @@ export class TerminalStage {
     layer.webgl?.setVisible(true);
     layer.el.style.visibility = "visible";
     layer.el.style.pointerEvents = "auto";
+    this.parkHiddenLayers();
     this.layoutVisibleLayer(layer);
     restoreTerminalViewport(layer.term, layer.viewport);
     layer.term.refresh(0, layer.term.rows - 1);

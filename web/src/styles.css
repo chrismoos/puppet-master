@@ -1585,6 +1585,10 @@ textarea {
   overflow: hidden;
 }
 
+.term-layer.is-parked {
+  transform: translateX(-200%);
+}
+
 .terminal-scrollbar-shell .xterm .xterm-scrollable-element > .scrollbar.vertical.visible {
   opacity: 0;
   /* Faded scrollbar must not block clicks or selection on the rightmost

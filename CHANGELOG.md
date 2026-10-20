@@ -16,6 +16,7 @@
 - [Daemon] Editing a connection's OpenAPI document reimports its operations straight away, so its tools match the document it was saved with.
 - [Web] A refused connection test says what it asked the API for and what the API answered, with the status code and the start of the response, rather than one line naming the endpoint and the credentials. The daemon logs the same detail.
 - [Web] A read operation that answers tests a REST connection even when its base URL refuses, and the connection reads as tested from then on.
+- [Web] Sessions kept warm in the background no longer draw their terminals while hidden. With several busy agents, each drew every frame, which held the page and the GPU and made switching sessions take seconds.
 
 ## 0.10.3 — 2026-10-14
 
