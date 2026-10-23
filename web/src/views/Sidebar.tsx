@@ -653,6 +653,7 @@ export function SessionRoleIcon({ role }: { role: SessionRole }) {
 export function Sidebar({
   selectedId,
   onSelect,
+  onPrepare,
   onAddToWorkspace,
   onNewProject,
   onNewSession,
@@ -668,6 +669,8 @@ export function Sidebar({
 }: {
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** A press on a session row that a click to open it is likely to follow. */
+  onPrepare?: (id: string) => void;
   onAddToWorkspace: (id: string) => boolean;
   onNewProject: (bucketId: string) => void;
   onNewSession: (bucketId: string) => void;
@@ -955,6 +958,10 @@ export function Sidebar({
             aria-label={sessionAccessibleLabel(session, display)}
             aria-current={selected ? "page" : undefined}
             title="Open session home. Shift-click to add its agent to the active workspace."
+            onPointerDown={(event) => {
+              if (event.button !== 0 || event.shiftKey || selected || ended) return;
+              if (agentTerminalForSession(state.terminals.values(), id)) onPrepare?.(id);
+            }}
             onClick={(event) => {
               if (!event.shiftKey || !onAddToWorkspace(id)) onSelect(id);
             }}

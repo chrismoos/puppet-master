@@ -11,7 +11,7 @@ import { isRealPaneFit, measureFit, spawnGeometry, type TerminalGeometry } from 
 import { collectXtermDebug, type TerminalLayerDebug } from "./terminalDiagnostics";
 import { wireViewerSize, type ViewerSizeController } from "@puppet-master/client-core/ws/terminalRepaint";
 import { applyEchoedPtySize } from "@puppet-master/client-core/ws/terminalResize";
-import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, pendingShowVisibility, showLayer, waitForTerminalRender, type HeldInput } from "./terminalLayer";
+import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, showLayer, waitForTerminalRender, type HeldInput } from "./terminalLayer";
 import { wireTransientTerminalScrollbar } from "./terminalScrollbar";
 import { resumeRendering } from "./terminalRendering";
 import { TerminalClipboard } from "./terminalClipboard";
@@ -196,6 +196,28 @@ export class TerminalStage {
 
   showTerminal(terminalId: bigint): void { this.showAddress(terminalId, true); }
 
+  /** Takes every terminal off screen, for a pane with none of its own to show. */
+  hide(): void {
+    const shown = this.visibleId ? this.layers.get(this.visibleId) : undefined;
+    if (shown && this.visibleId) this.rememberViewport(this.visibleId, shown);
+    this.visibleId = null;
+    for (const layer of this.layers.values()) {
+      layer.el.style.visibility = "hidden";
+      layer.el.style.pointerEvents = "none";
+      layer.webgl?.setVisible(false, true);
+      layer.viewer?.setVisible(false);
+    }
+    this.parkHiddenLayers();
+  }
+
+  /** Starts attaching a session's terminal off screen, so the press that
+   * comes before a click to open it hides the attach rather than adding to it. */
+  prepare(sessionId: bigint): void {
+    const key = `s:${sessionId}`;
+    if (!this.root.isConnected || this.layers.has(key)) return;
+    this.tryBindLayerSocket(this.createLayer(sessionId, false));
+  }
+
   disposeTerminal(terminalId: bigint): void {
     this.disposeLayer(`t:${terminalId}`);
   }
@@ -270,21 +292,19 @@ export class TerminalStage {
     layer.lastShownAt = Date.now();
     this.layoutVisibleLayer(layer);
 
+    for (const [otherKey, other] of this.layers) {
+      const visible = otherKey === key;
+      other.el.style.visibility = visible ? "visible" : "hidden";
+      other.el.style.pointerEvents = visible ? "auto" : "none";
+      other.webgl?.setVisible(visible, true);
+      if (!visible) other.viewer?.setVisible(false);
+    }
+    this.parkHiddenLayers();
+
     if (layer.initialReplayPending || layer.pendingFit) {
       if (!layer.initialReplayPending) layer.swapPending = true;
       layer.focusAtShow = document.activeElement;
-      for (const [otherKey, other] of this.layers) {
-        const visible = pendingShowVisibility(
-          { key, initialReplayPending: layer.initialReplayPending },
-          { key: otherKey, visible: other.el.style.visibility === "visible" },
-          wasVisibleId,
-        );
-        other.el.style.visibility = visible ? "visible" : "hidden";
-        other.el.style.pointerEvents = visible && otherKey === key ? "auto" : "none";
-        other.webgl?.setVisible(visible || otherKey === key, true);
-      }
-      if (layer.initialReplayPending) layer.term.focus();
-      this.parkHiddenLayers();
+      layer.term.focus();
       this.scheduleRefitVisible();
       if (layer.revealTimeout === null) {
         layer.revealTimeout = setTimeout(() => {
@@ -297,17 +317,10 @@ export class TerminalStage {
       return;
     }
 
-    for (const [otherKey, other] of this.layers) {
-      const visible = otherKey === key;
-      other.el.style.visibility = visible ? "visible" : "hidden";
-      other.el.style.pointerEvents = visible ? "auto" : "none";
-      other.webgl?.setVisible(visible, true);
-      if (!visible) other.viewer?.setVisible(false);
-    }
-    this.parkHiddenLayers();
     const viewport = layer.viewport;
     const viewportRevision = layer.viewportRevision;
     layer.term.focus();
+    this.askForWholeHistory(layer);
     // A show can coincide with React attaching the shared stage into a host
     // whose layout is still settling. Keep the synchronous fit for the first
     // paint, then reconcile once after layout and once after xterm has parsed
@@ -802,8 +815,6 @@ export class TerminalStage {
     }
   }
 
-  /** A screen kept up while the next session loads still holds keyboard
-   * focus, so what is typed into it goes to the session switched to. */
   /** Delivers a keystroke to the session on screen, holding it when that
    * session's terminal has not been attached yet. */
   private sendInput(key: string, data: Uint8Array, submitted: boolean): void {
@@ -831,11 +842,13 @@ export class TerminalStage {
       this.finishLayerReveal(layer);
       return;
     }
-    if (!layer.replayPainted || layer.pendingFit || layer.pendingWrites > 0) return;
+    // Live output queued behind the snapshot does not hold the reveal, or a
+    // session that never goes quiet would never finish switching.
+    if (!layer.replayPainted || layer.pendingFit) return;
     if (layer.revealRender) return;
     layer.revealRender = waitForTerminalRender(
       layer.term,
-      () => !layer.pendingFit && layer.pendingWrites === 0 && !layer.term.modes.synchronizedOutputMode,
+      () => !layer.pendingFit && !layer.term.modes.synchronizedOutputMode,
       () => {
         layer.revealRender = null;
         this.finishLayerReveal(layer);

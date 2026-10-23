@@ -496,6 +496,11 @@ function Shell({
     navigate(sessionRoutePath(id, lastTabBySession.current[id]));
   }, []);
 
+  const prepareSession = useCallback((id: string) => {
+    const tab = lastTabBySession.current[id];
+    if (tab === undefined || tab === "agent") stage.prepare(BigInt(id));
+  }, [stage]);
+
   useLayoutEffect(() => {
     if (route.name !== "session") return;
     if (route.id === homeSessionId) return;
@@ -1085,6 +1090,7 @@ function Shell({
           <Sidebar
             selectedId={selectedId}
             onSelect={select}
+            onPrepare={prepareSession}
             onAddToWorkspace={addSessionToWorkspace}
             onNewProject={newProjectInBucket}
             onNewSession={newSessionInBucket}

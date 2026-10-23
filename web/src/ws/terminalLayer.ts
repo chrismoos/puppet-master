@@ -88,26 +88,6 @@ export function waitForTerminalRender(
   };
 }
 
-/**
- * Whether a layer is on screen while the layer being shown waits for a
- * snapshot.
- *
- * A layer that has painted before keeps the previous screen up and swaps
- * in one step, so a size change never shows a half-drawn pane. A layer
- * with nothing to show takes the pane immediately instead, because the
- * alternative is leaving another session's output under this session's
- * header.
- */
-export function pendingShowVisibility(
-  incoming: { key: string; initialReplayPending: boolean },
-  candidate: { key: string; visible: boolean },
-  previousKey: string | null,
-): boolean {
-  if (candidate.key === incoming.key) return incoming.initialReplayPending;
-  if (incoming.initialReplayPending) return false;
-  return candidate.key === previousKey && candidate.visible;
-}
-
 /** Keystrokes offered to a layer whose socket is not open yet. */
 export interface HeldInput {
   data: Uint8Array;

@@ -304,10 +304,12 @@ export function SessionPane({
       // Ended metadata remains selectable during the history grace period,
       // but its agent terminal must never be kept or recreated.
       stage.disposeSession(BigInt(sessionId));
+      stage.hide();
       return;
     }
     if (selected) stage.showTerminal(selected.id);
     else if (agentTerminal) stage.show(BigInt(sessionId));
+    else stage.hide();
   }, [active, stage, sessionId, selected?.id, agentTerminal?.id, ended]);
 
   const previousInventory = useRef<{ sessionId: string; terminalIds: Set<string> }>({

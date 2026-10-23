@@ -3,6 +3,9 @@ import { logIn } from "./support";
 
 const HISTORY_LINES = 3_000;
 const LINE_LEN = 120;
+/// Enough frames that the agent is still printing when the test ends.
+const STREAMING_FRAMES = 100_000;
+const STREAMING_FRAME_MS = 40;
 
 interface Sample {
   onScreen: string[];
@@ -31,10 +34,10 @@ interface StageWindow extends Window {
   };
 }
 
-async function fillHistory(page: Page): Promise<void> {
+async function fillHistory(page: Page, frames = 1, frameMs = 0): Promise<void> {
   const textarea = page.locator('.term-layer[style*="visibility: visible"] .xterm-helper-textarea');
   await textarea.focus();
-  await page.keyboard.type(`claudestream ${HISTORY_LINES} 1 0 ${LINE_LEN}`);
+  await page.keyboard.type(`claudestream ${HISTORY_LINES} ${frames} ${frameMs} ${LINE_LEN}`);
   await page.keyboard.press("Enter");
   await expect.poll(() => page.evaluate(() => {
     const stage = (window as unknown as StageWindow).__pmStage;
@@ -156,23 +159,26 @@ function expectBlankThenOnePaint(result: { from: string; to: string; samples: Sa
   expect(states).toEqual(["previous", "blank", "painted"]);
 }
 
-function expectOneSwap(result: { from: string; to: string; samples: Sample[] }): void {
+/// The pane goes from the session being left straight to the session asked
+/// for, before that session's redraw at the pane's size has arrived, and
+/// never goes back.
+function expectImmediateSwap(result: { from: string; to: string; samples: Sample[] }): void {
   const { from, to, samples } = result;
   const final = samples.at(-1)!.layers[to];
   expect(final.painted).toBe(true);
-  let swapped = false;
+  let firstShown: Sample | null = null;
   for (const [index, sample] of samples.entries()) {
     expect(sample.onScreen, `frame ${index}`).toHaveLength(1);
     const [shown] = sample.onScreen;
     if (shown === to) {
-      swapped = true;
-      expect(sample.layers[to], `frame ${index}`).toEqual(final);
+      firstShown ??= sample;
     } else {
       expect(shown, `frame ${index}`).toBe(from);
-      expect(swapped, `frame ${index} went back to the previous session`).toBe(false);
+      expect(firstShown, `frame ${index} went back to the previous session`).toBeNull();
     }
   }
-  expect(swapped).toBe(true);
+  expect(firstShown).not.toBeNull();
+  expect(firstShown!.layers[to]?.painted, "the switch waited for the redraw").toBe(false);
 }
 
 test("a session whose snapshot is slow to arrive takes the pane empty rather than leaving the previous screen up", async ({ page }) => {
@@ -197,13 +203,7 @@ test("a session whose snapshot is slow to arrive takes the pane empty rather tha
   expectBlankThenOnePaint(result);
 });
 
-test("a warm session at a stale size is shown only once it is redrawn at the pane's size", async ({ page }) => {
-  await logIn(page);
-  await openSession(page, 0);
-  await fillHistory(page);
-  await openSession(page, 1);
-  await fillHistory(page);
-
+async function shrinkViewport(page: Page): Promise<void> {
   const shownCols = () => page.evaluate(() => {
     const stage = (window as unknown as StageWindow).__pmStage;
     return [...stage.layers.values()].find((layer) => layer.el.style.visibility === "visible")!.term.cols;
@@ -212,12 +212,70 @@ test("a warm session at a stale size is shown only once it is redrawn at the pan
   const before = page.viewportSize()!;
   await page.setViewportSize({ width: before.width - 200, height: before.height - 120 });
   await expect.poll(shownCols).toBeLessThan(colsBefore);
+}
+
+test("a warm session at a stale size takes the pane at once and is redrawn at the pane's size", async ({ page }) => {
+  await logIn(page);
+  await openSession(page, 0);
+  await fillHistory(page);
+  await openSession(page, 1);
+  await fillHistory(page);
+  await shrinkViewport(page);
 
   const settled = await switchAndSample(page);
-  expectOneSwap(settled);
+  expectImmediateSwap(settled);
   const shown = settled.samples.at(-1)!.layers[settled.to];
   const other = settled.samples.at(-1)!.layers[settled.from];
   expect({ cols: shown.cols, rows: shown.rows }).toEqual({ cols: other.cols, rows: other.rows });
+});
+
+test("a session that never stops printing finishes switching at a new size", async ({ page }) => {
+  await logIn(page);
+  await openSession(page, 0);
+  await fillHistory(page);
+  await openSession(page, 1);
+  await fillHistory(page, STREAMING_FRAMES, STREAMING_FRAME_MS);
+  await openSession(page, 0);
+  await shrinkViewport(page);
+
+  const settled = await switchAndSample(page);
+  expectImmediateSwap(settled);
+});
+
+test("pressing a session row starts attaching its terminal before the click opens it", async ({ page }) => {
+  await logIn(page);
+  await openSession(page, 0);
+  const shownBefore = await visibleKey(page);
+  const tickets: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/attach-ticket")) tickets.push(request.url());
+  });
+
+  const row = page.locator(".sb-session").nth(1);
+  await expect(row).not.toHaveClass(/is-selected/);
+  const box = (await row.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect.poll(() => tickets.length).toBe(1);
+  const pressed = await page.evaluate(() => {
+    const stage = (window as unknown as StageWindow).__pmStage;
+    return [...stage.layers.entries()].map(([key, layer]) => ({ key, shown: layer.el.style.visibility === "visible" }));
+  });
+  expect(pressed.filter((layer) => layer.shown).map((layer) => layer.key)).toEqual([shownBefore]);
+  expect(pressed).toHaveLength(2);
+
+  await page.mouse.up();
+  await expect(row).toHaveClass(/is-selected/);
+  await expect.poll(() => page.evaluate(() => {
+    const stage = (window as unknown as StageWindow).__pmStage as unknown as {
+      visibleId: string;
+      layers: StageWindow["__pmStage"]["layers"];
+    };
+    const layer = stage.layers.get(stage.visibleId);
+    return Boolean(layer && layer.el.style.visibility === "visible" && layer.replayPainted);
+  })).toBe(true);
+  expect(await visibleKey(page)).not.toBe(shownBefore);
+  expect(tickets).toHaveLength(1);
 });
 
 test("a session still reaching for its terminal says it is connecting over an empty pane", async ({ page }) => {
@@ -315,4 +373,31 @@ test("a session opened cold has its whole scrollback once its screen is up", asy
   expect(filled.replays).toBeGreaterThan(1);
   // The history arrives above the screen, which stays at the bottom.
   expect(filled.viewportY).toBe(filled.lines - filled.rows);
+});
+
+function sessionRowByTitle(page: Page, title: string) {
+  return page.locator(".sb-session-title", { hasText: new RegExp(`^${title}$`) })
+    .locator("xpath=ancestor::button[contains(@class, 'sb-session')][1]");
+}
+
+test("a session that has ended shows no other session's terminal behind its card", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("pm.showEnded", "true"));
+  await logIn(page);
+  const endedRow = sessionRowByTitle(page, "browser-e2e");
+  const liveRow = sessionRowByTitle(page, "browser-e2e-two");
+  await endedRow.click();
+  await expect.poll(() => page.locator('.term-layer[style*="visibility: visible"]').count()).toBe(1);
+  const textarea = page.locator('.term-layer[style*="visibility: visible"] .xterm-helper-textarea');
+  await textarea.focus();
+  await page.keyboard.type("exit 7");
+  await page.keyboard.press("Enter");
+  await expect(endedRow).toContainText("ended ·");
+
+  await liveRow.click();
+  await expect(liveRow).toHaveClass(/is-selected/);
+  await expect(page.locator('.term-layer[style*="visibility: visible"]')).toHaveCount(1);
+  await endedRow.click();
+  await expect(endedRow).toHaveClass(/is-selected/);
+  await expect(page.locator(".term-overlay-card")).toBeVisible();
+  await expect(page.locator('.term-layer[style*="visibility: visible"]')).toHaveCount(0);
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, pendingShowVisibility, showLayer, waitForTerminalRender } from "./terminalLayer";
+import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, showLayer, waitForTerminalRender } from "./terminalLayer";
 
 describe("hidden layers", () => {
   it("keep parsing every frame into the emulator when sizes already match", () => {
@@ -202,30 +202,6 @@ describe("waitForTerminalRender", () => {
     onRender?.();
     expect(rendered).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledOnce();
-  });
-});
-
-describe("pendingShowVisibility", () => {
-  const cold = { key: "s:2", initialReplayPending: true };
-  const warm = { key: "s:2", initialReplayPending: false };
-
-  it("puts a layer with nothing to show on screen at once", () => {
-    expect(pendingShowVisibility(cold, { key: "s:2", visible: false }, "s:1")).toBe(true);
-  });
-
-  it("takes the previous session off screen while a first snapshot loads", () => {
-    expect(pendingShowVisibility(cold, { key: "s:1", visible: true }, "s:1")).toBe(false);
-  });
-
-  it("keeps the previous screen up for a layer that has painted before", () => {
-    expect(pendingShowVisibility(warm, { key: "s:1", visible: true }, "s:1")).toBe(true);
-    expect(pendingShowVisibility(warm, { key: "s:2", visible: false }, "s:1")).toBe(false);
-  });
-
-  it("shows no screen other than the one being left", () => {
-    expect(pendingShowVisibility(warm, { key: "s:3", visible: true }, "s:1")).toBe(false);
-    expect(pendingShowVisibility(warm, { key: "s:1", visible: false }, "s:1")).toBe(false);
-    expect(pendingShowVisibility(warm, { key: "s:1", visible: true }, null)).toBe(false);
   });
 });
 
