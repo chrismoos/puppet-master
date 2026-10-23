@@ -19,6 +19,7 @@
 - [Web] Sessions kept warm in the background no longer draw their terminals while hidden. With several busy agents, each drew every frame, which held the page and the GPU and made switching sessions take seconds.
 - [Web] Clicking a session takes the terminal pane at once, covered by a loading curtain in the terminal's own colors until its screen arrives at the pane's size, instead of keeping the previous session up or flashing its old screen while it redraws. A session whose agent kept printing while its size changed could leave the previous session on screen for seconds, or until it went quiet, and an ended session showed the previous session's terminal behind its card.
 - [Web] Pressing a session in the sidebar starts attaching its terminal before the click lands, so a session not opened recently paints sooner.
+- [Web] A review on the working tree marks the agent's newest round as read once the diff shows it, so the "Rev N ready" banner no longer asks you to advance to a diff already on screen. A finished round also reloads the diff straight away. The banner stays only while an unsent comment holds the diff on a file that changed, or while you are reading an earlier round.
 
 ## 0.10.3 — 2026-10-14
 

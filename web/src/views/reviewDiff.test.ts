@@ -13,6 +13,8 @@ import {
   previewExcerpt,
   renderSnapshot,
   scrollKey,
+  livePinTarget,
+  newRoundReloads,
   staleAction,
   viewOptions,
   withMissingThreadFiles,
@@ -439,6 +441,45 @@ describe("staleAction", () => {
 
   it("offers rather than replaces when the reader chose a stored revision", () => {
     expect(staleAction("round:1", ["a.rs"], [])).toBe("offer");
+  });
+});
+
+describe("livePinTarget", () => {
+  it("moves a reader on the working tree to the round the render holds", () => {
+    expect(livePinTarget("", 3, 2)).toBe(3);
+  });
+
+  // A pin of zero is the tree as sent at open, which the agent's first
+  // round is ahead of.
+  it("moves a reader who has never advanced onto the first round", () => {
+    expect(livePinTarget("", 1, 0)).toBe(1);
+  });
+
+  it("leaves a reader already at or past the rendered round", () => {
+    expect(livePinTarget("", 2, 2)).toBeNull();
+    expect(livePinTarget("", 1, 2)).toBeNull();
+    expect(livePinTarget("", 0, 0)).toBeNull();
+  });
+
+  it("leaves the pin of a reader on a stored revision", () => {
+    expect(livePinTarget("round:1", 3, 1)).toBeNull();
+    expect(livePinTarget("cum:2", 3, 1)).toBeNull();
+  });
+});
+
+describe("newRoundReloads", () => {
+  it("reloads a reader on the working tree with nothing half-written", () => {
+    expect(newRoundReloads("", [], [])).toBe(true);
+    expect(newRoundReloads("", ["a.rs"], [])).toBe(true);
+    expect(newRoundReloads("", ["a.rs"], ["b.rs"])).toBe(true);
+  });
+
+  it("holds the diff while a moved file is being written on", () => {
+    expect(newRoundReloads("", ["a.rs", "b.rs"], ["b.rs"])).toBe(false);
+  });
+
+  it("holds the diff of a reader on a stored revision", () => {
+    expect(newRoundReloads("delta:2", [], [])).toBe(false);
   });
 });
 

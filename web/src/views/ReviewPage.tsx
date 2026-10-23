@@ -58,7 +58,9 @@ import {
   isImage,
   draftPaths,
   isMarkdown,
+  livePinTarget,
   liveSnapshot,
+  newRoundReloads,
   nextUnviewedFile,
   parseDiff,
   previewExcerpt,
@@ -282,6 +284,7 @@ export function ReviewPage({
   // revision they chose.
   const [renderedTree, setRenderedTree] = useState<bigint | null>(null);
   const [changedFiles, setChangedFiles] = useState<string[]>([]);
+  const [renderedRev, setRenderedRev] = useState(0);
   const [previewSnapshots, setPreviewSnapshots] = useState<Record<string, bigint>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
@@ -404,8 +407,7 @@ export function ReviewPage({
   }, [detail]);
 
   // The daemon publishes counts on the event bus, so a reply landing
-  // refreshes the threads without the reader doing anything. The diff
-  // is deliberately not refetched: the reader is pinned.
+  // refreshes the threads without the reader doing anything.
   const reviewRow = state.reviews.get(String(id));
   const counts = reviewRow
     ? `${reviewRow.draftCount}:${reviewRow.openCount}:${reviewRow.answeredCount}:${reviewRow.resolvedCount}`
@@ -414,16 +416,31 @@ export function ReviewPage({
     if (counts) void load();
   }, [counts, load]);
 
-  // The daemon renders the diff from the view selector, the context width
-  // and the revision being read, so only those refetch it. Depending on the
-  // whole detail object refetched, reparsed and re-highlighted every file in
-  // the review whenever the reader's own state was saved, which marking a
-  // file viewed and settling a scroll both do.
+  // The daemon renders the diff from the view selector and the context
+  // width, so only those refetch it. Depending on the whole detail object
+  // refetched, reparsed and re-highlighted every file in the review whenever
+  // the reader's own state was saved, which marking a file viewed and
+  // settling a scroll both do.
   const loaded = detail !== null;
-  const pinnedRev = viewer?.pinned_rev ?? 0;
+  const latestRev = detail?.latest_rev ?? 0;
+  const latestRevRef = useRef(latestRev);
+  latestRevRef.current = latestRev;
+  const pinnedRevRef = useRef(0);
+  pinnedRevRef.current = viewer?.pinned_rev ?? 0;
+  // A pin that does not move leaves the Advance banner up, which offers
+  // the same move again.
+  const pinTo = useStableCallback(async (rev: number) => {
+    try {
+      await client.advanceReview(BigInt(id), rev);
+    } catch {
+      return;
+    }
+    await load();
+  });
   useEffect(() => {
     if (!loaded) return;
     const params = new URLSearchParams({ view, context: String(context) });
+    const requestedRev = latestRevRef.current;
     setDiffLoaded(false);
     authedFetch(`/api/reviews/${id}/diff?${params}`, { cache: "no-store" })
       .then((r) => {
@@ -436,9 +453,12 @@ export function ReviewPage({
       .then((text) => {
         setDiff(parseDiff(text));
         setDiffLoaded(true);
+        setRenderedRev(requestedRev);
+        const target = livePinTarget(view, requestedRev, pinnedRevRef.current);
+        if (target !== null) void pinTo(target);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [id, view, context, pinnedRev, loaded, diffEpoch]);
+  }, [id, view, context, loaded, diffEpoch, pinTo]);
 
   // The daemon renders the working tree per read and raises nothing when
   // that tree changes, so a page that is open asks. Only the paths come
@@ -474,7 +494,8 @@ export function ReviewPage({
     return byId;
   }, [detail?.threads]);
 
-  const stale = staleAction(view, changedFiles, draftPaths(drafts, threadPaths));
+  const writingOn = draftPaths(drafts, threadPaths);
+  const stale = staleAction(view, changedFiles, writingOn);
 
   // The diff is not the whole page: a file added to the tree after the
   // page loaded is in neither the rendered diff nor the file list, so
@@ -489,6 +510,16 @@ export function ReviewPage({
   useEffect(() => {
     if (stale === "refresh") refetch();
   }, [stale, refetch]);
+
+  // A round the agent finished after the render was asked for is not in
+  // it, even when the tree check has not noticed the files yet.
+  const reloadsRound =
+    diffLoaded
+    && latestRev > renderedRev
+    && newRoundReloads(view, [...changedFiles, ...(detail?.pending_files ?? [])], writingOn);
+  useEffect(() => {
+    if (reloadsRound) refetch();
+  }, [reloadsRound, refetch]);
 
   // Restoring the reader's place is the point of persisting it, so it
   // happens once per page rather than on every diff refresh.

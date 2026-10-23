@@ -342,6 +342,33 @@ export function staleAction(
   return writingOn.some((path) => touched.has(path)) ? "offer" : "refresh";
 }
 
+/** The revision a working-tree render moves the reader's pin to, or null
+ * when it moves nothing.
+ *
+ * `renderedRev` is the newest round the page knew of when it asked for
+ * the render. That round was captured before the request, so the live
+ * tree the daemon rendered already holds it. A stored view leaves the
+ * pin alone because the reader chose what they are reading. */
+export function livePinTarget(view: string, renderedRev: number, pinnedRev: number): number | null {
+  if (view !== "" || renderedRev <= pinnedRev) return null;
+  return renderedRev;
+}
+
+/** Whether a round the render does not hold yet replaces the diff.
+ *
+ * It does for a reader on the working tree with nothing half-written on
+ * a file the round or the tree has moved, which is the same rule a
+ * moved tree follows in {@link staleAction}. */
+export function newRoundReloads(
+  view: string,
+  moved: readonly string[],
+  writingOn: readonly string[],
+): boolean {
+  if (view !== "") return false;
+  const touched = new Set(moved);
+  return !writingOn.some((path) => touched.has(path));
+}
+
 /** The source lines a rendered markdown block came from, which is what
  * a comment placed on that block was written against. */
 export function previewExcerpt(text: string, range: { start: number; end: number }): string {
