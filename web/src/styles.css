@@ -3948,6 +3948,34 @@ body.resizing-col {
   }
 }
 
+.terminal-loading-curtain {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.terminal-loading-curtain[hidden] {
+  display: none;
+}
+
+/* A switch that paints quickly lifts the curtain before the label fades in. */
+.terminal-loading-curtain span {
+  opacity: 0.55;
+  animation: terminal-loading-label-appear 160ms linear 150ms both;
+}
+
+@keyframes terminal-loading-label-appear {
+  from {
+    opacity: 0;
+  }
+}
+
 .terminal-stream-status button {
   padding: 1px 4px;
   border: 0;

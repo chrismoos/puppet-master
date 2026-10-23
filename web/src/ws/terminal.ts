@@ -43,6 +43,9 @@ interface Layer {
   addressedTerminal: boolean;
   el: HTMLDivElement;
   statusEl: HTMLDivElement;
+  /** Covers a shown layer in the terminal's own colors until its first
+   * snapshot at the pane's size has painted. */
+  curtainEl: HTMLDivElement;
   term: Terminal;
   webgl: WebglHandle | null;
   handle: PtyHandle | null;
@@ -58,8 +61,8 @@ interface Layer {
   unackedBytes: number;
   ackTimer: ReturnType<typeof setTimeout> | null;
   initialReplayPending: boolean;
-  /** Shown, but kept behind the previous screen until a snapshot at the
-   * pane's size has painted, so a switch is one swap. */
+  /** Shown under the curtain until a snapshot at the pane's size has
+   * painted. */
   swapPending: boolean;
   /** What had focus when this layer was shown and held back. */
   focusAtShow: Element | null;
@@ -146,6 +149,7 @@ export class TerminalStage {
     this.theme = freshXtermTheme(theme);
     for (const layer of this.layers.values()) {
       layer.term.options.theme = freshXtermTheme(theme);
+      paintCurtain(layer.curtainEl, this.theme);
     }
   }
 
@@ -303,6 +307,7 @@ export class TerminalStage {
 
     if (layer.initialReplayPending || layer.pendingFit) {
       if (!layer.initialReplayPending) layer.swapPending = true;
+      raiseCurtain(layer);
       layer.focusAtShow = document.activeElement;
       layer.term.focus();
       this.scheduleRefitVisible();
@@ -310,7 +315,6 @@ export class TerminalStage {
         layer.revealTimeout = setTimeout(() => {
           layer.revealTimeout = null;
           this.revealPendingLayer(layer);
-          if (layer.initialReplayPending) this.showConnectingNote(layer);
         }, layer.swapPending ? SWAP_RECHECK_MS : INITIAL_RECHECK_MS);
       }
       this.evict();
@@ -380,6 +384,14 @@ export class TerminalStage {
     statusEl.className = "terminal-stream-status";
     statusEl.hidden = true;
     el.appendChild(statusEl);
+    const curtainEl = document.createElement("div");
+    curtainEl.className = "terminal-loading-curtain";
+    curtainEl.hidden = true;
+    const curtainLabel = document.createElement("span");
+    curtainLabel.textContent = "loading…";
+    curtainEl.appendChild(curtainLabel);
+    paintCurtain(curtainEl, this.theme);
+    el.appendChild(curtainEl);
 
     const encoder = new TextEncoder();
     const dataSub = term.onData((text) => {
@@ -415,6 +427,7 @@ export class TerminalStage {
       addressedTerminal,
       el,
       statusEl,
+      curtainEl,
       term,
       webgl,
       handle: null,
@@ -581,6 +594,7 @@ export class TerminalStage {
     if (didReset && layer.handle) {
       layer.initialReplayPending = true;
       layer.replayPainted = false;
+      if (this.visibleId === layer.key) raiseCurtain(layer);
       layer.handle.resync();
     }
     this.flushHeldSnapshot(layer);
@@ -769,6 +783,10 @@ export class TerminalStage {
       const currentLayer = this.layers.get(layer.key);
       if (currentLayer && status.lastError) this.revealPendingLayer(currentLayer, true);
       const connecting = !status.lastError && !currentLayer?.replayPainted;
+      if (connecting && !layer.curtainEl.hidden) {
+        layer.statusEl.hidden = true;
+        return;
+      }
       layer.statusEl.classList.toggle("is-connecting", connecting);
       const label = document.createElement("span");
       label.textContent = status.lastError ?? (connecting ? "connecting…" : "reconnecting…");
@@ -865,22 +883,10 @@ export class TerminalStage {
     }
   }
 
-  /** Says why a pane that has already taken the screen is still empty. A
-   * terminal stream reports itself only once it has failed, so a first
-   * attach that is merely slow says nothing on its own. */
-  private showConnectingNote(layer: Layer): void {
-    if (this.visibleId !== layer.key || !layer.statusEl.hidden) return;
-    layer.statusEl.replaceChildren();
-    layer.statusEl.classList.add("is-connecting");
-    const label = document.createElement("span");
-    label.textContent = "connecting…";
-    layer.statusEl.appendChild(label);
-    layer.statusEl.hidden = false;
-  }
-
   private finishLayerReveal(layer: Layer): void {
     layer.initialReplayPending = false;
     layer.swapPending = false;
+    layer.curtainEl.hidden = true;
     if (layer.statusEl.classList.contains("is-connecting")) layer.statusEl.hidden = true;
     if (layer.revealTimeout !== null) {
       clearTimeout(layer.revealTimeout);
@@ -993,4 +999,15 @@ export class TerminalStage {
 
 export function currentTerminalGeometry(): TerminalGeometry | null {
   return activeStage?.currentSize() ?? null;
+}
+
+/** The curtain says the pane is loading, so a connecting note would repeat it. */
+function raiseCurtain(layer: Layer): void {
+  layer.curtainEl.hidden = false;
+  if (layer.statusEl.classList.contains("is-connecting")) layer.statusEl.hidden = true;
+}
+
+function paintCurtain(curtain: HTMLDivElement, theme: ITheme): void {
+  curtain.style.backgroundColor = theme.background ?? "";
+  curtain.style.color = theme.foreground ?? "";
 }

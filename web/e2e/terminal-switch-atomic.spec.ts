@@ -9,6 +9,8 @@ const STREAMING_FRAME_MS = 40;
 
 interface Sample {
   onScreen: string[];
+  /** The shown layer's loading curtain covers it. */
+  curtained: boolean;
   layers: Record<string, { painted: boolean; lines: number; cols: number; rows: number }>;
 }
 
@@ -17,6 +19,7 @@ interface StageWindow extends Window {
   __switchSampling: boolean;
   __switchRenderListeners: Array<{ dispose(): void }>;
   __pmStage: {
+    theme: { background: string; foreground: string };
     layers: Map<string, {
       el: HTMLElement;
       replayPainted: boolean;
@@ -84,14 +87,17 @@ async function startSampling(page: Page): Promise<void> {
     const observed = new Set(w.__pmStage.layers.keys());
     const tick = () => {
       if (!w.__switchSampling) return;
-      const sample: Sample = { onScreen: [], layers: {} };
+      const sample: Sample = { onScreen: [], curtained: false, layers: {} };
       for (const [key, layer] of w.__pmStage.layers) {
         if (!observed.has(key)) {
           observed.add(key);
           w.__switchRenderListeners.push(layer.term.onRender(() => record(key)));
           layer.term.refresh(0, layer.term.rows - 1);
         }
-        if (layer.el.style.visibility === "visible") sample.onScreen.push(key);
+        if (layer.el.style.visibility === "visible") {
+          sample.onScreen.push(key);
+          sample.curtained = !layer.el.querySelector<HTMLElement>(".terminal-loading-curtain")!.hidden;
+        }
         const painted = rendered.get(key);
         if (painted) sample.layers[key] = {
           ...painted,
@@ -154,6 +160,7 @@ function expectBlankThenOnePaint(result: { from: string; to: string; samples: Sa
     const state = shown === from
       ? "previous"
       : sample.layers[to]?.painted ? "painted" : "blank";
+    if (shown === to) expect(sample.curtained, `frame ${index}`).toBe(state === "blank");
     if (states.at(-1) !== state) states.push(state);
   }
   expect(states).toEqual(["previous", "blank", "painted"]);
@@ -161,7 +168,8 @@ function expectBlankThenOnePaint(result: { from: string; to: string; samples: Sa
 
 /// The pane goes from the session being left straight to the session asked
 /// for, before that session's redraw at the pane's size has arrived, and
-/// never goes back.
+/// never goes back. Until that redraw paints, the curtain covers the stale
+/// screen.
 function expectImmediateSwap(result: { from: string; to: string; samples: Sample[] }): void {
   const { from, to, samples } = result;
   const final = samples.at(-1)!.layers[to];
@@ -172,6 +180,7 @@ function expectImmediateSwap(result: { from: string; to: string; samples: Sample
     const [shown] = sample.onScreen;
     if (shown === to) {
       firstShown ??= sample;
+      expect(sample.curtained, `frame ${index}`).toBe(!sample.layers[to]?.painted);
     } else {
       expect(shown, `frame ${index}`).toBe(from);
       expect(firstShown, `frame ${index} went back to the previous session`).toBeNull();
@@ -278,7 +287,7 @@ test("pressing a session row starts attaching its terminal before the click open
   expect(tickets).toHaveLength(1);
 });
 
-test("a session still reaching for its terminal says it is connecting over an empty pane", async ({ page }) => {
+test("a session still reaching for its terminal shows a loading curtain in the terminal's colors", async ({ page }) => {
   await logIn(page);
   await openSession(page, 0);
   await fillHistory(page);
@@ -295,7 +304,26 @@ test("a session still reaching for its terminal says it is connecting over an em
 
   await page.locator(".sb-session:not(.is-selected)").first().click();
   const pane = page.locator('.term-layer[style*="visibility: visible"]');
-  await expect(pane.locator(".terminal-stream-status.is-connecting")).toHaveText("connecting…");
+  const curtain = pane.locator(".terminal-loading-curtain");
+  await expect(curtain).toHaveText("loading…");
+  await expect(curtain.locator("span")).toHaveCSS("opacity", "0.55");
+  await expect(pane.locator(".terminal-stream-status")).toBeHidden();
+  const curtainColors = await curtain.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { background: style.backgroundColor, color: style.color };
+  });
+  const terminalColors = await page.evaluate(() => {
+    const theme = (window as unknown as StageWindow).__pmStage.theme;
+    const probe = document.createElement("span");
+    probe.style.backgroundColor = theme.background;
+    probe.style.color = theme.foreground;
+    document.body.appendChild(probe);
+    const style = getComputedStyle(probe);
+    const colors = { background: style.backgroundColor, color: style.color };
+    probe.remove();
+    return colors;
+  });
+  expect(curtainColors).toEqual(terminalColors);
   const waiting = await page.evaluate(() => {
     const stage = (window as unknown as StageWindow).__pmStage as unknown as {
       visibleId: string;
@@ -313,7 +341,7 @@ test("a session still reaching for its terminal says it is connecting over an em
   expect(waiting.lines).toBeLessThan(HISTORY_LINES);
 
   letTicketThrough();
-  await expect(pane.locator(".terminal-stream-status")).toBeHidden();
+  await expect(curtain).toBeHidden();
   await expect.poll(() => page.evaluate(() => {
     const stage = (window as unknown as StageWindow).__pmStage as unknown as {
       visibleId: string;
@@ -324,7 +352,7 @@ test("a session still reaching for its terminal says it is connecting over an em
 });
 
 interface DebugStageWindow extends Window {
-  __pmStage: {
+  __pmStage?: {
     debugSnapshot(): Array<{
       visible: boolean;
       bufferLines: number;
@@ -345,6 +373,8 @@ interface DebugStageWindow extends Window {
 function shownHistory(page: Page) {
   return page.evaluate(() => {
     const stage = (window as unknown as DebugStageWindow).__pmStage;
+    // A reloaded page has not built its stage yet.
+    if (!stage) return null;
     const shown = stage.debugSnapshot().find((entry) => entry.visible);
     if (!shown) return null;
     const layer = [...stage.layers.values()].find((entry) => entry.el.style.visibility === "visible")!;

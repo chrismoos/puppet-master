@@ -17,7 +17,7 @@
 - [Web] A refused connection test says what it asked the API for and what the API answered, with the status code and the start of the response, rather than one line naming the endpoint and the credentials. The daemon logs the same detail.
 - [Web] A read operation that answers tests a REST connection even when its base URL refuses, and the connection reads as tested from then on.
 - [Web] Sessions kept warm in the background no longer draw their terminals while hidden. With several busy agents, each drew every frame, which held the page and the GPU and made switching sessions take seconds.
-- [Web] Clicking a session takes the terminal pane at once, showing that session's last screen or an empty pane while it loads, instead of keeping the previous session up. A session whose agent kept printing while its size changed could leave the previous session on screen for seconds, or until it went quiet, and an ended session showed the previous session's terminal behind its card.
+- [Web] Clicking a session takes the terminal pane at once, covered by a loading curtain in the terminal's own colors until its screen arrives at the pane's size, instead of keeping the previous session up or flashing its old screen while it redraws. A session whose agent kept printing while its size changed could leave the previous session on screen for seconds, or until it went quiet, and an ended session showed the previous session's terminal behind its card.
 - [Web] Pressing a session in the sidebar starts attaching its terminal before the click lands, so a session not opened recently paints sooner.
 
 ## 0.10.3 — 2026-10-14
