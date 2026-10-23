@@ -15,7 +15,10 @@
   },
   "expo": {
     "autolinking": {
-      "nativeModulesDir": "./plugins"
+      "nativeModulesDir": "./plugins",
+      "ios": {
+        "exclude": ["expo-file-system"]
+      }
     }
   },
   "dependencies": {

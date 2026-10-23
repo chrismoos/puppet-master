@@ -54,12 +54,18 @@ export function voiceModule(): VoiceNativeModule | null {
   } catch {
     console.warn(
       `${LOG} PuppetVoice native module is missing, so talking and spoken ` +
-        "answers are unavailable. Typing still works. Rebuild with the voice " +
-        "config plugin applied.",
+        "answers are unavailable. Typing still works. Rebuild with " +
+        "PM_VOICE=1 to include it.",
     );
     cached = null;
   }
   return cached ?? null;
+}
+
+/** Whether this build carries voice at all. A build made without
+ * PM_VOICE=1 has no module and declares no microphone use. */
+export function voiceBuiltIn(): boolean {
+  return voiceModule() !== null;
 }
 
 /**

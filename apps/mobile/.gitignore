@@ -9,3 +9,4 @@
 terminal-web/dist/
 src/terminal/gen/
 .uitest-env/
+.voice-build

@@ -46,6 +46,10 @@ PROVIDER := ios/Pods/Target Support Files/Pods-$(SCHEME)/ExpoModulesProvider.swi
 TERMINAL_BUNDLE := src/terminal/gen/terminalHtml.ts
 ICON := assets/icon.png
 NODE_MODULES := ../../node_modules
+# Set to 1 to build voice in, with its microphone and speech permissions.
+PM_VOICE ?= 0
+export PM_VOICE
+VOICE_STAMP := .voice-build
 # Signing and upload identity. Nothing here is secret, but all of it is
 # per-developer, so it comes from the environment rather than the repo.
 # The App Store Connect .p8 stays outside the checkout entirely.
@@ -119,11 +123,18 @@ prebuild: $(PODS) ## Generate ios/ and install pods, if the app config or depend
 # say so. Pods are installed unconditionally for the same reason —
 # prebuild runs pod install only when it judges the Podfile changed,
 # which installing a dependency does not always do.
-$(PODS): app.json package.json $(TERMINAL_BUNDLE) $(ICON) $(NODE_MODULES)
+$(PODS): app.json package.json $(VOICE_STAMP) $(TERMINAL_BUNDLE) $(ICON) $(NODE_MODULES)
 	@rm -f "$(PROVIDER)"
 	$(PNPM) exec expo prebuild -p ios
 	cd ios && pod install
 	@test -f $(PODS) && touch $(PODS)
+
+# Changes only when PM_VOICE does, so switching it regenerates the project.
+$(VOICE_STAMP): FORCE
+	@echo "$(PM_VOICE)" | cmp -s - $@ || echo "$(PM_VOICE)" > $@
+
+.PHONY: FORCE
+FORCE:
 
 prebuild-clean: bundle $(NODE_MODULES) ## Regenerate ios/ from scratch, discarding local edits to it.
 	$(PNPM) exec expo prebuild -p ios --clean

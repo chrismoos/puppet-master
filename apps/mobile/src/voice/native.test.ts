@@ -6,7 +6,7 @@ vi.mock("expo-modules-core", () => ({
   },
 }));
 
-const { base64, NativeAudioSink, Dictation, dictationAvailable, releaseAudio } =
+const { base64, NativeAudioSink, Dictation, dictationAvailable, releaseAudio, voiceBuiltIn } =
   await import("./native");
 
 describe("base64", () => {
@@ -30,6 +30,10 @@ describe("base64", () => {
 describe("without the native module", () => {
   it("reports that it cannot listen", () => {
     expect(dictationAvailable()).toBe(false);
+  });
+
+  it("reports that voice is not built in, so the app offers no Voice screen", () => {
+    expect(voiceBuiltIn()).toBe(false);
   });
 
   it("ends an utterance without failing, so a call can still be hung up", () => {
