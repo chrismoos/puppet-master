@@ -127,6 +127,9 @@ import {
   validateTerminalTheme,
 } from "@puppet-master/client-core/theme/terminalTheme";
 
+/** Hides the topbar voice button until voice is ready to ship. */
+const VOICE_ENABLED = false;
+
 const APP_TITLE = "Puppet Master";
 
 type AuthPhase =
@@ -1013,7 +1016,7 @@ function Shell({
         <div className="topbar-spacer" />
         <AppearanceToggle appearance={appearance} />
         <ApprovalsButton pending={pendingApprovals} />
-        <button
+        {VOICE_ENABLED && <button
           type="button"
           className="btn topbar-icon voice-toggle"
           title={voiceOpen ? "close voice" : "talk to Puppet Master"}
@@ -1025,7 +1028,7 @@ function Shell({
             <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" />
             <path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3" />
           </svg>
-        </button>
+        </button>}
         <button
           type="button"
           className="btn topbar-icon focus-mode-toggle"
