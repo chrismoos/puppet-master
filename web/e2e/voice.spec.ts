@@ -1,8 +1,11 @@
 import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 
+import { VOICE_ENABLED } from "../src/voice/enabled";
 import { expect, test } from "./fixtures";
 import { apiHeaders, logIn } from "./support";
+
+test.skip(!VOICE_ENABLED, "the topbar voice button is hidden");
 
 /**
  * The voice panel against a scripted model, so the browser path is

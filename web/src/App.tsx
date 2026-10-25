@@ -17,6 +17,7 @@ import { fetchMe, fetchVersion, logout, type BuildInfo } from "./api/auth";
 import { BuildStamp } from "./components/UpdateNotice";
 import { VoicePanel } from "./views/VoicePanel";
 import { VoiceController } from "@puppet-master/client-core/voice/controller";
+import { VOICE_ENABLED } from "./voice/enabled";
 import { WebAudioSink } from "./voice/webAudioSink";
 import { securityNoticeTitle } from "./securityNotice";
 import { fetchItem } from "./api/items";
@@ -126,9 +127,6 @@ import {
   USER_TERMINAL_THEME_KEY,
   validateTerminalTheme,
 } from "@puppet-master/client-core/theme/terminalTheme";
-
-/** Hides the topbar voice button until voice is ready to ship. */
-const VOICE_ENABLED = false;
 
 const APP_TITLE = "Puppet Master";
 
