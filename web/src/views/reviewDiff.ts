@@ -327,17 +327,19 @@ export function draftPaths(
 /** What to do about a tree that has moved under the reader.
  *
  * Replacing the diff is only safe for a reader who is reading the
- * working tree and has written nothing on a file that moved: anyone
- * else chose the revision they are looking at, or is mid-sentence
- * against a line that is about to shift, and is offered the newer tree
- * rather than moved onto it. */
+ * working tree, has no comment box open, and has written nothing on a
+ * file that moved: anyone else chose the revision they are looking at,
+ * or is mid-sentence against a line that is about to shift, and is
+ * offered the newer tree rather than moved onto it. An open box holds on
+ * any file, because a file above it growing moves it too. */
 export function staleAction(
   view: string,
   changed: readonly string[],
   writingOn: readonly string[],
+  composerOpen: boolean,
 ): "none" | "refresh" | "offer" {
   if (changed.length === 0) return "none";
-  if (view !== "") return "offer";
+  if (view !== "" || composerOpen) return "offer";
   const touched = new Set(changed);
   return writingOn.some((path) => touched.has(path)) ? "offer" : "refresh";
 }
@@ -356,15 +358,16 @@ export function livePinTarget(view: string, renderedRev: number, pinnedRev: numb
 
 /** Whether a round the render does not hold yet replaces the diff.
  *
- * It does for a reader on the working tree with nothing half-written on
- * a file the round or the tree has moved, which is the same rule a
- * moved tree follows in {@link staleAction}. */
+ * It does for a reader on the working tree with no comment box open and
+ * nothing half-written on a file the round or the tree has moved, which
+ * is the same rule a moved tree follows in {@link staleAction}. */
 export function newRoundReloads(
   view: string,
   moved: readonly string[],
   writingOn: readonly string[],
+  composerOpen: boolean,
 ): boolean {
-  if (view !== "") return false;
+  if (view !== "" || composerOpen) return false;
   const touched = new Set(moved);
   return !writingOn.some((path) => touched.has(path));
 }

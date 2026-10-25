@@ -424,23 +424,30 @@ describe("draftPaths", () => {
 
 describe("staleAction", () => {
   it("does nothing while the tree has not moved", () => {
-    expect(staleAction("", [], [])).toBe("none");
-    expect(staleAction("round:1", [], ["a.rs"])).toBe("none");
+    expect(staleAction("", [], [], false)).toBe("none");
+    expect(staleAction("round:1", [], ["a.rs"], false)).toBe("none");
   });
 
   it("refreshes a reader who is on the working tree with nothing half-written", () => {
-    expect(staleAction("", ["a.rs"], [])).toBe("refresh");
-    expect(staleAction("", ["a.rs"], ["b.rs"])).toBe("refresh");
+    expect(staleAction("", ["a.rs"], [], false)).toBe("refresh");
+    expect(staleAction("", ["a.rs"], ["b.rs"], false)).toBe("refresh");
   });
 
   // Replacing the diff moves the line the composer is anchored to, so
   // the reader is told instead.
   it("offers rather than replaces when a changed file is being written on", () => {
-    expect(staleAction("", ["a.rs"], ["a.rs"])).toBe("offer");
+    expect(staleAction("", ["a.rs"], ["a.rs"], false)).toBe("offer");
   });
 
   it("offers rather than replaces when the reader chose a stored revision", () => {
-    expect(staleAction("round:1", ["a.rs"], [])).toBe("offer");
+    expect(staleAction("round:1", ["a.rs"], [], false)).toBe("offer");
+  });
+
+  // A file above the open box growing moves the box as surely as its own
+  // file changing does.
+  it("offers rather than replaces while a comment box is open on any file", () => {
+    expect(staleAction("", ["a.rs"], [], true)).toBe("offer");
+    expect(staleAction("", [], [], true)).toBe("none");
   });
 });
 
@@ -469,17 +476,22 @@ describe("livePinTarget", () => {
 
 describe("newRoundReloads", () => {
   it("reloads a reader on the working tree with nothing half-written", () => {
-    expect(newRoundReloads("", [], [])).toBe(true);
-    expect(newRoundReloads("", ["a.rs"], [])).toBe(true);
-    expect(newRoundReloads("", ["a.rs"], ["b.rs"])).toBe(true);
+    expect(newRoundReloads("", [], [], false)).toBe(true);
+    expect(newRoundReloads("", ["a.rs"], [], false)).toBe(true);
+    expect(newRoundReloads("", ["a.rs"], ["b.rs"], false)).toBe(true);
   });
 
   it("holds the diff while a moved file is being written on", () => {
-    expect(newRoundReloads("", ["a.rs", "b.rs"], ["b.rs"])).toBe(false);
+    expect(newRoundReloads("", ["a.rs", "b.rs"], ["b.rs"], false)).toBe(false);
   });
 
   it("holds the diff of a reader on a stored revision", () => {
-    expect(newRoundReloads("delta:2", [], [])).toBe(false);
+    expect(newRoundReloads("delta:2", [], [], false)).toBe(false);
+  });
+
+  it("holds the diff while a comment box is open, whatever the round moved", () => {
+    expect(newRoundReloads("", ["a.rs"], [], true)).toBe(false);
+    expect(newRoundReloads("", [], [], true)).toBe(false);
   });
 });
 

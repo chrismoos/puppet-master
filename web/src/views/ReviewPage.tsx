@@ -495,7 +495,8 @@ export function ReviewPage({
   }, [detail?.threads]);
 
   const writingOn = draftPaths(drafts, threadPaths);
-  const stale = staleAction(view, changedFiles, writingOn);
+  const composerOpen = composing !== null || replyOn !== null;
+  const stale = staleAction(view, changedFiles, writingOn, composerOpen);
 
   // The diff is not the whole page: a file added to the tree after the
   // page loaded is in neither the rendered diff nor the file list, so
@@ -505,21 +506,38 @@ export function ReviewPage({
     void load();
   }, [load]);
 
-  // Nothing is pinned and nothing is half-written, so there is no reason
-  // to make the reader ask for what they would have seen on a reload.
-  useEffect(() => {
-    if (stale === "refresh") refetch();
-  }, [stale, refetch]);
-
   // A round the agent finished after the render was asked for is not in
   // it, even when the tree check has not noticed the files yet.
-  const reloadsRound =
-    diffLoaded
-    && latestRev > renderedRev
-    && newRoundReloads(view, [...changedFiles, ...(detail?.pending_files ?? [])], writingOn);
+  const takesRound = newRoundReloads(
+    view,
+    [...changedFiles, ...(detail?.pending_files ?? [])],
+    writingOn,
+    composerOpen,
+  );
+  // Nothing is pinned and nothing is being written, so there is no reason
+  // to make the reader ask for what they would have seen on a reload.
+  const reloads = stale === "refresh" || (diffLoaded && latestRev > renderedRev && takesRound);
   useEffect(() => {
-    if (reloadsRound) refetch();
-  }, [reloadsRound, refetch]);
+    if (reloads) refetch();
+  }, [reloads, refetch]);
+
+  // A notice appearing or leaving above the diff would otherwise push
+  // what the reader is looking at down or pull it up. Content changing
+  // inside the diff is the browser's scroll anchoring to hold.
+  const headRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const head = headRef.current;
+    if (!head) return;
+    let height = head.offsetHeight;
+    const observer = new ResizeObserver(() => {
+      const next = head.offsetHeight;
+      const el = scrollRef.current;
+      if (el && next !== height) el.scrollTop += next - height;
+      height = next;
+    });
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, [loaded]);
 
   // Restoring the reader's place is the point of persisting it, so it
   // happens once per page rather than on every diff refresh.
@@ -1047,19 +1065,30 @@ export function ReviewPage({
         typeof bodyOrSend === "string"
           ? bodyOrSend
           : (composerKey ? draftsRef.current[composerKey] ?? drafts[composerKey] ?? "" : "");
-      if (!composing || !body.trim()) return;
-      await client.addReviewComment({
-        reviewId: BigInt(id),
-        path: composing.path,
-        line: composing.line,
-        side: composing.side,
-        excerpt: composing.excerpt,
-        body,
-        send,
-        anchorSnapshotId: composing.snapshot ?? undefined,
-      });
-      clearDraft(composerKey);
-      setComposing(null);
+      const submitted = composing;
+      const key = composerKey;
+      if (!submitted || !body.trim()) return;
+      // Sending waits on the agent being told, so the box closes now and
+      // the reply cannot close one the reader has opened since.
+      setComposing((open) => (open === submitted ? null : open));
+      clearDraft(key);
+      try {
+        await client.addReviewComment({
+          reviewId: BigInt(id),
+          path: submitted.path,
+          line: submitted.line,
+          side: submitted.side,
+          excerpt: submitted.excerpt,
+          body,
+          send,
+          anchorSnapshotId: submitted.snapshot ?? undefined,
+        });
+      } catch (e) {
+        setDraft(key, body);
+        setComposing((open) => open ?? submitted);
+        setError(e instanceof Error ? e.message : String(e));
+        return;
+      }
       await load();
     },
   );
@@ -1069,9 +1098,17 @@ export function ReviewPage({
   // up the page in pieces, each resolvable on its own.
   const replyToThread = useStableCallback(async (threadId: number, body: string) => {
     if (!body.trim()) return;
-    await client.replyReviewThread(BigInt(threadId), body);
-    clearDraft(replyDraftKey(threadId));
-    setReplyOn(null);
+    const key = replyDraftKey(threadId);
+    setReplyOn((open) => (open === threadId ? null : open));
+    clearDraft(key);
+    try {
+      await client.replyReviewThread(BigInt(threadId), body);
+    } catch (e) {
+      setDraft(key, body);
+      setReplyOn((open) => open ?? threadId);
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     await load();
   });
   // Resolving is the reader saying they are done with a thread, so the
@@ -1185,11 +1222,13 @@ export function ReviewPage({
   const pending = detail.pending_files.length;
   const pinned = viewer?.pinned_rev ?? 0;
   const behind = readerIsBehind(detail.latest_rev, pinned);
+  // A round the live diff is about to take needs no banner.
+  const offersRound = behind && !takesRound;
 
   return (
     <div className="review">
       {error && <div className="flash-error" role="alert">{error}</div>}
-      <div className="review-head">
+      <div className="review-head" ref={headRef}>
         <div className="review-head-top">
           <span className="review-title">Review</span>
           <span className="review-range">{r.label}</span>
@@ -1290,7 +1329,7 @@ export function ReviewPage({
           <span>·</span>
           <span className="review-reading">{readingLabel(pinned)}</span>
         </div>
-        {behind && (
+        {offersRound && (
           <div className="review-pending">
             <span className="review-pending-dot" />
             <span>
@@ -1306,7 +1345,7 @@ export function ReviewPage({
             </button>
           </div>
         )}
-        {stale !== "none" && (
+        {stale === "offer" && !offersRound && (
           <div className="review-stale">
             <span>
               The worktree has changed since this diff was rendered:{" "}

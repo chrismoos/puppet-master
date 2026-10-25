@@ -75,7 +75,7 @@ async function openReviewPage(page: Page, reviewId: number): Promise<void> {
   await expect(page.locator(".review-rail-file").first()).toBeVisible();
 }
 
-test("the first round the agent produces offers the reader the way onto it", async ({
+test("the first round the agent produces is where a reader on the working tree lands", async ({
   page,
   isolatedDaemon,
 }) => {
@@ -86,9 +86,39 @@ test("the first round the agent produces offers the reader the way onto it", asy
   await openReviewPage(page, reviewId);
 
   const threadId = await comment(page, `${FILE} line 9 edited`, "why did this move?");
+  await expect(page.locator(".review-reading")).toHaveText("reading Rev 1 as sent");
 
   // The agent's first round: it edits the tree and answers, which is
   // what records Rev 1 as something the reader has not been shown.
+  writeFileSync(join(worktree, FILE), body(true, true));
+  await isolatedDaemon.agentReply("browser-e2e", threadId, "rewrote it");
+
+  const thread = page.locator(".review-thread", { hasText: "rewrote it" });
+  await expect(thread).toBeVisible();
+
+  // Nothing is being written, so the live diff takes the round and the
+  // reader is moved onto it rather than asked to advance.
+  await expect(fileSection(page).locator(".review-rows")).toContainText(`${FILE} line 9 rewritten by the agent`);
+  await expect(page.locator(".review-reading")).toHaveText("reading Rev 1");
+  await expect(thread.locator(".review-thread-ahead.is-current")).toBeVisible();
+  await expect(thread.getByRole("button", { name: /click to update diff/ })).toHaveCount(0);
+  await expect(page.locator(".review-pending")).toHaveCount(0);
+});
+
+test("the first round waits for a reader who is writing, and offers the way onto it", async ({
+  page,
+  isolatedDaemon,
+}) => {
+  const session = isolatedDaemon.session("browser-e2e");
+  expect(session).not.toBeNull();
+  const worktree = seedWorktree();
+  const reviewId = openReview(session!.id, worktree);
+  await openReviewPage(page, reviewId);
+
+  const threadId = await comment(page, `${FILE} line 9 edited`, "why did this move?");
+  await fileSection(page).locator(".review-row", { hasText: `${FILE} line 21 edited` }).first().click();
+  await expect(fileSection(page).locator(".review-compose textarea")).toBeFocused();
+
   writeFileSync(join(worktree, FILE), body(true, true));
   await isolatedDaemon.agentReply("browser-e2e", threadId, "rewrote it");
 
