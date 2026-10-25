@@ -1509,9 +1509,15 @@ mod tests {
 
         let payload = pm_push::apns_payload(&message);
         let cleartext = serde_json::to_string(&payload).unwrap();
+        // The blob is random base64, which spells a short word such as "url"
+        // about once in every couple of hundred seals.
+        let readable = cleartext.replace(
+            payload[PUSH_DATA_KEY][SEALED_PAYLOAD_KEY].as_str().unwrap(),
+            "",
+        );
         for secret in [PROJECT_NAME, HEADLINE, STATE_DETAIL] {
             assert!(
-                !cleartext.contains(secret),
+                !readable.contains(secret),
                 "{secret:?} reached the cleartext payload: {cleartext}"
             );
         }
@@ -1526,7 +1532,7 @@ mod tests {
         );
         for routing in ["controllerId", "sessionId", "state", "eventId", "url"] {
             assert!(
-                !cleartext.contains(routing),
+                !readable.contains(routing),
                 "{routing} still names a cleartext field: {cleartext}"
             );
         }
