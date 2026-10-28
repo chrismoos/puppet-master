@@ -14,7 +14,7 @@ test("ended and failed grace expires without evicting the selected session", asy
 
   const failed = sessionRow(page, "browser-e2e");
   await failed.click();
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type("exit 7");
   await page.keyboard.press("Enter");

@@ -37,7 +37,20 @@ interface BrowserMetrics {
   };
 }
 
-type MetricsWindow = Window & { __pmMetrics: BrowserMetrics };
+interface PaintProbe {
+  visibleKey(): string | null;
+  reveal(key: string, timeout: number): Promise<void>;
+  marker(key: string, text: string, timeout: number): Promise<void>;
+}
+
+type MetricsWindow = Window & { __pmMetrics: BrowserMetrics; __pmPaint: PaintProbe };
+
+interface PaintStage {
+  debugSnapshot(): Array<{ key: string; visible: boolean; socket: { phase: string } | null }>;
+  layers: Map<string, { el: HTMLElement; term: {
+    renderSnapshot(): { rowData: Array<{ text: string }> } | null;
+  } }>;
+}
 
 function percentile(values: number[], fraction: number): number {
   const sorted = [...values].sort((first, second) => first - second);
@@ -63,7 +76,41 @@ async function installMetrics(page: Page): Promise<void> {
       controlClosed: 0,
       longTasks: [],
     };
-    (window as MetricsWindow).__pmMetrics = metrics;
+    (window as unknown as MetricsWindow).__pmMetrics = metrics;
+    const stage = () => (window as unknown as { __pmStage?: PaintStage }).__pmStage;
+    const visibleKey = () => stage()?.debugSnapshot().find((entry) => entry.visible)?.key ?? null;
+    const visibleRoot = (key: string) => {
+      const current = stage();
+      const selected = current?.debugSnapshot().find((entry) => entry.visible);
+      const layer = current?.layers.get(key)?.el;
+      if (selected?.key !== key || selected.socket?.phase !== "online" || !layer
+        || getComputedStyle(layer).visibility !== "visible"
+        || layer.querySelector<HTMLElement>(".terminal-loading-curtain")?.hidden === false) return null;
+      return layer.querySelector<HTMLCanvasElement>(".ghostty-canvas");
+    };
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const waitForPaint = async (key: string, text: string | null, timeout: number) => {
+      const deadline = performance.now() + timeout;
+      const ready = () => {
+        const root = visibleRoot(key);
+        if (!root || root.clientWidth <= 0 || root.clientHeight <= 0) return false;
+        const snapshot = stage()?.layers.get(key)?.term.renderSnapshot();
+        return root.width > 0 && root.height > 0 && snapshot !== null && snapshot !== undefined
+          && (text === null || snapshot.rowData.some((row) => row.text.includes(text)));
+      };
+      while (performance.now() < deadline) {
+        if (ready()) {
+          await frame();
+          if (ready()) return;
+        } else await frame();
+      }
+      throw new Error(`terminal ${key} did not paint ${text ?? "its revealed grid"}`);
+    };
+    (window as unknown as MetricsWindow).__pmPaint = {
+      visibleKey,
+      reveal: (key, timeout) => waitForPaint(key, null, timeout),
+      marker: (key, text, timeout) => waitForPaint(key, text, timeout),
+    };
     const nativeWebSocket = window.WebSocket;
     const observedWebSocket = new Proxy(nativeWebSocket, {
       construct(target, args) {
@@ -132,21 +179,27 @@ async function openSession(page: Page): Promise<string[]> {
   await page.locator(".sb-session").first().click();
   await page.locator(".terminal-tabs").waitFor();
   await page.waitForFunction(() => {
-    const metrics = (window as MetricsWindow).__pmMetrics;
+    const metrics = (window as unknown as MetricsWindow).__pmMetrics;
     return Object.values(metrics.streams).some((stream) => stream.opened > 0 && stream.closed === 0 && stream.replayEnds.length > 0);
   });
+  await page.evaluate(async ({ timeout }) => {
+    const paint = (window as unknown as MetricsWindow).__pmPaint;
+    const key = paint.visibleKey();
+    if (!key) throw new Error("missing selected agent layer");
+    await paint.reveal(key, timeout);
+  }, { timeout: MEASURE_TIMEOUT_MS });
   return errors;
 }
 
 async function resetLongTasks(page: Page): Promise<void> {
   await page.evaluate(() => {
-    (window as MetricsWindow).__pmMetrics.longTasks = [];
+    (window as unknown as MetricsWindow).__pmMetrics.longTasks = [];
   });
 }
 
 async function createShellToReplay(page: Page): Promise<number> {
   return page.evaluate(async ({ timeout }) => {
-    const metrics = (window as MetricsWindow).__pmMetrics;
+    const metrics = (window as unknown as MetricsWindow).__pmMetrics;
     const known = new Set(Object.keys(metrics.streams).map((url) => new URL(url, location.href).pathname));
     const newReplay = () => Object.entries(metrics.streams)
       .find(([url, stream]) => !known.has(new URL(url, location.href).pathname) && stream.replayEnds.length > 0);
@@ -160,29 +213,31 @@ async function createShellToReplay(page: Page): Promise<number> {
       if (performance.now() >= deadline) throw new Error("shell replay timed out");
       await new Promise(requestAnimationFrame);
     }
-    const replayed = newReplay()![1].replayEnds[0];
-    return replayed - started;
+    const [url, stream] = newReplay()!;
+    const id = new URL(url, location.href).pathname.split("/").at(-1)!;
+    await (window as unknown as MetricsWindow).__pmPaint.reveal(`t:${id}`, timeout);
+    return stream.replayEnds[0] - started;
   }, { timeout: MEASURE_TIMEOUT_MS });
 }
 
-async function returnToAgentPaint(page: Page): Promise<number> {
-  return page.evaluate(async () => {
-    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+async function returnToAgentPaint(page: Page, key: string): Promise<number> {
+  return page.evaluate(async ({ key, timeout }) => {
     const agent = [...document.querySelectorAll<HTMLButtonElement>(".terminal-tabs button")]
       .find((candidate) => candidate.textContent?.trim() === "agent");
     if (!agent) throw new Error("missing agent tab");
     const started = performance.now();
     agent.click();
-    while (!agent.classList.contains("active")) await frame();
-    await frame();
+    await (window as unknown as MetricsWindow).__pmPaint.reveal(key, timeout);
     return performance.now() - started;
-  });
+  }, { key, timeout: MEASURE_TIMEOUT_MS });
 }
 
 test.describe("terminal responsiveness", () => {
   test("many shell creations keep the control path responsive", async ({ page }) => {
     const errors = await openSession(page);
-    const agentUrl = await page.evaluate(() => Object.entries((window as MetricsWindow).__pmMetrics.streams)
+    const agentKey = await page.evaluate(() => (window as unknown as MetricsWindow).__pmPaint.visibleKey());
+    if (!agentKey) throw new Error("missing selected agent layer");
+    const agentUrl = await page.evaluate(() => Object.entries((window as unknown as MetricsWindow).__pmMetrics.streams)
       .filter(([, stream]) => stream.opened > 0 && stream.closed === 0 && stream.replayEnds.length > 0).at(-1)![0]);
     await resetLongTasks(page);
     const samples: number[] = [];
@@ -190,8 +245,8 @@ test.describe("terminal responsiveness", () => {
       samples.push(await createShellToReplay(page));
     }
     const creation = summary(samples);
-    const agentReturnMs = await returnToAgentPaint(page);
-    const browserMetrics = await page.evaluate(() => (window as MetricsWindow).__pmMetrics);
+    const agentReturnMs = await returnToAgentPaint(page, agentKey);
+    const browserMetrics = await page.evaluate(() => (window as unknown as MetricsWindow).__pmMetrics);
     const longestTaskMs = Math.max(0, ...browserMetrics.longTasks.map((task) => task.duration));
     console.log(JSON.stringify({ creation, samples, agentReturnMs, longestTaskMs }));
     expect(await page.locator(".terminal-tab").count()).toBe(SHELL_COUNT);
@@ -205,17 +260,22 @@ test.describe("terminal responsiveness", () => {
 
   test("warm terminal switches paint within two frames", async ({ page }) => {
     const errors = await openSession(page);
+    const agentKey = await page.evaluate(() => (window as unknown as MetricsWindow).__pmPaint.visibleKey());
     await createShellToReplay(page);
+    const shellKey = await page.evaluate(() => (window as unknown as MetricsWindow).__pmPaint.visibleKey());
+    if (!agentKey || !shellKey) throw new Error("missing measured terminal layers");
     const shell = page.locator(".terminal-tab").last();
     await shell.click();
     await page.waitForFunction(() => document.querySelector(".terminal-tab.active") !== null);
     await page.getByRole("button", { name: "agent", exact: true }).click();
+    await page.evaluate(async ({ key, timeout }) => {
+      await (window as unknown as MetricsWindow).__pmPaint.reveal(key, timeout);
+    }, { key: agentKey, timeout: MEASURE_TIMEOUT_MS });
     await resetLongTasks(page);
     const createdBefore = await page.evaluate(() => Object.values(
-      (window as MetricsWindow).__pmMetrics.streams,
+      (window as unknown as MetricsWindow).__pmMetrics.streams,
     ).reduce((count, stream) => count + stream.created, 0));
-    const samples = await page.evaluate(async ({ count }) => {
-      const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const samples = await page.evaluate(async ({ count, agentKey, shellKey, timeout }) => {
       const buttons = [...document.querySelectorAll<HTMLButtonElement>(".terminal-tabs button")];
       const agent = buttons.find((button) => button.textContent?.trim() === "agent");
       const shells = [...document.querySelectorAll<HTMLButtonElement>(".terminal-tab")];
@@ -226,14 +286,13 @@ test.describe("terminal responsiveness", () => {
         const target = index % 2 === 0 ? shell : agent;
         const started = performance.now();
         target.click();
-        while (!target.classList.contains("active")) await frame();
-        await frame();
+        await (window as unknown as MetricsWindow).__pmPaint.reveal(index % 2 === 0 ? shellKey : agentKey, timeout);
         measured.push(performance.now() - started);
       }
       return measured;
-    }, { count: SWITCH_COUNT });
+    }, { count: SWITCH_COUNT, agentKey, shellKey, timeout: MEASURE_TIMEOUT_MS });
     const switching = summary(samples);
-    const browserMetrics = await page.evaluate(() => (window as MetricsWindow).__pmMetrics);
+    const browserMetrics = await page.evaluate(() => (window as unknown as MetricsWindow).__pmMetrics);
     const createdAfter = Object.values(browserMetrics.streams)
       .reduce((count, stream) => count + stream.created, 0);
     const longestTaskMs = Math.max(0, ...browserMetrics.longTasks.map((task) => task.duration));
@@ -271,7 +330,7 @@ test.describe("terminal responsiveness", () => {
     const closing = summary(samples);
     const longestTaskMs = await page.evaluate(() => Math.max(
       0,
-      ...(window as MetricsWindow).__pmMetrics.longTasks.map((task) => task.duration),
+      ...(window as unknown as MetricsWindow).__pmMetrics.longTasks.map((task) => task.duration),
     ));
     console.log(JSON.stringify({ closing, longestTaskMs }));
     expect(closing.p99).toBeLessThanOrEqual(CLOSE_P99_BUDGET_MS);
@@ -282,24 +341,26 @@ test.describe("terminal responsiveness", () => {
   test("an output burst does not block another terminal or control", async ({ page }) => {
     const errors = await openSession(page);
     await resetLongTasks(page);
-    const initial = await page.evaluate(() => (window as MetricsWindow).__pmMetrics);
+    const initial = await page.evaluate(() => (window as unknown as MetricsWindow).__pmMetrics);
+    const agentKey = await page.evaluate(() => (window as unknown as MetricsWindow).__pmPaint.visibleKey());
+    if (!agentKey) throw new Error("missing selected agent layer");
     const agentUrl = Object.keys(initial.streams)[0];
     const initialBytes = initial.streams[agentUrl].bytes;
     const initialControlCloses = initial.controlClosed;
     await page.evaluate(({ url, triggerBytes }) => {
-      const metrics = (window as MetricsWindow).__pmMetrics;
+      const metrics = (window as unknown as MetricsWindow).__pmMetrics;
       metrics.floodAction = {
         url,
         triggerBytes,
         knownUrls: Object.keys(metrics.streams),
       };
     }, { url: agentUrl, triggerBytes: initialBytes + FLOOD_SWITCH_AFTER_BYTES });
-    const textarea = page.locator(".term-layer:visible .xterm-helper-textarea");
+    const textarea = page.locator(".term-layer:visible textarea");
     await textarea.focus();
     await page.keyboard.type(`bigout ${OUTPUT_BURST_BYTES}`);
     await page.keyboard.press("Enter");
     const otherTerminal = await page.evaluate(async ({ timeout }) => {
-      const metrics = (window as MetricsWindow).__pmMetrics;
+      const metrics = (window as unknown as MetricsWindow).__pmMetrics;
       const deadline = performance.now() + timeout;
       while (true) {
         const action = metrics.floodAction;
@@ -310,7 +371,9 @@ test.describe("terminal responsiveness", () => {
         if (action?.started !== undefined && replayed.length > 0) {
           const [url, stream] = Object.entries(metrics.streams)
             .find(([url, stream]) => !known.has(url) && stream.replayEnds.length > 0)!;
-          return { url, replayMs: Math.min(...stream.replayEnds) - action.started };
+          const id = new URL(url, location.href).pathname.split("/").at(-1)!;
+          await (window as unknown as MetricsWindow).__pmPaint.reveal(`t:${id}`, timeout);
+          return { url, key: `t:${id}`, replayMs: Math.min(...stream.replayEnds) - action.started };
         }
         if (performance.now() >= deadline) throw new Error("other terminal replay timed out");
         await new Promise(requestAnimationFrame);
@@ -321,11 +384,15 @@ test.describe("terminal responsiveness", () => {
     await page.keyboard.type("printf '\\105\\062\\105\\055\\122\\105\\101\\104\\131\\n'");
     await page.keyboard.press("Enter");
     await page.waitForFunction((url) => (
-      (window as MetricsWindow).__pmMetrics.streams[url]?.tail.includes("E2E-READY")
+      (window as unknown as MetricsWindow).__pmMetrics.streams[url]?.tail.includes("E2E-READY")
     ), otherTerminal.url);
+    const markerReceivedMs = await page.evaluate((started) => performance.now() - started, markerStarted);
+    await page.evaluate(async ({ key, timeout }) => {
+      await (window as unknown as MetricsWindow).__pmPaint.marker(key, "E2E-READY", timeout);
+    }, { key: otherTerminal.key, timeout: MEASURE_TIMEOUT_MS });
     const markerMs = await page.evaluate((started) => performance.now() - started, markerStarted);
-    const agentReturnReplayMs = await page.evaluate(async ({ url, timeout }) => {
-      const metrics = (window as MetricsWindow).__pmMetrics;
+    const agentReturn = await page.evaluate(async ({ url, key, timeout }) => {
+      const metrics = (window as unknown as MetricsWindow).__pmMetrics;
       const beforeCreated = metrics.streams[url].created;
       const beforeReplay = metrics.streams[url].replayEnds.length;
       const agent = [...document.querySelectorAll<HTMLButtonElement>(".terminal-tabs button")]
@@ -333,16 +400,17 @@ test.describe("terminal responsiveness", () => {
       if (!agent) throw new Error("missing agent tab");
       const started = performance.now();
       agent.click();
-      const deadline = started + timeout;
-      while (metrics.streams[url].created === beforeCreated
-        || metrics.streams[url].replayEnds.length === beforeReplay) {
-        if (performance.now() >= deadline) throw new Error("flooded agent replay timed out");
-        await new Promise(requestAnimationFrame);
-      }
-      await new Promise(requestAnimationFrame);
-      return performance.now() - started;
-    }, { url: agentUrl, timeout: MEASURE_TIMEOUT_MS });
-    const finalMetrics = await page.evaluate(() => (window as MetricsWindow).__pmMetrics);
+      await (window as unknown as MetricsWindow).__pmPaint.marker(key, "x".repeat(32), timeout);
+      return {
+        ms: performance.now() - started,
+        reusedSocket: metrics.streams[url].created === beforeCreated,
+        replayEndsAdded: metrics.streams[url].replayEnds.length - beforeReplay,
+      };
+    }, { url: agentUrl, key: agentKey, timeout: MEASURE_TIMEOUT_MS });
+    await page.waitForFunction(({ url, initialBytes, outputBytes }) => (
+      (window as unknown as MetricsWindow).__pmMetrics.streams[url].bytes - initialBytes >= outputBytes
+    ), { url: agentUrl, initialBytes, outputBytes: OUTPUT_BURST_BYTES }, { timeout: MEASURE_TIMEOUT_MS });
+    const finalMetrics = await page.evaluate(() => (window as unknown as MetricsWindow).__pmMetrics);
     const agentBytes = finalMetrics.streams[agentUrl].bytes - initialBytes;
     const longestTaskMs = Math.max(0, ...finalMetrics.longTasks.map((task) => task.duration));
     console.log(JSON.stringify({
@@ -350,15 +418,19 @@ test.describe("terminal responsiveness", () => {
       agentDisconnects: finalMetrics.streams[agentUrl].closed,
       otherTerminalReplayMs: otherTerminal.replayMs,
       markerMs,
-      agentReturnReplayMs,
+      markerReceivedMs,
+      agentReturnMs: agentReturn.ms,
+      agentReturnReusedSocket: agentReturn.reusedSocket,
+      agentReturnReplayEndsAdded: agentReturn.replayEndsAdded,
       longestTaskMs,
       longTasks: finalMetrics.longTasks,
     }));
-    expect(agentBytes).toBeGreaterThan(FLOOD_SWITCH_AFTER_BYTES);
-    expect(finalMetrics.streams[agentUrl].closed).toBeGreaterThan(0);
+    expect(agentBytes).toBeGreaterThanOrEqual(OUTPUT_BURST_BYTES);
+    expect(finalMetrics.streams[agentUrl].created).toBe(initial.streams[agentUrl].created);
+    expect(finalMetrics.streams[agentUrl].closeCodes).toEqual(initial.streams[agentUrl].closeCodes);
     expect(otherTerminal.replayMs).toBeLessThanOrEqual(FLOOD_OTHER_TERMINAL_BUDGET_MS);
     expect(markerMs).toBeLessThanOrEqual(FLOOD_OTHER_TERMINAL_BUDGET_MS);
-    expect(agentReturnReplayMs).toBeLessThanOrEqual(FLOODED_AGENT_RETURN_BUDGET_MS);
+    expect(agentReturn.ms).toBeLessThanOrEqual(FLOODED_AGENT_RETURN_BUDGET_MS);
     expect(finalMetrics.controlClosed).toBe(initialControlCloses);
     expect(longestTaskMs).toBeLessThanOrEqual(LONG_TASK_BUDGET_MS);
     expect(errors).toEqual([]);

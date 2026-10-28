@@ -24,7 +24,7 @@ function readStage(page: import("@playwright/test").Page) {
       geometry: stage?.currentSize() ?? null,
       pane: pane ? { cols: pane.cols, rows: pane.rows } : null,
       panes: stage?.debugSnapshot().length ?? 0,
-      terminals: document.querySelectorAll(".xterm").length,
+      terminals: document.querySelectorAll(".ghostty-terminal").length,
     };
   });
 }
@@ -34,13 +34,13 @@ test.use({ viewport: { width: VIEWER_WIDTH, height: VIEWER_HEIGHT } });
 test("spawn geometry comes from the mounted pane and the stage holds no other terminal", async ({ page }) => {
   await logIn(page);
   await page.locator(".sb-session").first().click();
-  const visible = page.locator('.term-layer[style*="visibility: visible"] .xterm');
+  const visible = page.locator('.term-layer[style*="visibility: visible"] .ghostty-terminal');
   await expect(visible).toBeVisible();
 
   const mounted = await readStage(page);
   expect(mounted.panes, "one session pane is mounted").toBe(1);
   // The regression this guards: a measurement terminal parked in the stage
-  // answers to .xterm alongside the pane and breaks every pane selector.
+  // answers to .ghostty-terminal alongside the pane and breaks every pane selector.
   expect(mounted.terminals, "the stage holds exactly the mounted panes").toBe(mounted.panes);
   expect(mounted.pane, "the visible pane reports its own size").not.toBeNull();
   expect(mounted.geometry, "the mounted pane is the geometry a spawn asks for")
@@ -52,7 +52,7 @@ test("spawn geometry comes from the mounted pane and the stage holds no other te
 test("measuring with no pane mounted leaves no terminal behind in the stage", async ({ page }) => {
   await logIn(page);
   await page.locator(".sb-session").first().click();
-  await expect(page.locator('.term-layer[style*="visibility: visible"] .xterm')).toBeVisible();
+  await expect(page.locator('.term-layer[style*="visibility: visible"] .ghostty-terminal')).toBeVisible();
 
   const sessionId = page.url().match(/#\/session\/(\d+)/)?.[1];
   if (!sessionId) throw new Error(`session did not open: ${page.url()}`);
@@ -62,9 +62,9 @@ test("measuring with no pane mounted leaves no terminal behind in the stage", as
   const probed = await page.evaluate((id) => {
     const stage = (window as StageWindow).__pmStage;
     stage?.disposeSession(BigInt(id));
-    const before = document.querySelectorAll(".xterm").length;
+    const before = document.querySelectorAll(".ghostty-terminal").length;
     const geometry = stage?.currentSize() ?? null;
-    return { before, geometry, after: document.querySelectorAll(".xterm").length };
+    return { before, geometry, after: document.querySelectorAll(".ghostty-terminal").length };
   }, sessionId);
 
   expect(probed.before, "the stage is empty before measuring").toBe(0);
@@ -72,5 +72,5 @@ test("measuring with no pane mounted leaves no terminal behind in the stage", as
   expect(probed.geometry!.cols, "a measured probe, not the daemon default")
     .toBeGreaterThan(DAEMON_DEFAULT_COLS);
   expect(probed.after, "the probe is gone once the measurement returns").toBe(0);
-  await expect(page.locator(".xterm")).toHaveCount(0);
+  await expect(page.locator(".ghostty-terminal")).toHaveCount(0);
 });

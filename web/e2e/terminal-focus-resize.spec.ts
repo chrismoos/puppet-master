@@ -43,7 +43,7 @@ test("regaining window focus claims no PTY size the terminal already holds", asy
   await installResizeProbe(context);
   await logIn(page);
   await page.locator(".sb-session").first().click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
 
   await expect.poll(async () => {
     const before = await resizeCount(page);

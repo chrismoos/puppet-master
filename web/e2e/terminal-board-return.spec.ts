@@ -10,6 +10,7 @@ interface SocketMetric {
 interface TerminalMetrics {
   rootId: string;
   layerId: string;
+  key: string;
   rootConnected: boolean;
   layerConnected: boolean;
   rootParentClass: string;
@@ -18,16 +19,14 @@ interface TerminalMetrics {
   screenWidth: number;
   screenHeight: number;
   canvasCount: number;
-  viewportScrollTop: number;
-  viewportScrollHeight: number;
-  viewportClientHeight: number;
+  cellWidth: number;
   cellHeight: number;
   rows: number;
   scrollbarHeight: number;
   baseY: number;
   viewportY: number;
-  sliderTop: number;
-  sliderHeight: number;
+  thumbTop: number;
+  thumbHeight: number;
   scrollbarOpacity: string;
   textareaFocused: boolean;
   sockets: Record<string, SocketMetric>;
@@ -50,7 +49,7 @@ async function logInWithProbe(page: Page): Promise<void> {
       layers: [],
       sockets: {},
     };
-    (window as ProbeWindow).__boardReturnProbe = probe;
+    (window as unknown as ProbeWindow).__boardReturnProbe = probe;
 
     const remember = (element: Element) => {
       if (!(element instanceof HTMLElement)) return;
@@ -93,23 +92,23 @@ async function logInWithProbe(page: Page): Promise<void> {
 }
 
 async function generateHistory(page: Page): Promise<void> {
-  const before = await page.evaluate(() => Object.values((window as ProbeWindow).__boardReturnProbe.sockets)
+  const before = await page.evaluate(() => Object.values((window as unknown as ProbeWindow).__boardReturnProbe.sockets)
     .reduce((total, socket) => total + socket.bytes, 0));
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type("lineout 800");
   await page.keyboard.press("Enter");
   await page.waitForFunction(({ previous }) => Object.values(
-    (window as ProbeWindow).__boardReturnProbe.sockets,
+    (window as unknown as ProbeWindow).__boardReturnProbe.sockets,
   ).reduce((total, socket) => total + socket.bytes, 0) >= previous + 20_000, {
     previous: before,
   });
 }
 
 async function startBoardBurst(page: Page): Promise<number> {
-  const before = await page.evaluate(() => Object.values((window as ProbeWindow).__boardReturnProbe.sockets)
+  const before = await page.evaluate(() => Object.values((window as unknown as ProbeWindow).__boardReturnProbe.sockets)
     .reduce((total, socket) => total + socket.bytes, 0));
-  await page.locator('.term-layer[style*="visible"] .xterm-helper-textarea').focus();
+  await page.locator('.term-layer[style*="visible"] .ghostty-input').focus();
   await page.keyboard.type("lineout 800");
   await page.keyboard.press("Enter");
   return before;
@@ -117,7 +116,7 @@ async function startBoardBurst(page: Page): Promise<number> {
 
 async function waitForBoardBurst(page: Page, before: number): Promise<void> {
   await page.waitForFunction(({ previous }) => Object.values(
-    (window as ProbeWindow).__boardReturnProbe.sockets,
+    (window as unknown as ProbeWindow).__boardReturnProbe.sockets,
   ).reduce((total, socket) => total + socket.bytes, 0) >= previous + 20_000, { previous: before });
 }
 
@@ -126,111 +125,100 @@ function socketIdentity(metrics: TerminalMetrics): Record<string, { created: num
     .map(([url, socket]) => [url, { created: socket.created, closed: socket.closed }]));
 }
 
-async function terminalMetrics(page: Page): Promise<TerminalMetrics> {
-  return page.evaluate(() => {
-    const probe = (window as ProbeWindow).__boardReturnProbe;
-    const root = probe.roots.at(-1);
-    const layer = probe.layers.findLast((candidate) => candidate.style.visibility === "visible")
-      ?? probe.layers.at(-1);
+async function terminalMetrics(page: Page, target?: { layerId: string; key: string }): Promise<TerminalMetrics> {
+  return page.evaluate((targetLayer) => {
+    const probe = (window as unknown as ProbeWindow).__boardReturnProbe;
+    const root = probe.roots.findLast((candidate) => candidate.isConnected);
+    const layer = targetLayer
+      ? probe.layers.find((candidate) => candidate.isConnected && candidate.dataset.probeId === targetLayer.layerId)
+      : probe.layers.findLast((candidate) => candidate.isConnected
+        && candidate.style.visibility === "visible"
+        && candidate.querySelector(".ghostty-canvas"));
     if (!root || !layer) throw new Error("terminal probe did not retain a stage and layer");
-    const viewport = layer.querySelector<HTMLElement>(".xterm-viewport");
-    const screen = layer.querySelector<HTMLElement>(".xterm-screen");
-    const textarea = layer.querySelector<HTMLElement>(".xterm-helper-textarea");
-    const cell = layer.querySelector<HTMLElement>(".xterm-helper-textarea");
-    const slider = layer.querySelector<HTMLElement>(".scrollbar.vertical .slider");
-    const scrollbar = layer.querySelector<HTMLElement>(".scrollbar.vertical");
-    if (!viewport || !screen || !textarea || !cell || !slider || !scrollbar) {
-      throw new Error("terminal probe is missing xterm viewport elements");
+    const terminal = layer.querySelector<HTMLElement>(".ghostty-terminal");
+    const canvas = layer.querySelector<HTMLCanvasElement>(".ghostty-canvas");
+    const textarea = layer.querySelector<HTMLTextAreaElement>(".ghostty-input");
+    const thumb = layer.querySelector<HTMLElement>(".ghostty-scrollbar-thumb");
+    const scrollbar = layer.querySelector<HTMLElement>(".ghostty-scrollbar");
+    if (!terminal || !canvas || !textarea || !thumb || !scrollbar) {
+      throw new Error("terminal probe is missing Canvas viewport elements");
     }
-    const cellHeight = Number.parseFloat(cell.style.height);
-    const rows = Math.round(screen.clientHeight / cellHeight);
-    const sliderTop = Number.parseFloat(slider.style.top);
-    const sliderHeight = Number.parseFloat(slider.style.height);
+    const cellWidth = Number.parseFloat(getComputedStyle(terminal).getPropertyValue("--ghostty-cell-width"));
+    const cellHeight = Number.parseFloat(getComputedStyle(terminal).getPropertyValue("--ghostty-cell-height"));
+    const thumbTop = Number.parseFloat(thumb.style.top);
+    const thumbHeight = Number.parseFloat(thumb.style.height);
     const scrollbarHeight = scrollbar.clientHeight;
-    // The slider-derived estimate saturates at the slider's minimum height,
-    // so read the true buffer coordinates through the stage when available.
     interface StageWindow {
       __pmStage?: {
-        layers: Map<string, {
-          el: HTMLElement;
-          term: { buffer: { active: { baseY: number; viewportY: number } } };
-        }>;
+        debugSnapshot(): Array<{ key: string; visible: boolean; baseY: number; viewportY: number; rows: number }>;
       };
     }
-    let baseY = Math.max(0, Math.round(rows * scrollbarHeight / sliderHeight - rows));
-    let viewportY = baseY === 0
-      ? 0
-      : Math.round(sliderTop / (scrollbarHeight - sliderHeight) * baseY);
-    const stage = (window as unknown as StageWindow).__pmStage;
-    for (const candidate of stage?.layers.values() ?? []) {
-      if (candidate.el !== layer) continue;
-      baseY = candidate.term.buffer.active.baseY;
-      viewportY = candidate.term.buffer.active.viewportY;
-    }
+    const debug = (window as unknown as StageWindow).__pmStage?.debugSnapshot()
+      .find((candidate) => targetLayer ? candidate.key === targetLayer.key : candidate.visible);
+    if (!debug) throw new Error("terminal stage debug state is missing");
     return {
       rootId: root.dataset.probeId!,
       layerId: layer.dataset.probeId!,
+      key: debug.key,
       rootConnected: root.isConnected,
       layerConnected: layer.isConnected,
       rootParentClass: root.parentElement?.className ?? "",
       visibility: layer.style.visibility,
       pointerEvents: layer.style.pointerEvents,
-      screenWidth: screen.clientWidth,
-      screenHeight: screen.clientHeight,
+      screenWidth: canvas.clientWidth,
+      screenHeight: canvas.clientHeight,
       canvasCount: layer.querySelectorAll("canvas").length,
-      viewportScrollTop: viewport.scrollTop,
-      viewportScrollHeight: viewport.scrollHeight,
-      viewportClientHeight: viewport.clientHeight,
+      cellWidth,
       cellHeight,
-      rows,
+      rows: debug.rows,
       scrollbarHeight,
-      baseY,
-      viewportY,
-      sliderTop,
-      sliderHeight,
+      baseY: debug.baseY,
+      viewportY: debug.viewportY,
+      thumbTop,
+      thumbHeight,
       scrollbarOpacity: getComputedStyle(scrollbar).opacity,
       textareaFocused: document.activeElement === textarea,
       sockets: structuredClone(probe.sockets),
     };
-  });
+  }, target);
 }
 
 async function wheelUp(page: Page, layer: Locator): Promise<number> {
-  const slider = layer.locator(".scrollbar.vertical .slider");
-  const screen = await layer.locator(".xterm-screen").boundingBox();
+  const thumb = layer.locator(".ghostty-scrollbar-thumb");
+  const screen = await layer.locator(".ghostty-canvas").boundingBox();
   if (!screen) throw new Error("visible terminal screen has no bounds");
-  const before = await slider.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
+  const before = await thumb.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
   await page.mouse.move(screen.x + screen.width / 2, screen.y + screen.height / 2);
   await page.mouse.wheel(0, -1_200);
-  // e2e-real-time-wait: xterm's smooth scrollbar applies wheel movement on animation frames
+  // e2e-real-time-wait: the terminal scrollbar applies wheel movement on animation frames
   await page.waitForTimeout(100);
-  return before - await slider.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
+  return before - await thumb.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
 }
 
-async function dragSliderUp(page: Page, layer: Locator): Promise<number> {
-  const slider = layer.locator(".scrollbar.vertical .slider");
+async function dragScrollbarThumbUp(page: Page, layer: Locator): Promise<number> {
+  const thumb = layer.locator(".ghostty-scrollbar-thumb");
   // The scrollbar overlays the terminal and only accepts input while
   // revealed by scrolling, so nudge the wheel before grabbing it.
-  const screenBox = await layer.locator(".xterm-screen").boundingBox();
+  const screenBox = await layer.locator(".ghostty-canvas").boundingBox();
   if (screenBox) {
     await page.mouse.move(screenBox.x + screenBox.width / 2, screenBox.y + screenBox.height / 2);
     await page.mouse.wheel(0, -40);
-    // e2e-real-time-wait: xterm's smooth scrollbar applies wheel movement on animation frames
+    // e2e-real-time-wait: the terminal scrollbar applies wheel movement on animation frames
     await page.waitForTimeout(120);
   }
-  const bounds = await slider.boundingBox();
-  if (!bounds) throw new Error("terminal scrollbar slider has no bounds");
-  const before = await slider.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
+  const bounds = await thumb.boundingBox();
+  if (!bounds) throw new Error("terminal scrollbar thumb has no bounds");
+  const before = await thumb.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
   await page.mouse.down();
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2 - 80, { steps: 4 });
   await page.mouse.up();
-  // e2e-real-time-wait: xterm's smooth scrollbar applies pointer drag on animation frames
+  // e2e-real-time-wait: the terminal scrollbar applies pointer drag on animation frames
   await page.waitForTimeout(100);
-  return before - await slider.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
+  return before - await thumb.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
 }
 
-test("board and item-detail return preserves real xterm scrollback without browser resize", async ({ page }) => {
+test("board and item-detail return preserves terminal scrollback without browser resize", async ({ page }) => {
   await logInWithProbe(page);
   const seededSession = () => page.locator(".sb-session-title")
     .filter({ hasText: /^browser-e2e$/ })
@@ -245,6 +233,7 @@ test("board and item-detail return preserves real xterm scrollback without brows
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${sessionId}$`));
   await expect(page.locator('.term-layer[style*="visible"]')).toBeVisible();
+  await page.locator('.term-layer[style*="visible"] .ghostty-canvas').waitFor();
   await expect.poll(() => terminalMetrics(page).then((metric) => metric.baseY)).toBeGreaterThan(700);
 
   const visibleLayer = page.locator('.term-layer[style*="visible"]');
@@ -254,7 +243,7 @@ test("board and item-detail return preserves real xterm scrollback without brows
   for (let index = 0; index < 4; index += 1) await page.keyboard.press("Shift+PageUp");
   const reading = await terminalMetrics(page);
   expect(reading.viewportY).toBeLessThan(reading.baseY - 20);
-  expect(await dragSliderUp(page, visibleLayer)).toBeGreaterThan(20);
+  expect(await dragScrollbarThumbUp(page, visibleLayer)).toBeGreaterThan(20);
   for (let index = 0; index < 20; index += 1) await page.keyboard.press("Shift+PageDown");
   const departing = await terminalMetrics(page);
   expect(Math.abs(departing.viewportY - departing.baseY)).toBeLessThanOrEqual(3);
@@ -274,7 +263,8 @@ test("board and item-detail return preserves real xterm scrollback without brows
   const retainedBackground = page.locator(".restorable-view.is-board-background");
   await expect(retainedBackground).toHaveCount(1);
   await expect(retainedBackground).toHaveCSS("visibility", "hidden");
-  const detached = await terminalMetrics(page);
+  const targetLayer = { layerId: before.layerId, key: before.key };
+  const detached = await terminalMetrics(page, targetLayer);
   expect(detached.rootConnected).toBe(true);
   expect(detached.layerConnected).toBe(true);
   expect(detached.rootId).toBe(before.rootId);
@@ -286,14 +276,14 @@ test("board and item-detail return preserves real xterm scrollback without brows
   // e2e-real-time-wait: capture the immediate post-route renderer state across animation frames
   await page.waitForTimeout(250);
 
-  const returned = await terminalMetrics(page);
-  const immediateDragDelta = await dragSliderUp(page, visibleLayer);
+  const returned = await terminalMetrics(page, targetLayer);
+  const immediateDragDelta = await dragScrollbarThumbUp(page, visibleLayer);
   for (let index = 0; index < 20; index += 1) await page.keyboard.press("Shift+PageDown");
   const immediateWheelDelta = await wheelUp(page, visibleLayer);
   await page.setViewportSize({ width: 1441, height: 1000 });
-  await expect.poll(() => terminalMetrics(page).then((metric) => metric.baseY)).toBeGreaterThan(100);
-  const resized = await terminalMetrics(page);
-  const resizedDragDelta = await dragSliderUp(page, visibleLayer);
+  await expect.poll(() => terminalMetrics(page, targetLayer).then((metric) => metric.baseY)).toBeGreaterThan(100);
+  const resized = await terminalMetrics(page, targetLayer);
+  const resizedDragDelta = await dragScrollbarThumbUp(page, visibleLayer);
   for (let index = 0; index < 20; index += 1) await page.keyboard.press("Shift+PageDown");
   const resizedWheelDelta = await wheelUp(page, visibleLayer);
 

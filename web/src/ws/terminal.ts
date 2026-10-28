@@ -1,21 +1,23 @@
-import { Terminal, type ITheme } from "@xterm/xterm";
-import { freshXtermTheme, type TerminalThemeController } from "../theme/controller";
+import type { TerminalThemeController } from "../theme/controller";
+import type { GhosttyTheme } from "./ghostty/core";
+import { GhosttyTerminalAdapter } from "./ghostty/terminalAdapter";
+import { ghosttyColorToCss } from "./ghostty/terminalAdapter";
+import { measureGhosttyCell, terminalGridSize } from "./ghostty/renderer";
 import type { PmClient, PtyHandle } from "@puppet-master/client-core/ws/client";
 import type { PtyFrame, TerminalSize } from "@puppet-master/client-core/ws/pty";
-import { attachWebglRenderer, type WebglHandle } from "./webglBudget";
 import { terminalEvictionPriority } from "@puppet-master/client-core/ws/terminalCache";
 import { writeTerminalFrame } from "./terminalWriter";
 import { SYNC_OUTPUT_START } from "@puppet-master/client-core/ws/terminalWriter";
-import { registerPmTerminalLinkProvider } from "./terminalLinks";
+import { activateTerminalLink, isSafeHttpUrl } from "./terminalLinks";
 import { isRealPaneFit, measureFit, spawnGeometry, type TerminalGeometry } from "./terminalFit";
-import { collectXtermDebug, type TerminalLayerDebug } from "./terminalDiagnostics";
+import { collectTerminalSurfaceDebug, type TerminalLayerDebug } from "./terminalDiagnostics";
 import { wireViewerSize, type ViewerSizeController } from "@puppet-master/client-core/ws/terminalRepaint";
 import { applyEchoedPtySize } from "@puppet-master/client-core/ws/terminalResize";
-import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, showLayer, waitForTerminalRender, type HeldInput } from "./terminalLayer";
-import { wireTransientTerminalScrollbar } from "./terminalScrollbar";
+import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, showLayer, showLayerSizePrompt, waitForTerminalRender, type HeldInput } from "./terminalLayer";
 import { resumeRendering } from "./terminalRendering";
 import { TerminalClipboard } from "./terminalClipboard";
 import { registerForegroundCommandHandler, wireTerminalClipboard } from "./terminalHostWiring";
+import { wireTransientTerminalScrollbar } from "./terminalScrollbar";
 import { documentVisible, watchDocumentVisibility } from "./documentVisibility";
 import { createTerminalSizePrompt } from "./terminalSizePrompt";
 import type { TerminalSizePrompt } from "@puppet-master/client-core/ws/terminalSizePrompt";
@@ -27,9 +29,7 @@ import {
   type TerminalViewportBookmark,
 } from "./terminalViewport";
 
-const SCROLLBACK_LINES = 5_000;
 const FONT_SIZE_PX = 13;
-const FAST_SCROLL_LINES = 8;
 
 /** Keeps recently viewed terminals attached so switching back is instant. */
 const MAX_WARM_TERMINALS = 8;
@@ -46,8 +46,7 @@ interface Layer {
   /** Covers a shown layer in the terminal's own colors until its first
    * snapshot at the pane's size has painted. */
   curtainEl: HTMLDivElement;
-  term: Terminal;
-  webgl: WebglHandle | null;
+  term: GhosttyTerminalAdapter;
   handle: PtyHandle | null;
   viewer: ViewerSizeController | null;
   sizePrompt: TerminalSizePrompt;
@@ -90,7 +89,7 @@ interface Layer {
 type TerminalCommandListener = (terminalId: bigint, command: string) => void;
 
 /**
- * Owns the live xterm instances outside React's render path. PTY bytes
+ * Owns the live terminal instances outside React's render path. PTY bytes
  * are written straight to the terminal; only session metadata drives
  * React. Layers stay warm and attached until evicted so returning to a
  * session repaints instantly.
@@ -109,7 +108,7 @@ const INITIAL_RECHECK_MS = 250;
 const WIDTH_SETTLE_MS = 100;
 const ACK_BATCH_BYTES = 4 * 1024;
 const ACK_BATCH_MS = 8;
-/** Moves a layer outside the stage's clip. xterm pauses rendering only for
+/** Moves a layer outside the stage's clip. The renderer pauses only for
  * a screen that leaves the viewport, and a hidden layer otherwise keeps
  * drawing every frame its session prints. */
 const PARKED_LAYER_CLASS = "is-parked";
@@ -124,7 +123,7 @@ export class TerminalStage {
   private focusDispose: (() => void) | null = null;
   private terminalCommands = new Map<string, string>();
   private terminalCommandListeners = new Set<TerminalCommandListener>();
-  private theme: ITheme;
+  private theme: GhosttyTheme;
   private clipboard: TerminalClipboard;
 
   constructor(private client: PmClient, themeController: TerminalThemeController) {
@@ -132,23 +131,21 @@ export class TerminalStage {
     this.root.className = "term-stage";
     this.clipboard = new TerminalClipboard(document);
     this.root.appendChild(this.clipboard.el as HTMLElement);
-    // Browser tests and live debugging read real xterm buffers through this.
+    // Browser tests and live debugging inspect the public terminal snapshot.
     (window as unknown as { __pmStage?: TerminalStage }).__pmStage = this;
     activeStage = this;
     this.observer = new ResizeObserver(() => this.scheduleRefitVisible());
-    this.theme = themeController.currentXtermTheme();
+    this.theme = themeController.currentGhosttyTheme();
     // The controller and stage have the same ConnectedApp lifetime. Keep the
     // registration through React StrictMode's setup/cleanup rehearsal, which
     // calls disposeAll() without replacing this ref-backed stage instance.
     themeController.register(this);
   }
 
-  /** Changes xterm color options in place. It deliberately performs no fit,
-   * renderer reload, write, reset, focus, or PTY operation. */
-  setTheme(theme: ITheme): void {
-    this.theme = freshXtermTheme(theme);
+  setTheme(theme: GhosttyTheme): void {
+    this.theme = theme;
     for (const layer of this.layers.values()) {
-      layer.term.options.theme = freshXtermTheme(theme);
+      layer.term.setTheme(theme);
       paintCurtain(layer.curtainEl, this.theme);
     }
   }
@@ -180,7 +177,7 @@ export class TerminalStage {
     this.clipboard.detach();
     for (const layer of this.layers.values()) {
       layer.viewer?.setVisible(false);
-      layer.webgl?.setVisible(false);
+      layer.term.setVisible(false);
     }
     if (this.visibleId) {
       const layer = this.layers.get(this.visibleId);
@@ -208,7 +205,7 @@ export class TerminalStage {
     for (const layer of this.layers.values()) {
       layer.el.style.visibility = "hidden";
       layer.el.style.pointerEvents = "none";
-      layer.webgl?.setVisible(false, true);
+      layer.term.setVisible(false);
       layer.viewer?.setVisible(false);
     }
     this.parkHiddenLayers();
@@ -259,10 +256,11 @@ export class TerminalStage {
         bufferLines: buffer.length,
         baseY: buffer.baseY,
         viewportY: buffer.viewportY,
+        screenText: layer.term.renderSnapshot()?.rowData.map((row) => row.text) ?? [],
          backgroundBytes: 0,
         lastPtyResize: layer.lastResize,
         socket: stats,
-        ...collectXtermDebug(layer.term),
+        ...collectTerminalSurfaceDebug(layer.term),
       });
     }
     snapshots.sort((a, b) => Number(b.visible) - Number(a.visible) || a.key.localeCompare(b.key));
@@ -275,19 +273,22 @@ export class TerminalStage {
     const layer = existing ?? this.createLayer(id, terminal);
     const wasVisibleId = this.visibleId;
     this.visibleId = key;
-    // Release the session eviction victim before the GPU budget chooses a different renderer.
+    // Enforce the warm-layer limit before attaching this surface.
     this.evict();
-    layer.webgl?.setVisible(true);
+    layer.term.setVisible(true);
     this.tryBindLayerSocket(layer);
     const previous = wasVisibleId !== null && wasVisibleId !== key ? this.layers.get(wasVisibleId) : undefined;
     if (previous && wasVisibleId) this.rememberViewport(wasVisibleId, previous);
     for (const [otherKey, other] of this.layers) {
       if (otherKey !== key) other.viewer?.setVisible(false);
     }
-    if (wasVisibleId !== key) {
-      layer.sizePrompt.reset();
-      if (layer.handle && !layer.initialReplayPending && documentVisible(document)) layer.sizePrompt.update();
-    }
+    showLayerSizePrompt(
+      layer.sizePrompt,
+      wasVisibleId !== key,
+      layer.initialReplayPending,
+      Boolean(layer.handle),
+      documentVisible(document),
+    );
     // Showing a layer is the open/switch edge of the viewer size policy in
     // wireViewerSize: this viewer now sets the PTY size, and the warm layers
     // it hid stay silent until they are shown again.
@@ -300,7 +301,7 @@ export class TerminalStage {
       const visible = otherKey === key;
       other.el.style.visibility = visible ? "visible" : "hidden";
       other.el.style.pointerEvents = visible ? "auto" : "none";
-      other.webgl?.setVisible(visible, true);
+      other.term.setVisible(visible);
       if (!visible) other.viewer?.setVisible(false);
     }
     this.parkHiddenLayers();
@@ -327,7 +328,7 @@ export class TerminalStage {
     this.askForWholeHistory(layer);
     // A show can coincide with React attaching the shared stage into a host
     // whose layout is still settling. Keep the synchronous fit for the first
-    // paint, then reconcile once after layout and once after xterm has parsed
+    // paint, then reconcile once after layout and once after the terminal has parsed
     // everything already queued for this layer. ResizeObserver alone is not
     // sufficient when detach/reattach ends at the same observed dimensions.
     this.scheduleRefitVisible();
@@ -362,28 +363,11 @@ export class TerminalStage {
     el.style.pointerEvents = "none";
     this.root.appendChild(el);
 
-    const term = new Terminal({
-      cursorBlink: true,
-      macOptionClickForcesSelection: true,
-      fontSize: FONT_SIZE_PX,
-      fontFamily: MONO_FONT_STACK,
-      scrollback: SCROLLBACK_LINES,
-      fastScrollSensitivity: FAST_SCROLL_LINES,
-      theme: freshXtermTheme(this.theme),
-    });
-    term.open(el);
-    const scrollbarDispose = wireTransientTerminalScrollbar(el);
     let prepareNavigation = () => {};
-    const pmLinks = registerPmTerminalLinkProvider(term, this.client, {
-      kind: addressedTerminal ? "terminal" : "session",
-      id: sessionId.toString(),
-    }, () => prepareNavigation());
-
-    const webgl = attachWebglRenderer(term, undefined, false);
+    let layer: Layer;
     const statusEl = document.createElement("div");
     statusEl.className = "terminal-stream-status";
     statusEl.hidden = true;
-    el.appendChild(statusEl);
     const curtainEl = document.createElement("div");
     curtainEl.className = "terminal-loading-curtain";
     curtainEl.hidden = true;
@@ -391,21 +375,38 @@ export class TerminalStage {
     curtainLabel.textContent = "loading…";
     curtainEl.appendChild(curtainLabel);
     paintCurtain(curtainEl, this.theme);
-    el.appendChild(curtainEl);
+    const term = new GhosttyTerminalAdapter(
+      el,
+      this.theme,
+      () => this.scheduleRefitVisible(),
+      (error) => {
+        statusEl.hidden = false;
+        statusEl.className = "terminal-stream-status is-error";
+        statusEl.textContent = error instanceof Error ? error.message : "Terminal renderer failed";
+      },
+      () => {
+        this.tryBindLayerSocket(layer);
+        this.scheduleRefitVisible();
+      },
+      (href) => {
+        activateTerminalLink(this.client.getState, {
+          kind: addressedTerminal ? "terminal" : "session",
+          id: sessionId.toString(),
+        }, href, () => prepareNavigation());
+      },
+      (href) => href.startsWith("pm:") || isSafeHttpUrl(href),
+      { family: MONO_FONT_STACK, size: FONT_SIZE_PX },
+    );
+    el.append(statusEl, curtainEl);
 
     const encoder = new TextEncoder();
-    const dataSub = term.onData((text) => {
-      this.sendInput(key, encoder.encode(text), text === "\r");
-    });
-    const binarySub = term.onBinary((chunk) => {
-      const bytes = new Uint8Array(chunk.length);
-      for (let i = 0; i < chunk.length; i++) bytes[i] = chunk.charCodeAt(i);
-      this.sendInput(key, bytes, false);
+    const dataSub = term.onData((data) => {
+      this.sendInput(key, typeof data === "string" ? encoder.encode(data) : data, data === "\r");
     });
     const titleSub = addressedTerminal
       ? registerForegroundCommandHandler(term, (command) => this.updateTerminalCommand(sessionId, command))
       : null;
-    const clipboardDispose = wireTerminalClipboard(term, el, this.clipboard);
+    const clipboardDispose = wireTerminalClipboard(term, this.clipboard);
 
     const sizePrompt = createTerminalSizePrompt(el, () => measureFit(term), (size) => {
       const current = this.layers.get(key);
@@ -421,7 +422,7 @@ export class TerminalStage {
       current.handle.resize(size.cols, size.rows);
       if (!unchanged) current.handle.refreshSnapshot();
     });
-    const layer: Layer = {
+    layer = {
       key,
       sessionId,
       addressedTerminal,
@@ -429,7 +430,6 @@ export class TerminalStage {
       statusEl,
       curtainEl,
       term,
-      webgl,
       handle: null,
       viewer: null,
       sizePrompt,
@@ -454,12 +454,11 @@ export class TerminalStage {
       revealRender: null,
       disposers: [
         () => sizePrompt.dispose(),
+        wireTransientTerminalScrollbar(el),
         () => dataSub.dispose(),
-        () => binarySub.dispose(),
         () => titleSub?.dispose(),
         clipboardDispose,
-        () => pmLinks.dispose(),
-        scrollbarDispose,
+        () => term.dispose(),
       ],
       lastShownAt: Date.now(),
     };
@@ -600,9 +599,9 @@ export class TerminalStage {
     this.flushHeldSnapshot(layer);
   }
 
-  /** A painted terminal changing size asks the PTY and the relay for the new
-   * size and keeps showing the old screen until the snapshot arrives. Letting
-   * xterm reflow instead pushes rows into its scrollback that a program which
+  /** A painted terminal changing size asks the PTY and relay for the new size
+   * and keeps showing the old screen until the snapshot arrives. Reflowing
+   * instead pushes rows into scrollback that a program which
    * repaints on resize then prints again. */
   private deferResize(layer: Layer): boolean {
     const handle = layer.handle;
@@ -724,7 +723,7 @@ export class TerminalStage {
     layer.lastResize = size;
     layer.sizePrompt.requested(size);
     // The size this viewer claims is the one it is moving to: while a resize
-    // waits for its snapshot, xterm still holds the old size.
+    // waits for its snapshot, the terminal still holds the old size.
     const viewer = wireViewerSize({
       resize: (cols, rows) => {
         layer.sizePrompt.requested({ cols, rows });
@@ -897,7 +896,7 @@ export class TerminalStage {
       if (otherKey !== layer.key) {
         other.el.style.visibility = "hidden";
         other.el.style.pointerEvents = "none";
-        other.webgl?.setVisible(false, true);
+        other.term.setVisible(false);
       }
     }
     // Focus moves with the swap unless the reader put it somewhere else while
@@ -905,7 +904,7 @@ export class TerminalStage {
     const active = document.activeElement;
     const focusTerminal = active === layer.focusAtShow || !active || active === document.body || this.root.contains(active);
     layer.focusAtShow = null;
-    layer.webgl?.setVisible(true);
+    layer.term.setVisible(true);
     layer.el.style.visibility = "visible";
     layer.el.style.pointerEvents = "auto";
     this.parkHiddenLayers();
@@ -942,7 +941,6 @@ export class TerminalStage {
     this.layers.delete(key);
     for (const dispose of layer.disposers) dispose();
     layer.handle?.close();
-    layer.webgl?.dispose();
     layer.term.dispose();
     layer.el.remove();
     if (this.visibleId === key) this.visibleId = null;
@@ -961,14 +959,14 @@ export class TerminalStage {
   }
 
   /** The visible pane first: it is the one whose size the user can see. */
-  private *panesBySizeAuthority(): Generator<Terminal> {
+  private *panesBySizeAuthority(): Generator<GhosttyTerminalAdapter> {
     const visible = this.visibleId ? this.layers.get(this.visibleId) : undefined;
     if (visible) yield visible.term;
     for (const layer of this.layers.values()) if (layer !== visible) yield layer.term;
   }
 
   /** Sizes a spawn before any pane is mounted. The probe lives only for the
-   * duration of this call: an xterm left attached to the stage would answer
+   * duration of this call: a terminal left attached to the stage would answer
    * to every pane selector as a second terminal. */
   private measureTransientProbe(): TerminalGeometry | null {
     if (!this.root.isConnected) return null;
@@ -980,20 +978,17 @@ export class TerminalStage {
     el.style.visibility = "hidden";
     el.style.pointerEvents = "none";
     this.root.appendChild(el);
-    const term = new Terminal({
-      fontSize: FONT_SIZE_PX,
-      fontFamily: MONO_FONT_STACK,
-      scrollback: 1,
-    });
-    try {
-      term.open(el);
-      const measured = measureFit(term);
-      if (!measured || !isRealPaneFit(this.root.clientWidth, measured.cols)) return null;
-      return { cols: measured.cols, rows: measured.rows };
-    } finally {
-      term.dispose();
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) {
       el.remove();
+      return null;
     }
+    const metrics = measureGhosttyCell(context, FONT_SIZE_PX, MONO_FONT_STACK);
+    const measured = terminalGridSize(el.clientWidth, el.clientHeight, metrics, 8);
+    el.remove();
+    if (!isRealPaneFit(this.root.clientWidth, measured.cols)) return null;
+    return measured;
   }
 }
 
@@ -1007,7 +1002,7 @@ function raiseCurtain(layer: Layer): void {
   if (layer.statusEl.classList.contains("is-connecting")) layer.statusEl.hidden = true;
 }
 
-function paintCurtain(curtain: HTMLDivElement, theme: ITheme): void {
-  curtain.style.backgroundColor = theme.background ?? "";
-  curtain.style.color = theme.foreground ?? "";
+function paintCurtain(curtain: HTMLDivElement, theme: GhosttyTheme): void {
+  curtain.style.backgroundColor = ghosttyColorToCss(theme.background);
+  curtain.style.color = ghosttyColorToCss(theme.foreground);
 }

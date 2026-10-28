@@ -16,7 +16,7 @@ test("Settings restores the session from Back and the wordmark without recreatin
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator(".sb-scroll .sb-session").first().click();
   await expect(page).toHaveURL(/#\/session\/\d+$/);
-  await expect(page.locator(".term-layer:visible .xterm-screen")).toBeVisible();
+  await expect(page.locator(".term-layer:visible .ghostty-canvas")).toBeVisible();
   const sessionUrl = page.url();
   await page.evaluate(() => {
     (window as Window & { __manageSessionView?: Element }).__manageSessionView =

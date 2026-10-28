@@ -42,7 +42,7 @@ export function Popover({
       }
     };
     document.addEventListener("mousedown", onDown);
-    // Capture Escape before terminal widgets can consume it. A live xterm may
+    // Capture Escape before terminal widgets can consume it. A live terminal may
     // reclaim focus while a sidebar menu is open during activity rerenders.
     document.addEventListener("keydown", onKey, true);
     return () => {

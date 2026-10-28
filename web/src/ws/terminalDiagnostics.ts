@@ -1,4 +1,4 @@
-import type { Terminal } from "@xterm/xterm";
+import type { GhosttyTerminalAdapter } from "./ghostty/terminalAdapter";
 import type { TerminalSize } from "@puppet-master/client-core/ws/pty";
 import type { TerminalSocketStats } from "@puppet-master/client-core/ws/terminalSocket";
 
@@ -15,6 +15,7 @@ export interface TerminalLayerDebug {
   backgroundBytes: number;
   lastPtyResize: TerminalSize | null;
   socket: TerminalSocketStats | null;
+  screenText: string[];
   mouseProtocol: string | null;
   mouseEncoding: string | null;
   bracketedPaste: boolean | null;
@@ -30,40 +31,7 @@ export interface TerminalLayerDebug {
   scrollableScrollTop: number | null;
 }
 
-interface XtermInternals {
-  _core?: {
-    coreMouseService?: { activeProtocol?: string; activeEncoding?: string };
-    coreService?: {
-      decPrivateModes?: {
-        bracketedPasteMode?: boolean;
-        applicationCursorKeys?: boolean;
-        sendFocus?: boolean;
-      };
-    };
-    _charSizeService?: { hasValidSize?: boolean };
-    _renderService?: {
-      dimensions?: {
-        css?: {
-          cell?: { width?: number; height?: number };
-          canvas?: { width?: number; height?: number };
-        };
-      };
-    };
-    _viewport?: {
-      _scrollableElement?: {
-        getScrollDimensions?: () => { height: number; scrollHeight: number };
-        getScrollPosition?: () => { scrollTop: number };
-      };
-    };
-  };
-}
-
-/**
- * Reads the private xterm services the debug bar reports on. Each field
- * degrades to null when an internal is missing, so an xterm upgrade can
- * never break the terminal itself through this path.
- */
-export function collectXtermDebug(term: Terminal): Pick<
+export function collectTerminalSurfaceDebug(term: GhosttyTerminalAdapter): Pick<
   TerminalLayerDebug,
   | "mouseProtocol"
   | "mouseEncoding"
@@ -79,32 +47,22 @@ export function collectXtermDebug(term: Terminal): Pick<
   | "scrollableScrollHeight"
   | "scrollableScrollTop"
 > {
-  const core = (term as unknown as XtermInternals)._core;
-  const modes = core?.coreService?.decPrivateModes;
-  const dims = core?._renderService?.dimensions?.css;
-  let scrollDims: { height: number; scrollHeight: number } | null = null;
-  let scrollPos: { scrollTop: number } | null = null;
-  try {
-    scrollDims = core?._viewport?._scrollableElement?.getScrollDimensions?.() ?? null;
-    scrollPos = core?._viewport?._scrollableElement?.getScrollPosition?.() ?? null;
-  } catch {
-    scrollDims = null;
-    scrollPos = null;
-  }
+  const canvas = term.element.querySelector("canvas");
+  const cell = term.cellSize;
   return {
-    mouseProtocol: core?.coreMouseService?.activeProtocol ?? null,
-    mouseEncoding: core?.coreMouseService?.activeEncoding ?? null,
-    bracketedPaste: modes?.bracketedPasteMode ?? null,
-    applicationCursorKeys: modes?.applicationCursorKeys ?? null,
-    sendFocus: modes?.sendFocus ?? null,
-    cellWidth: dims?.cell?.width ?? null,
-    cellHeight: dims?.cell?.height ?? null,
-    canvasWidth: dims?.canvas?.width ?? null,
-    canvasHeight: dims?.canvas?.height ?? null,
-    charSizeValid: core?._charSizeService?.hasValidSize ?? null,
-    scrollableHeight: scrollDims?.height ?? null,
-    scrollableScrollHeight: scrollDims?.scrollHeight ?? null,
-    scrollableScrollTop: scrollPos?.scrollTop ?? null,
+    mouseProtocol: term.modes.mouseTrackingMode,
+    mouseEncoding: null,
+    bracketedPaste: null,
+    applicationCursorKeys: null,
+    sendFocus: null,
+    cellWidth: term.cellMetrics?.width ?? null,
+    cellHeight: term.cellMetrics?.height ?? null,
+    canvasWidth: canvas?.width ?? null,
+    canvasHeight: canvas?.height ?? null,
+    charSizeValid: cell !== null,
+    scrollableHeight: null,
+    scrollableScrollHeight: null,
+    scrollableScrollTop: null,
   };
 }
 

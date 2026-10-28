@@ -6,8 +6,8 @@ import { useAppState, useClient } from "../state/hooks";
 import { AGENT_TERMINAL_DRAG_TYPE, agentTerminalForSession, assignTerminal, closePane, dropTerminal, movePane, paneDropPositionForRatios, paneDropRegionRect, paneIds, parseWorkspaceLayout, removeTerminalFromLayout, SESSION_DRAG_TYPE, setSplitRatio, splitPane, workspaceTerminalEntries, workspaceTerminalLabel, WORKSPACE_PANE_DRAG_TYPE, type PaneDropPosition, type WorkspaceLayout, type WorkspacePane, type WorkspaceSplit, type WorkspaceTerminalEntry } from "@puppet-master/client-core/state/workspace";
 import type { TerminalStage } from "../ws/terminal";
 import { WorkspaceTerminal } from "../ws/workspaceTerminal";
+import type { GhosttyRendererIssue } from "../ws/ghostty/terminalAdapter";
 import type { TerminalStreamStatus } from "@puppet-master/client-core/ws/terminalSocket";
-import type { RendererIssue } from "../ws/webglBudget";
 import { useTerminalThemeController } from "../theme/context";
 import { SessionDropOverlay, useSessionDrop } from "./SessionDropZone";
 
@@ -56,7 +56,7 @@ function createPaneDragGhost(label: string): HTMLElement {
   return ghost;
 }
 
-function TerminalViewport({ terminal, focused, active, onIssue, onCommand }: { terminal: Terminal; focused: boolean; active: boolean; onIssue: (reason: RendererIssue | null) => void; onCommand: (terminalId: bigint, command: string) => void }) {
+function TerminalViewport({ terminal, focused, active, onIssue, onCommand }: { terminal: Terminal; focused: boolean; active: boolean; onIssue: (reason: GhosttyRendererIssue | null) => void; onCommand: (terminalId: bigint, command: string) => void }) {
   const client = useClient();
   const themeController = useTerminalThemeController();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -375,7 +375,7 @@ function SplitView({ split, root, terminalEntries, terminalById, sessions, focus
 function WorkspacePaneView({ pane, root, terminalEntries, terminalById, sessions, focused, active, onFocus, onToggleZoom, onChange, onDropSession, onDropPane, onTerminalCommand }: { pane: WorkspacePane; root: WorkspaceLayout; terminalEntries: WorkspaceTerminalEntry[]; terminalById: ReadonlyMap<string, Terminal>; sessions: ReturnType<typeof useAppState>["sessions"]; focused: boolean; active: boolean; onFocus: (id: string) => void; onToggleZoom: (id: string) => void; onChange: (layout: WorkspaceLayout | null) => void; onDropSession: (paneId: string, sessionId: string, agentTerminalId: string, position: PaneDropPosition) => void; onDropPane: (targetPaneId: string, sourcePaneId: string, position: PaneDropPosition) => void; onTerminalCommand: (terminalId: bigint, command: string) => void }) {
   const [dropPosition, setDropPosition] = useState<PaneDropPosition | null>(null);
   const [dragSource, setDragSource] = useState(false);
-  const [rendererIssue, setRendererIssue] = useState<RendererIssue | null>(null);
+  const [rendererIssue, setRendererIssue] = useState<GhosttyRendererIssue | null>(null);
   const dragGhost = useRef<HTMLElement | null>(null);
   useEffect(() => () => dragGhost.current?.remove(), []);
   const terminal = pane.terminalId ? terminalById.get(pane.terminalId) : undefined;
@@ -454,7 +454,7 @@ function WorkspacePaneView({ pane, root, terminalEntries, terminalById, sessions
         </select>
         <div className="topbar-spacer" />
         {rendererIssue && (
-          <span className="workspace-renderer-warning" title={rendererIssue === "budget" ? "GPU terminal limit reached. Waiting for a GPU renderer." : "GPU rendering is recovering."}>ⓘ GPU</span>
+          <span className="workspace-renderer-warning" title="The terminal renderer could not be initialized.">ⓘ terminal</span>
         )}
         {session && <button type="button" className="workspace-pane-action" onClick={() => navigate(`/session/${session.id}`)}>⌂ home</button>}
         <button type="button" className="workspace-pane-action" title="split right" onClick={() => onChange(splitPane(root, pane.paneId, "columns", nodeId("split"), nodeId("pane")))}>＋ right</button>

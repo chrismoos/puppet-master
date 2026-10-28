@@ -11,7 +11,7 @@ import { authedFetch } from "./token";
 
 const ACTIVITY_ENDPOINT = "/api/user/activity";
 
-/** Capture phase, because xterm consumes keystrokes before they bubble. */
+/** Capture phase, because terminal input can consume keystrokes before they bubble. */
 const LISTENER_OPTIONS: AddEventListenerOptions = { capture: true, passive: true };
 
 export const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const;

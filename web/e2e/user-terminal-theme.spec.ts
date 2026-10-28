@@ -16,7 +16,7 @@ type ThemeProbeWindow = Window & {
 async function installTerminalProbe(context: BrowserContext): Promise<void> {
   await context.addInitScript(() => {
     const probe = { created: 0, closed: 0, resize: 0, replay: 0, urls: [] as string[] };
-    (window as ThemeProbeWindow).__themeProbe = probe;
+    (window as unknown as ThemeProbeWindow).__themeProbe = probe;
     const NativeWebSocket = window.WebSocket;
     window.WebSocket = new Proxy(NativeWebSocket, {
       construct(target, args) {
@@ -39,7 +39,7 @@ async function installTerminalProbe(context: BrowserContext): Promise<void> {
                 ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
                 : null;
             if (bytes?.[0] === 3 || bytes?.[0] === 8) probe.resize += 1;
-            nativeSend(data);
+            nativeSend(data as Parameters<typeof nativeSend>[0]);
           };
         }
         return socket;
@@ -61,7 +61,7 @@ function previewBar(page: Page) {
 const PROBE_SETTLE_MS = 500;
 
 function terminalProbe(page: Page): Promise<Record<string, unknown>> {
-  return page.evaluate(() => ({ ...(window as ThemeProbeWindow).__themeProbe }));
+  return page.evaluate(() => ({ ...(window as unknown as ThemeProbeWindow).__themeProbe }));
 }
 
 async function openTerminalTheme(page: Page): Promise<void> {
@@ -76,7 +76,7 @@ async function openTerminalTheme(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 2, name: "Terminal theme" })).toBeVisible();
 }
 
-test("account terminal themes preview locally, sync live, preserve xterm, export, and reset", async ({ page, context }) => {
+test("account terminal themes preview locally, sync live, preserve the live terminal, export, and reset", async ({ page, context }) => {
   await installTerminalProbe(context);
   await logIn(page);
   await page.request.delete(`${process.env.PM_E2E_BASE_URL!}/api/user/settings/terminal-theme`, {
@@ -86,33 +86,28 @@ test("account terminal themes preview locally, sync live, preserve xterm, export
   // Keep one warm TerminalStage layer live while another same-user client
   // imports and applies a theme.
   await page.locator(".sb-session").first().click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await page.evaluate(() => {
-    const current = window as ThemeProbeWindow;
-    current.__themeXterm = document.querySelector(".term-layer[style*='visibility: visible'] .xterm")!;
-    current.__themeTextarea = document.querySelector(".term-layer[style*='visibility: visible'] .xterm-helper-textarea")!;
+    const current = window as unknown as ThemeProbeWindow;
+    current.__themeXterm = document.querySelector(".term-layer[style*='visibility: visible'] .ghostty-terminal")!;
+    current.__themeTextarea = document.querySelector(".term-layer[style*='visibility: visible'] .ghostty-input")!;
   });
   await page.locator('button[title="new workspace"]').click();
   await page.locator(".workspace-name-modal input").fill("theme lifecycle");
   await page.getByRole("button", { name: "create" }).click();
-  await expect(page.locator(".workspace-terminal-host .xterm")).toBeVisible();
-  await expect.poll(() => page.evaluate(() => {
-    const probe = (window as ThemeProbeWindow).__themeProbe;
-    return { created: probe.created, replay: probe.replay };
-  })).toEqual({ created: 2, replay: 2 });
+  await expect(page.locator(".workspace-terminal-host .ghostty-terminal")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as ThemeProbeWindow).__themeProbe.created)).toBe(2);
+  await expect.poll(() => page.evaluate(() => (window as unknown as ThemeProbeWindow).__themeProbe.replay)).toBeGreaterThanOrEqual(2);
   await expect.poll(async () => {
     const before = await terminalProbe(page);
     // e2e-real-time-wait: quiescence is the condition, and nothing signals it.
     await page.waitForTimeout(PROBE_SETTLE_MS);
     return JSON.stringify(before) === JSON.stringify(await terminalProbe(page));
   }).toBe(true);
-  const baseline = await page.evaluate(() => {
-    const current = window as ThemeProbeWindow;
-    current.__themeWorkspaceXterm = document.querySelector(".workspace-terminal-host .xterm")!;
-    current.__themeWorkspaceTextarea = document.querySelector(".workspace-terminal-host .xterm-helper-textarea")!;
-    return {
-      ...current.__themeProbe,
-    };
+  await page.evaluate(() => {
+    const current = window as unknown as ThemeProbeWindow;
+    current.__themeWorkspaceXterm = document.querySelector(".workspace-terminal-host .ghostty-terminal")!;
+    current.__themeWorkspaceTextarea = document.querySelector(".workspace-terminal-host .ghostty-input")!;
   });
 
   const editor = await context.newPage();
@@ -125,6 +120,16 @@ test("account terminal themes preview locally, sync live, preserve xterm, export
   await observer.goto(process.env.PM_E2E_BASE_URL!);
   await expect(observer.locator(".sb-session")).toHaveCount(2);
   await openTerminalTheme(observer);
+
+  await expect.poll(() => page.evaluate(() => (window as unknown as ThemeProbeWindow).__themeProbe.created)).toBe(2);
+  await expect.poll(async () => {
+    const before = await terminalProbe(page);
+    // e2e-real-time-wait: quiescence is the condition, and nothing signals it.
+    await page.waitForTimeout(PROBE_SETTLE_MS);
+    return JSON.stringify(before) === JSON.stringify(await terminalProbe(page));
+  }).toBe(true);
+  const baseline = await terminalProbe(page);
+  expect(baseline.urls).toHaveLength(2);
 
   const picker = editor.locator("input[type=file]");
   await expect(picker).not.toHaveAttribute("accept");
@@ -156,12 +161,12 @@ test("account terminal themes preview locally, sync live, preserve xterm, export
   await expect(previewBar(observer)).toHaveText("Dracula is active.");
 
   await expect.poll(async () => page.evaluate(() => {
-    const current = window as ThemeProbeWindow;
+    const current = window as unknown as ThemeProbeWindow;
     return {
       warmStageRetained: current.__themeXterm?.contains(current.__themeTextarea ?? null) === true
         && current.__themeXterm.closest(".term-layer")?.parentElement?.classList.contains("term-stage") === true,
-      sameWorkspaceXterm: current.__themeWorkspaceXterm === document.querySelector(".workspace-terminal-host .xterm"),
-      sameWorkspaceTextarea: current.__themeWorkspaceTextarea === document.querySelector(".workspace-terminal-host .xterm-helper-textarea"),
+      sameWorkspaceXterm: current.__themeWorkspaceXterm === document.querySelector(".workspace-terminal-host .ghostty-terminal"),
+      sameWorkspaceTextarea: current.__themeWorkspaceTextarea === document.querySelector(".workspace-terminal-host .ghostty-input"),
       created: current.__themeProbe.created,
       closed: current.__themeProbe.closed,
       resize: current.__themeProbe.resize,

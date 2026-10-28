@@ -23,7 +23,7 @@ test("terminal debug bar reports live layer, socket, and mode state", async ({ p
   await expect(bar.getByRole("button", { name: "copy" })).toBeVisible();
 
   // The bar keeps tracking after output and survives a session switch.
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type("lineout 200");
   await page.keyboard.press("Enter");

@@ -19,13 +19,13 @@ test("NeedsInput stays blocked until submission and persists seen descendant att
   const second = "browser-e2e-two";
   await openSession(page, first);
 
-  // Enable real xterm mouse tracking before the session blocks, then trigger
+  // Enable terminal mouse tracking before the session blocks, then trigger
   // NeedsInput from the retained terminal while another session is selected.
   // A pane takes the screen before its stream is online, and input typed
   // into it is held until then, so the agent has to be reachable first for
   // the hook to land after what this types.
   await expectTerminalRevealed(page, "s:");
-  const terminal = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const terminal = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await terminal.focus();
   await page.keyboard.type("mouseon");
   await page.keyboard.press("Enter");
@@ -48,10 +48,10 @@ test("NeedsInput stays blocked until submission and persists seen descendant att
 
   // Partial typing and a real mouse-tracking click produce terminal bytes but
   // cannot clear NeedsInput. Only the semantic Enter submission may do so.
-  const selectedTerminal = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const selectedTerminal = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await selectedTerminal.focus();
   await page.keyboard.type("n");
-  const screen = await page.locator('.term-layer[style*="visible"] .xterm-screen').boundingBox();
+  const screen = await page.locator('.term-layer[style*="visible"] .ghostty-canvas').boundingBox();
   if (!screen) throw new Error("visible terminal screen missing");
   await page.mouse.click(screen.x + screen.width / 2, screen.y + screen.height / 2);
   await expect(sessionRow(page, first)).toHaveClass(/is-needs-input/);

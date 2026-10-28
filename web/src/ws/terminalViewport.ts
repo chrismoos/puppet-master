@@ -1,4 +1,8 @@
-import type { Terminal } from "@xterm/xterm";
+interface ViewportTerminal {
+  readonly buffer: { readonly active: { readonly type: string; readonly baseY: number; readonly viewportY: number } };
+  scrollToBottom(): void;
+  scrollToLine(line: number): void;
+}
 
 export interface TerminalViewportBookmark {
   bufferType: string;
@@ -7,7 +11,7 @@ export interface TerminalViewportBookmark {
 
 const STORAGE_PREFIX = "pm.terminalViewport.";
 
-export function captureTerminalViewport(terminal: Terminal): TerminalViewportBookmark {
+export function captureTerminalViewport(terminal: ViewportTerminal): TerminalViewportBookmark {
   const buffer = terminal.buffer.active;
   return {
     bufferType: buffer.type,
@@ -17,10 +21,10 @@ export function captureTerminalViewport(terminal: Terminal): TerminalViewportBoo
 
 /** Restore relative to the current buffer tail so cap trimming and snapshots
  * cannot turn an old absolute row into an unrelated content position. Calling
- * scrollToBottom for a zero-distance bookmark is intentional: besides pinning
- * the viewport after async writes, it clears xterm's internal user-scroll mode. */
+ * scrollToBottom for a zero-distance bookmark is intentional: it pins the
+ * viewport after async writes. */
 export function restoreTerminalViewport(
-  terminal: Terminal,
+  terminal: ViewportTerminal,
   bookmark: TerminalViewportBookmark,
 ): void {
   const buffer = terminal.buffer.active;

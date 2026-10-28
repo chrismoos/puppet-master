@@ -88,7 +88,7 @@ describe("startActivityReporter", () => {
     expect(reports.length).toBe(1);
   });
 
-  it("reports every kind of interaction, including one xterm would consume", () => {
+  it("reports every kind of interaction, including terminal input", () => {
     for (const event of ACTIVITY_EVENTS) {
       const { interact, reports } = harness();
       interact(event);

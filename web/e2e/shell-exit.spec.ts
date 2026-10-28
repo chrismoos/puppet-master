@@ -17,7 +17,7 @@ async function createShell(page: Page): Promise<void> {
 }
 
 async function typeInVisibleTerminal(page: Page, command: string, host?: Locator): Promise<void> {
-  const textarea = (host ?? page.locator("body")).locator(".xterm-helper-textarea:visible");
+  const textarea = (host ?? page.locator("body")).locator(".ghostty-input:visible");
   await textarea.focus();
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");

@@ -35,7 +35,7 @@ test("Focus mode gives the active session terminal the full content viewport", a
   await expect(page.locator(".terminal-debug-toggle")).toHaveCount(0);
   await expect(page.locator(".term-host")).toBeVisible();
   const sessionUrl = page.url();
-  const terminalInput = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const terminalInput = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await expect(terminalInput).toBeFocused();
 
   for (const [index, viewport] of VIEWPORTS.entries()) {

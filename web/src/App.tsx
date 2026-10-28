@@ -434,7 +434,7 @@ function Shell({
         updateFocusMode(action);
       }
     };
-    // xterm consumes keyboard events before they bubble to window, so Focus
+    // The terminal consumes keyboard events before they bubble to window, so Focus
     // mode's documented Escape exit must observe the key in capture phase.
     window.addEventListener("keydown", exitFocusMode, true);
     return () => window.removeEventListener("keydown", exitFocusMode, true);
@@ -453,12 +453,12 @@ function Shell({
     } else {
       updateFocusMode("toggle");
     }
-    // Clicking the floating toggle moves browser focus away from xterm. Return
+    // Clicking the floating toggle moves browser focus away from the terminal. Return
     // it after the focused layout settles so typing can continue immediately.
     requestAnimationFrame(() => {
       document.querySelector<HTMLElement>(
-        '.main-pane .restorable-view:not(.is-route-background) .term-layer[style*="visible"] .xterm-helper-textarea, ' +
-        ".main-pane .restorable-view:not(.is-route-background) .workspace-pane.is-focused .xterm-helper-textarea",
+        '.main-pane .restorable-view:not(.is-route-background) .term-layer[style*="visible"] .ghostty-input, ' +
+        ".main-pane .restorable-view:not(.is-route-background) .workspace-pane.is-focused .ghostty-input",
       )?.focus();
     });
   };

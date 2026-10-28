@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ITheme } from "@xterm/xterm";
+import type { GhosttyTheme } from "../ws/ghostty/core";
 import {
   publishThemeVariables,
   TerminalThemeController,
@@ -8,13 +8,13 @@ import {
 import { BUILTIN_TERMINAL_THEME, type TerminalTheme } from "@puppet-master/client-core/theme/terminalTheme";
 
 class LifecycleProbe implements TerminalThemeTarget {
-  readonly xterm = { id: Symbol("xterm") };
+  readonly terminal = { id: Symbol("terminal") };
   readonly pty = { id: Symbol("pty"), attach: 0, replay: 0, resize: 0, reconnect: 0 };
   readonly dom = { id: Symbol("dom") };
   readonly buffer = { contents: "preserved", selection: "selected", viewport: 42, focused: true };
-  themes: ITheme[] = [];
+  themes: GhosttyTheme[] = [];
 
-  setTheme(theme: ITheme): void {
+  setTheme(theme: GhosttyTheme): void {
     this.themes.push(theme);
   }
 }
@@ -35,14 +35,14 @@ describe("live terminal theme controller", () => {
     const unregister = [...warmStageLayers, ...simultaneousWorkspacePanes]
       .map((probe) => controller.register(probe));
     const identities = [...warmStageLayers, ...simultaneousWorkspacePanes]
-      .map((probe) => ({ xterm: probe.xterm, pty: probe.pty, dom: probe.dom, buffer: { ...probe.buffer } }));
+      .map((probe) => ({ terminal: probe.terminal, pty: probe.pty, dom: probe.dom, buffer: { ...probe.buffer } }));
 
     controller.setPersisted(imported("Synced", "#101010"));
     const probes = [...warmStageLayers, ...simultaneousWorkspacePanes];
-    expect(probes.every((probe) => probe.themes.at(-1)?.background === "#101010")).toBe(true);
+    expect(probes.every((probe) => probe.themes.at(-1)?.background.r === 16)).toBe(true);
     expect(new Set(probes.map((probe) => probe.themes.at(-1))).size).toBe(probes.length);
     probes.forEach((probe, index) => {
-      expect(probe.xterm).toBe(identities[index].xterm);
+      expect(probe.terminal).toBe(identities[index].terminal);
       expect(probe.pty).toBe(identities[index].pty);
       expect(probe.dom).toBe(identities[index].dom);
       expect(probe.buffer).toEqual(identities[index].buffer);
@@ -52,7 +52,7 @@ describe("live terminal theme controller", () => {
     const future = new LifecycleProbe();
     controller.register(future);
     expect(future.themes).toHaveLength(1);
-    expect(future.themes[0].background).toBe("#101010");
+    expect(future.themes[0].background.r).toBe(16);
     unregister.forEach((dispose) => dispose());
   });
 
@@ -63,9 +63,9 @@ describe("live terminal theme controller", () => {
     controller.setPersisted(imported("Saved", "#111111"));
     controller.preview(imported("Preview", "#222222"));
     controller.setPersisted(imported("Same-user remote update", "#333333"));
-    expect(local.themes.at(-1)?.background).toBe("#222222");
+    expect(local.themes.at(-1)?.background.r).toBe(34);
     controller.cancelPreview();
-    expect(local.themes.at(-1)?.background).toBe("#333333");
+    expect(local.themes.at(-1)?.background.r).toBe(51);
   });
 });
 

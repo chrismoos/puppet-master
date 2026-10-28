@@ -8,14 +8,18 @@ import {
   TerminalKind,
   TerminalRunState,
   TerminalSchema,
-} from "../src/gen/pm/v1/pm_pb";
-import type { AppState } from "../src/state/reducer";
+} from "@puppet-master/client-core/gen/pm/v1/pm_pb";
+import { initialState, type AppState } from "@puppet-master/client-core/state/reducer";
 import { ClientContext } from "../src/state/hooks";
 import { SessionPane } from "../src/views/SessionPane";
-import type { PmClient, PtyHandle } from "../src/ws/client";
+import type { PmClient } from "@puppet-master/client-core/ws/client";
+import { createTerminalProbeClient } from "./terminalProbeClient";
 import { TerminalStage } from "../src/ws/terminal";
 import { TerminalThemeController } from "../src/theme/controller";
-import "@xterm/xterm/css/xterm.css";
+import { preloadTerminalFonts } from "../src/fonts";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
+import "../src/styles.css";
 
 const SHELL_COUNT = 24;
 const SWITCH_COUNT = 100;
@@ -37,7 +41,17 @@ interface ProbeResult {
 
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 const round = (value: number) => Math.round(value * 100) / 100;
-
+const sumPrefix = (counts: Map<string, number>, prefix: string) => [...counts]
+  .reduce((total, [key, count]) => total + (key.startsWith(prefix) ? count : 0), 0);
+async function waitForReadyLayer(stage: TerminalStage, key: string): Promise<void> {
+  const deadline = performance.now() + 180_000;
+  while (performance.now() < deadline) {
+    const layers = stage.debugSnapshot();
+    if (layers.some((layer) => layer.key === key && layer.visible && layer.cols > 1)) return;
+    await nextFrame();
+  }
+  throw new Error(`timed out waiting for Canvas terminal layer ${key}`);
+}
 async function selectionUnmountCount(): Promise<number> {
   const session = create(SessionSchema, {
     id: 1n,
@@ -63,15 +77,11 @@ async function selectionUnmountCount(): Promise<number> {
     title: "Shell",
   });
   const state: AppState = {
+    ...initialState,
     conn: "online",
     hydrated: true,
-    buckets: new Map(),
-    projects: new Map(),
     sessions: new Map([["1", session]]),
-    workers: new Map(),
     terminals: new Map([["1", agent], ["2", shell]]),
-    contexts: new Map(),
-    forwards: new Map(),
   };
   const client = {
     getState: () => state,
@@ -94,7 +104,6 @@ async function selectionUnmountCount(): Promise<number> {
     sessionId: "1",
     stage,
     onSelect: () => {},
-    onSpawn: () => {},
   })));
   await nextFrame();
   container.querySelector<HTMLButtonElement>(".terminal-tab")?.click();
@@ -106,46 +115,19 @@ async function selectionUnmountCount(): Promise<number> {
 }
 
 async function main(): Promise<void> {
+  await preloadTerminalFonts();
   const selectionUnmounts = await selectionUnmountCount();
   const replay = new TextEncoder().encode(
     AGENT_REPLAY_LINE.repeat(AGENT_REPLAY_BYTES / AGENT_REPLAY_LINE.length),
   );
-  let agentOpens = 0;
-  let agentCloses = 0;
-  let shellOpens = 0;
-  let shellCloses = 0;
-  const handle = (agent: boolean): PtyHandle => {
-    if (agent) agentOpens += 1;
-    else shellOpens += 1;
-    return {
-      connect: (sink) => queueMicrotask(() => sink({ data: agent ? replay : new Uint8Array(), replay: true })),
-      input: () => {},
-      resize: () => {},
-      onStatus: (listener) => {
-        listener({ phase: "online" });
-        return () => {};
-      },
-      ptySize: () => null,
-      onPtySize: () => () => {},
-      retry: () => {},
-      close: () => {
-        if (agent) agentCloses += 1;
-        else shellCloses += 1;
-      },
-    };
-  };
-  const client = {
-    openPty: () => handle(true),
-    openTerminal: () => handle(false),
-    ptyResize: () => {},
-    terminalResize: () => {},
-    ptyInput: () => {},
-    terminalInput: () => {},
-  } as unknown as PmClient;
+  const fixture = createTerminalProbeClient((key) => key === "s:1" ? replay : new Uint8Array());
+  const client = fixture.client;
 
+  const stage = new TerminalStage(client, new TerminalThemeController());
   const host = document.querySelector<HTMLElement>("#host");
   if (!host) throw new Error("missing host");
-  const stage = new TerminalStage(client, new TerminalThemeController());
+  Object.assign(document.body.style, { margin: "0", width: "100vw", height: "100vh" });
+  Object.assign(host.style, { position: "relative", width: "100%", height: "100%" });
   stage.mount(host);
   stage.show(1n);
   await nextFrame();
@@ -153,6 +135,7 @@ async function main(): Promise<void> {
     stage.showTerminal(BigInt(id));
     await nextFrame();
   }
+  await waitForReadyLayer(stage, `t:${SHELL_COUNT}`);
 
   const samples: number[] = [];
   for (let index = 0; index < SWITCH_COUNT; index += 1) {
@@ -167,10 +150,10 @@ async function main(): Promise<void> {
   const result: ProbeResult = {
     shells: SHELL_COUNT,
     switches: SWITCH_COUNT,
-    agentOpens,
-    agentCloses,
-    shellOpens,
-    shellCloses,
+    agentOpens: fixture.opens.get("s:1") ?? 0,
+    agentCloses: fixture.closes.get("s:1") ?? 0,
+    shellOpens: sumPrefix(fixture.opens, "t:"),
+    shellCloses: sumPrefix(fixture.closes, "t:"),
     selectionUnmounts,
     showP50Ms: round(percentile(0.5)),
     showP99Ms: round(percentile(0.99)),

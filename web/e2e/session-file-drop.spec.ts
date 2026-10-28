@@ -1,27 +1,22 @@
 import { expect, test, type Page } from "./fixtures";
 import { expectTerminalRevealed, logIn } from "./support";
 
-/** Everything the visible terminal holds, read from xterm's own buffer so
- * the assertion does not depend on which renderer is active. A line the
- * terminal wrapped rejoins the one above it, or a path long enough to
- * wrap reads as two unrelated fragments. */
+/** Rejoins wrapped rows from the visible terminal snapshot. */
 async function terminalText(page: Page): Promise<string> {
   return page.evaluate(() => {
     const stage = (window as unknown as {
       __pmStage?: {
         debugSnapshot(): Array<{ key: string; visible: boolean }>;
-        layers: Map<string, { term: { buffer: { active: { length: number; getLine(i: number): { translateToString(trim: boolean): string; isWrapped: boolean } | undefined } } } }>;
+        layers: Map<string, { term: { renderSnapshot(): { rowData: Array<{ text: string; isWrapContinuation: boolean }> } | null } }>;
       };
     }).__pmStage;
     const visible = stage?.debugSnapshot().find((entry) => entry.visible);
     const term = visible ? stage?.layers.get(visible.key)?.term : undefined;
     if (!term) return "";
-    const buffer = term.buffer.active;
+    const rows = term.renderSnapshot()?.rowData ?? [];
     let text = "";
-    for (let index = 0; index < buffer.length; index += 1) {
-      const line = buffer.getLine(index);
-      if (!line) continue;
-      text += `${index > 0 && line.isWrapped ? "" : "\n"}${line.translateToString(true)}`;
+    for (const [index, line] of rows.entries()) {
+      text += `${index > 0 && line.isWrapContinuation ? "" : "\n"}${line.text}`;
     }
     return text;
   });

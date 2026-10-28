@@ -15,7 +15,7 @@ function activityReports(page: Page): () => number {
 }
 
 function visibleTerminalInput(page: Page) {
-  return page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  return page.locator('.term-layer[style*="visible"] .ghostty-input');
 }
 
 test("an open, connected dashboard reports nothing until someone touches it", async ({ page }) => {
@@ -50,7 +50,7 @@ test("typing into the embedded terminal counts as working here", async ({ page }
   await input.focus();
   expect(reports()).toBe(0);
 
-  // xterm consumes the keystroke at its own textarea, so this passes
+  // The terminal consumes the keystroke at its input, so this passes
   // only while the listeners stay in the capture phase.
   await page.keyboard.type("echo working");
   await expect.poll(reports).toBe(1);

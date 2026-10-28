@@ -24,24 +24,16 @@ while true; do sleep 0.5; done
 
 type Stage = {
   visibleId: string | null;
-  layers: Map<string, { term: { cols: number; rows: number; buffer: { active: {
-    length: number;
-    getLine(row: number): { translateToString(trimRight?: boolean): string } | undefined;
-  } } } }>;
+  layers: Map<string, { term: { renderSnapshot(): { rowData: Array<{ text: string }> } | null } }>;
 };
 
-/** Lines of the visible terminal, scrollback and screen together. */
+/** Lines visible on the terminal surface. */
 async function visibleLines(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const stage = (window as unknown as { __pmStage?: Stage }).__pmStage;
     const layer = stage?.layers.get(stage.visibleId ?? "");
     if (!layer) return [];
-    const buffer = layer.term.buffer.active;
-    const lines: string[] = [];
-    for (let row = 0; row < buffer.length; row += 1) {
-      lines.push(buffer.getLine(row)?.translateToString(true) ?? "");
-    }
-    return lines;
+    return layer.term.renderSnapshot()?.rowData.map((row) => row.text) ?? [];
   });
 }
 
@@ -86,7 +78,7 @@ test("a program that repaints on resize leaves one copy of its screen in every v
   const cwd = isolatedDaemon.session("browser-e2e")!.cwd;
   await writeFile(join(cwd, "redraw.sh"), REDRAWING_PROGRAM);
   await expectTerminalRevealed(page, "t:");
-  await page.locator('.term-layer[style*="visibility: visible"] .xterm-helper-textarea').focus();
+  await page.locator('.term-layer[style*="visibility: visible"] .ghostty-input').focus();
   await page.keyboard.type("bash redraw.sh\n");
   await expect.poll(() => headerCopies(page)).toBe(1);
   const socketsBefore = await countTerminalSockets(page);

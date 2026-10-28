@@ -6,7 +6,7 @@ const SCROLLBACK_BYTES = 60_000;
 const DRAG_DISTANCE_PX = 100;
 const DRAG_STEPS = 6;
 
-const BAR = '.term-layer[style*="visibility: visible"] .xterm-scrollable-element > .scrollbar.vertical';
+const BAR = '.term-layer[style*="visibility: visible"] .ghostty-scrollbar';
 
 function barOpacity(page: Page): Promise<number> {
   return page.locator(BAR).first().evaluate((element) =>
@@ -18,11 +18,11 @@ async function fillScrollback(page: Page): Promise<void> {
   // into it is held until then, so the output this asks for would still be
   // arriving when the test freezes the clock.
   await expectTerminalRevealed(page, "s:");
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(`bigout ${SCROLLBACK_BYTES}`);
   await page.keyboard.press("Enter");
-  await expect.poll(() => page.locator(`${BAR} .slider`).first()
+  await expect.poll(() => page.locator(`${BAR} .ghostty-scrollbar-thumb`).first()
     .evaluate((element) => Number.parseFloat((element as HTMLElement).style.height)))
     .toBeGreaterThan(0);
 }
@@ -46,7 +46,7 @@ test("the terminal scrollbar stays up for the whole of a thumb drag", async ({ p
   await expect(shell).toHaveClass(/is-terminal-scrollbar-active/);
   await expect.poll(() => barOpacity(page)).toBeGreaterThan(0.5);
 
-  const thumb = (await page.locator(`${BAR} .slider`).boundingBox())!;
+  const thumb = (await page.locator(`${BAR} .ghostty-scrollbar-thumb`).boundingBox())!;
   await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
   await expect.poll(() => barOpacity(page)).toBeGreaterThan(0.5);
   await page.mouse.down();
@@ -81,7 +81,7 @@ test("a press that releases outside the terminal still lets the scrollbar retrac
   await page.clock.runFor(SCROLL_RENDER_MS);
   await expect(shell).toHaveClass(/is-terminal-scrollbar-active/);
 
-  const thumb = (await page.locator(`${BAR} .slider`).boundingBox())!;
+  const thumb = (await page.locator(`${BAR} .ghostty-scrollbar-thumb`).boundingBox())!;
   await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
   await expect.poll(() => barOpacity(page)).toBeGreaterThan(0.5);
   await page.mouse.down();

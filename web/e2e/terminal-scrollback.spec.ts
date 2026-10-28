@@ -44,7 +44,7 @@ async function logInWithProbe(page: Page): Promise<void> {
 async function generateOutput(page: Page, bytes: number): Promise<void> {
   const before = await page.evaluate(() => Object.values((window as MetricWindow).__scrollbackStreams)
     .reduce((total, stream) => total + stream.bytes, 0));
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(`bigout ${bytes}`);
   await page.keyboard.press("Enter");
@@ -55,7 +55,7 @@ async function generateOutput(page: Page, bytes: number): Promise<void> {
 async function startOutput(page: Page, bytes: number): Promise<number> {
   const before = await page.evaluate(() => Object.values((window as MetricWindow).__scrollbackStreams)
     .reduce((total, stream) => total + stream.bytes, 0));
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(`pacedout ${bytes} 8000`);
   await page.keyboard.press("Enter");
@@ -85,11 +85,11 @@ test("warm agent session switches expose each scrollback without a resize", asyn
   await sessions.nth(0).click();
   await expect(sessions.nth(0)).toHaveClass(/is-selected/);
   const longLayer = page.locator('.term-layer[style*="visible"]');
-  const longSlider = longLayer.locator(".scrollbar.vertical .slider");
-  const longScrollbar = longLayer.locator(".scrollbar.vertical");
+  const longSlider = longLayer.locator(".ghostty-scrollbar-thumb");
+  const longScrollbar = longLayer.locator(".ghostty-scrollbar");
   await expect.poll(() => longScrollbar.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)))
     .toBe(0);
-  const longScreen = await longLayer.locator(".xterm-screen").boundingBox();
+  const longScreen = await longLayer.locator(".ghostty-canvas").boundingBox();
   if (!longScreen) throw new Error("missing long terminal screen");
   await page.clock.pauseAt(new Date());
   await page.mouse.move(longScreen.x + longScreen.width / 2, longScreen.y + longScreen.height / 2);
@@ -135,12 +135,12 @@ test("warm agent session switches expose each scrollback without a resize", asyn
     await sessions.nth(target).click();
     await expect(sessions.nth(target)).toHaveClass(/is-selected/);
     const layer = page.locator('.term-layer[style*="visible"]');
-    const slider = layer.locator(".scrollbar.vertical .slider");
+    const slider = layer.locator(".ghostty-scrollbar-thumb");
     await expect(slider).toBeVisible();
     const height = await slider.evaluate((element) => Number.parseFloat((element as HTMLElement).style.height));
     expect(height).toBeGreaterThan(0);
     expect(height).toBeLessThan(900);
-    const screen = await layer.locator(".xterm-screen").boundingBox();
+    const screen = await layer.locator(".ghostty-canvas").boundingBox();
     if (!screen) throw new Error("missing visible terminal screen");
     const topBefore = await slider.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
     await page.mouse.move(screen.x + screen.width / 2, screen.y + screen.height / 2);

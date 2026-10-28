@@ -12,23 +12,12 @@ async function expectVisibleTerminalOnline(page: Page, sessionId: number): Promi
           key: string;
           visible: boolean;
           socket: { phase: "online" | "reconnecting" } | null;
-        }>;
-        layers: Map<string, {
-          term: { buffer: { active: {
-            length: number;
-            getLine(line: number): { translateToString(trimRight?: boolean): string } | undefined;
-          } } };
+          screenText: string[];
         }>;
       };
     }).__pmStage;
     const debug = stage?.debugSnapshot().find((layer) => layer.visible && layer.key === expectedKey);
-    const layer = debug ? stage?.layers.get(debug.key) : undefined;
-    if (debug?.socket?.phase !== "online" || !layer) return false;
-    const buffer = layer.term.buffer.active;
-    for (let row = 0; row < buffer.length; row += 1) {
-      if ((buffer.getLine(row)?.translateToString(true) ?? "").includes("READY ")) return true;
-    }
-    return false;
+    return debug?.socket?.phase === "online" && debug.screenText.some((row) => row.includes("READY "));
   }, `s:${sessionId}`), {
     message: "waiting for the selected test agent to announce readiness",
     timeout: TERMINAL_READY_TIMEOUT_MS,
@@ -96,7 +85,7 @@ async function requestInput(page: Page, title: string, sessionId: number): Promi
   await row.locator(".sb-session").click();
   await expectTerminalRevealed(page, `s:${sessionId}`);
   await expectVisibleTerminalOnline(page, sessionId);
-  const terminal = page.locator(".term-layer:visible .xterm-helper-textarea");
+  const terminal = page.locator(".term-layer:visible .ghostty-input");
   await terminal.pressSequentially("needs");
   await terminal.press("Enter");
   await expect(row).toHaveClass(/is-needs-input/);
@@ -258,7 +247,7 @@ test("role explanation belongs only to direct icon hover, focus, and touch", asy
 
     await row.click({ position: { x: box.width - 6, y: 4 } });
     await expect(row).toHaveAttribute("aria-current", "page");
-    await expect(page.locator('.term-layer[style*="visibility: visible"] .xterm-helper-textarea')).toBeFocused();
+    await expect(page.locator('.term-layer[style*="visibility: visible"] .ghostty-input')).toBeFocused();
     await expect(tooltip).toHaveCSS("opacity", "0");
 
     await row.locator(".sb-session-title").click();

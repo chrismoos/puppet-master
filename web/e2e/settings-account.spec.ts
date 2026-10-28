@@ -6,9 +6,9 @@ test.use({ viewport: { width: 1440, height: 900 } });
 test("the gear opens Settings, keeps the session mounted and Back returns to its exact route", async ({ page }) => {
   await logIn(page);
   await page.locator(".sb-session").first().click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   const sessionAddress = page.url();
-  const terminal = await page.locator(".term-layer[style*='visibility: visible'] .xterm").elementHandle();
+  const terminal = await page.locator(".term-layer[style*='visibility: visible'] .ghostty-terminal").elementHandle();
   await page.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page).toHaveURL(/#\/settings\/appearance$/);
   // The modal is gone: Settings is a page, with nothing layered over the app.
@@ -27,7 +27,7 @@ test("the gear opens Settings, keeps the session mounted and Back returns to its
   await nav.getByRole("button", { name: "Back to sessions" }).click();
   await expect(page).toHaveURL(sessionAddress);
   expect(await terminal!.evaluate((element) => element.isConnected)).toBe(true);
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
 
   // Each page is its own history entry, so browser Back walks the pages.
   await page.goBack();

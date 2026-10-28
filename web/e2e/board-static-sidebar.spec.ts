@@ -12,7 +12,7 @@ function cli(args: string[]): string {
 }
 
 async function terminalCommand(page: Page, command: string): Promise<void> {
-  const textarea = page.locator(".term-layer:visible .xterm-helper-textarea");
+  const textarea = page.locator(".term-layer:visible .ghostty-input");
   await expect(textarea).toBeAttached();
   await textarea.pressSequentially(command);
   await textarea.press("Enter");
@@ -71,7 +71,7 @@ test("Board replaces only the main pane and preserves Sidebar, terminal, and Boa
   const sidebarBox = await page.locator(".sidebar-shell").boundingBox();
 
   await page.locator(".sb-scroll .sb-session").first().click();
-  await expect(page.locator(".term-layer:visible .xterm-screen")).toBeVisible();
+  await expect(page.locator(".term-layer:visible .ghostty-canvas")).toBeVisible();
   await terminalCommand(page, "echo retained-board-terminal");
   const terminal = page.locator(".term-layer:visible");
   await terminal.evaluate((element) => element.setAttribute("data-terminal-probe", "retained"));
@@ -116,7 +116,7 @@ test("Board replaces only the main pane and preserves Sidebar, terminal, and Boa
   await activeBoard.focus();
   await page.keyboard.press("Space");
   await expect(page.locator('[data-terminal-probe="retained"]')).toBeVisible();
-  await expect(page.locator(".term-layer:visible .xterm-helper-textarea")).toBeFocused();
+  await expect(page.locator(".term-layer:visible .ghostty-input")).toBeFocused();
   expect(await page.evaluate(() =>
     (window as Window & { __boardSidebarSockets: SocketMetrics }).__boardSidebarSockets,
   )).toEqual({ terminalCreated: 1, terminalClosed: 0 });

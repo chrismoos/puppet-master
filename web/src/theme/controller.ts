@@ -1,13 +1,13 @@
-import type { ITheme } from "@xterm/xterm";
 import { codeSurfaceVariables } from "@puppet-master/client-core/theme/codeSurface";
+import { ANSI_COLOR_KEYS } from "@puppet-master/client-core/theme/terminalTheme";
 import {
   BUILTIN_TERMINAL_THEME,
-  terminalThemeToXterm,
   type TerminalTheme,
 } from "@puppet-master/client-core/theme/terminalTheme";
+import type { GhosttyColor, GhosttyTheme } from "../ws/ghostty/core";
 
 export interface TerminalThemeTarget {
-  setTheme(theme: ITheme): void;
+  setTheme(theme: GhosttyTheme): void;
 }
 
 /** Applies one local user's persisted or temporary preview theme to every
@@ -19,7 +19,7 @@ export class TerminalThemeController {
 
   register(target: TerminalThemeTarget): () => void {
     this.targets.add(target);
-    target.setTheme(this.currentXtermTheme());
+    target.setTheme(this.currentGhosttyTheme());
     return () => this.targets.delete(target);
   }
 
@@ -43,12 +43,21 @@ export class TerminalThemeController {
     return this.previewTheme ?? this.persisted;
   }
 
-  currentXtermTheme(): ITheme {
-    return terminalThemeToXterm(this.currentTheme());
+  currentGhosttyTheme(): GhosttyTheme {
+    const theme = this.currentTheme();
+    const palette = [...ANSI_COLOR_KEYS.map((key) => color(theme.colors[key]))];
+    palette.push(...(theme.colors.extendedAnsi ?? []).map(color));
+    return {
+      foreground: color(theme.colors.foreground),
+      background: color(theme.colors.background),
+      cursor: color(theme.colors.cursor),
+      palette,
+      selectionBackground: theme.colors.selectionBackground,
+    };
   }
 
   private applyCurrent(): void {
-    for (const target of this.targets) target.setTheme(this.currentXtermTheme());
+    for (const target of this.targets) target.setTheme(this.currentGhosttyTheme());
     publishThemeVariables(this.currentTheme());
   }
 }
@@ -80,9 +89,10 @@ function kebab(name: string): string {
   return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
-export function freshXtermTheme(theme: ITheme): ITheme {
+function color(value: string): GhosttyColor {
   return {
-    ...theme,
-    ...(theme.extendedAnsi ? { extendedAnsi: [...theme.extendedAnsi] } : {}),
+    r: Number.parseInt(value.slice(1, 3), 16),
+    g: Number.parseInt(value.slice(3, 5), 16),
+    b: Number.parseInt(value.slice(5, 7), 16),
   };
 }

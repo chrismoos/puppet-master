@@ -13,17 +13,10 @@ interface StageWindow extends Window {
       term: {
         cols: number;
         rows: number;
-        buffer: {
-          active: {
-            baseY: number;
-            cursorY: number;
-            length: number;
-            getLine(row: number): {
-              isWrapped: boolean;
-              translateToString(trimRight?: boolean): string;
-            } | undefined;
-          };
-        };
+        renderSnapshot(): {
+          cursorY: number;
+          rowData: Array<{ text: string; isWrapContinuation: boolean }>;
+        } | null;
       };
     }>;
   };
@@ -41,15 +34,13 @@ async function visibleScreen(page: Page, key: string): Promise<Screen> {
     const stage = (window as StageWindow).__pmStage;
     const layer = stage?.layers.get(layerKey);
     if (!layer) return { rows: [], wrapped: [], cols: 0, cursorY: -1 };
-    const buffer = layer.term.buffer.active;
-    const rows: string[] = [];
-    const wrapped: boolean[] = [];
-    for (let row = buffer.baseY; row < buffer.baseY + layer.term.rows; row += 1) {
-      const line = buffer.getLine(row);
-      rows.push(line?.translateToString(true) ?? "");
-      wrapped.push(line?.isWrapped ?? false);
-    }
-    return { rows, wrapped, cols: layer.term.cols, cursorY: buffer.cursorY };
+    const snapshot = layer.term.renderSnapshot();
+    return {
+      rows: snapshot?.rowData.map((row) => row.text) ?? [],
+      wrapped: snapshot?.rowData.map((row) => row.isWrapContinuation) ?? [],
+      cols: layer.term.cols,
+      cursorY: snapshot?.cursorY ?? -1,
+    };
   }, key);
 }
 
@@ -86,10 +77,10 @@ async function verifyClaudeReload(page: Page, frames: number): Promise<void> {
   const sessions = page.locator(".sb-session");
   await expect(sessions.nth(0)).toBeVisible();
   await sessions.nth(0).click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await expectTerminalRevealed(page, "s:");
 
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(`claudestream ${HISTORY_LINES} ${frames} ${FRAME_DELAY_MS} ${LINE_LEN}`);
   await page.keyboard.press("Enter");
@@ -106,9 +97,9 @@ async function verifyClaudeReload(page: Page, frames: number): Promise<void> {
   }
   const before = historyNumbers((await visibleScreen(page, key)).rows);
   await page.reload();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await sessions.nth(0).click();
-  await expect(page.locator('.term-layer[style*="visible"] .xterm')).toBeVisible();
+  await expect(page.locator('.term-layer[style*="visible"] .ghostty-terminal')).toBeVisible();
 
   const restoredKey = await visibleLayerKey(page);
   await expect
@@ -177,10 +168,10 @@ test("syncout survives a reload without a window resize", async ({ page }) => {
   const sessions = page.locator(".sb-session");
   await expect(sessions.nth(0)).toBeVisible();
   await sessions.nth(0).click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await expectTerminalRevealed(page, "s:");
 
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type("syncout 200 0");
   await page.keyboard.press("Enter");
@@ -191,9 +182,9 @@ test("syncout survives a reload without a window resize", async ({ page }) => {
     .toBe(true);
 
   await page.reload();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await sessions.nth(0).click();
-  await expect(page.locator('.term-layer[style*="visible"] .xterm')).toBeVisible();
+  await expect(page.locator('.term-layer[style*="visible"] .ghostty-terminal')).toBeVisible();
 
   const restoredKey = await visibleLayerKey(page);
   await expect

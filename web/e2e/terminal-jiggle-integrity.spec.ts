@@ -3,7 +3,7 @@ import { expectTerminalRevealed, logIn } from "./support";
 
 // The repaint kick shrinks the terminal by one row and grows it back. That is
 // meant to make a full-screen program redraw. What it must not do is move the
-// content already on screen: xterm reflows and scrolls on resize, and a row
+// content already on screen: resize and scroll behavior can move a row, and a row
 // lost on the way down that is not restored on the way up leaves everything
 // one line out — which is what "my input is above the input bar" looks like.
 
@@ -15,14 +15,7 @@ interface StageWindow extends Window {
         cols: number;
         rows: number;
         resize(cols: number, rows: number): void;
-        buffer: {
-          active: {
-            baseY: number;
-            cursorY: number;
-            length: number;
-            getLine(row: number): { translateToString(trimRight?: boolean): string } | undefined;
-          };
-        };
+        renderSnapshot(): { cursorY: number; rowData: Array<{ text: string }> } | null;
       };
     }>;
   };
@@ -34,12 +27,12 @@ async function screen(page: Page): Promise<{ rows: string[]; cursorY: number; ba
     const key = stage?.debugSnapshot().find((layer) => layer.visible)?.key ?? "";
     const layer = stage?.layers.get(key);
     if (!layer) return { rows: [], cursorY: -1, baseY: -1 };
-    const buffer = layer.term.buffer.active;
-    const rows: string[] = [];
-    for (let row = buffer.baseY; row < buffer.baseY + layer.term.rows; row += 1) {
-      rows.push(buffer.getLine(row)?.translateToString(true) ?? "");
-    }
-    return { rows, cursorY: buffer.cursorY, baseY: buffer.baseY };
+    const snapshot = layer.term.renderSnapshot();
+    return {
+      rows: snapshot?.rowData.map((row) => row.text) ?? [],
+      cursorY: snapshot?.cursorY ?? -1,
+      baseY: layer.term.rows,
+    };
   });
 }
 
@@ -58,12 +51,12 @@ async function jiggle(page: Page): Promise<void> {
 test("the repaint kick leaves the rows already on screen where they were", async ({ page }) => {
   await logIn(page);
   await page.locator(".sb-session").first().click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await expectTerminalRevealed(page, "s:");
 
   // Fill past the screen so the cursor sits at the bottom, which is where a
   // row lost to a shrink cannot come back on its own.
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type("syncout 200 0");
   await page.keyboard.press("Enter");

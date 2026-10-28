@@ -123,3 +123,22 @@ export function holdInput(held: HeldInput[], input: HeldInput, capBytes: number)
 export function historyWasTruncated(bufferLines: number, bound: number): boolean {
   return bufferLines >= bound;
 }
+
+export interface LayerSizePrompt {
+  blocked(): boolean;
+  reset(): void;
+  update(): void;
+}
+
+export function showLayerSizePrompt(
+  sizePrompt: LayerSizePrompt,
+  switched: boolean,
+  initialReplayPending: boolean,
+  hasHandle: boolean,
+  visibleDocument: boolean,
+): void {
+  if (!switched) return;
+  if (initialReplayPending && !sizePrompt.blocked()) return;
+  sizePrompt.reset();
+  if (hasHandle && !initialReplayPending && visibleDocument) sizePrompt.update();
+}

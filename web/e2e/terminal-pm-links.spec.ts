@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
+import { terminalCanvasDiagnostics, terminalCanvasGeometry, watchTerminalPointer } from "./terminalCanvasDriver";
 
 interface LinkReturnStage {
   debugSnapshot(): Array<{
@@ -17,11 +18,8 @@ interface LinkReturnStage {
     term: {
       cols: number;
       rows: number;
-      buffer: { active: {
-        baseY: number;
-        viewportY: number;
-        getLine(row: number): { translateToString(trimRight?: boolean): string } | undefined;
-      } };
+      buffer: { active: { length: number; baseY: number; viewportY: number } };
+      renderSnapshot(): { cursorY: number; rowData: Array<{ text: string }> } | null;
       clearSelection(): void;
       getSelection(): string;
       scrollToLine(row: number): void;
@@ -48,6 +46,7 @@ async function expectRoutedTerminalVisible(page: Page): Promise<void> {
     ?.debugSnapshot().filter((candidate) => candidate.visible).map((candidate) => candidate.key) ?? []), {
     message: `waiting for session ${sessionId} to own the visible terminal layer`,
   }).toEqual([`s:${sessionId}`]);
+  await expectTerminalRevealed(page, `s:${sessionId}`);
 }
 
 async function writeReference(
@@ -55,49 +54,68 @@ async function writeReference(
   host: string,
   reference: string,
   expectedHref = reference,
+  hoverModifier?: "Shift",
 ): Promise<{ x: number; y: number; cellWidth: number }> {
   await expectRoutedTerminalVisible(page);
-  const terminal = page.locator(`${host} .xterm`).filter({ visible: true });
-  const textarea = terminal.locator(".xterm-helper-textarea");
+  const terminal = page.locator(`${host} .ghostty-terminal`).filter({ visible: true });
+  await watchTerminalPointer(terminal);
+  const textarea = terminal.locator(".ghostty-input");
   await textarea.focus();
   await textarea.pressSequentially(`echo ${reference}`);
   await textarea.press("Enter");
   let found: { x: number; y: number; cellWidth: number } | undefined;
-  await expect.poll(async () => {
-    const geometry = await terminal.evaluate((element) => {
-      const screen = element.querySelector<HTMLElement>(".xterm-screen")!;
-      const input = element.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")!;
-      const screenRect = screen.getBoundingClientRect();
-      const cellWidth = input.getBoundingClientRect().width;
-      const cellHeight = input.getBoundingClientRect().height;
-      return { left: screenRect.left, cursorTop: input.getBoundingClientRect().top, cellWidth, cellHeight };
-    });
-    if (geometry.cellWidth <= 0 || geometry.cellHeight <= 0) return false;
-    for (let row = 0; row < 4; row += 1) {
-      for (let column = 0; column < 28; column += 1) {
+  let lastPoint: { x: number; y: number } | undefined;
+  let lastRendered: unknown;
+  if (hoverModifier) await page.keyboard.down(hoverModifier);
+  try {
+    await expect.poll(async () => {
+      const geometry = await terminalCanvasGeometry(terminal);
+      const rendered = await terminal.evaluate((element, target) => {
+        const stage = (window as LinkReturnWindow).__pmStage;
+        const layerElement = element.closest(".term-layer");
+        const layer = [...stage?.layers.values() ?? []].find((candidate) => candidate.el === layerElement);
+        const rows = layer?.term.renderSnapshot()?.rowData ?? [];
+        for (let row = rows.length - 1; row >= 0; row -= 1) {
+          const column = rows[row]!.text.indexOf(target);
+          if (column >= 0) return { row, column: column + 1 };
+        }
+        return null;
+      }, expectedHref);
+      lastRendered = { geometry, rendered };
+      const rowCount = Math.floor((geometry.height - geometry.padding * 2) / geometry.cellHeight);
+      const candidates = rendered ? [rendered] : Array.from({ length: rowCount }, (_, row) => ({ row, column: 5 }));
+      for (const { row, column } of candidates) {
         const point = {
           x: geometry.left + geometry.cellWidth * (column + 0.5),
-          y: geometry.cursorTop - geometry.cellHeight * (row + 0.5),
+          y: geometry.top + geometry.cellHeight * (row + 0.5),
           cellWidth: geometry.cellWidth,
         };
+        lastPoint = point;
         await page.mouse.move(point.x, point.y);
-        const hint = page.locator(".terminal-pm-link-hint");
-        if (await page.locator(".xterm-cursor-pointer").count() === 1
-          && await hint.count() === 1
-          && (await hint.textContent())?.includes(expectedHref)) {
+        const hint = page.locator(host).filter({ visible: true }).locator(".terminal-pm-link-hint");
+        if (await hint.count() === 1 && (await hint.textContent())?.includes(expectedHref)) {
           found = point;
           return true;
         }
       }
-    }
-    return false;
-  }, { message: `rendered terminal link ${expectedHref}`, timeout: 10_000 }).toBe(true);
+      return false;
+    }, { message: `rendered terminal link ${expectedHref}`, timeout: 10_000 }).toBe(true);
+  } catch (error) {
+    const diagnostics = { expectedHref, lastRendered, ...await terminalCanvasDiagnostics(terminal, lastPoint) };
+    console.error("canvas-link-diagnostics", JSON.stringify(diagnostics));
+    await test.info().attach("terminal-link-geometry", { body: JSON.stringify(diagnostics, null, 2), contentType: "application/json" });
+    throw error;
+  } finally {
+    if (hoverModifier) await page.keyboard.up(hoverModifier);
+  }
   return found!;
 }
 
-async function expectLinkHover(page: Page, point: { x: number; y: number }): Promise<void> {
+async function expectLinkHover(page: Page, point: { x: number; y: number }, hoverModifier?: "Shift"): Promise<void> {
+  if (hoverModifier) await page.keyboard.down(hoverModifier);
   await page.mouse.move(point.x, point.y);
-  await expect(page.locator(".xterm-cursor-pointer")).toHaveCount(1);
+  if (hoverModifier) await page.keyboard.up(hoverModifier);
+  await expect(page.locator(".ghostty-link-hover")).toHaveCount(1);
 }
 
 async function modifiedClick(page: Page, point: { x: number; y: number }): Promise<void> {
@@ -144,11 +162,10 @@ async function terminalLinkState(page: Page, reference?: string) {
     let referenceRow = -1;
     let referenceColumn = -1;
     if (target) {
-      for (let row = buffer.baseY + layer.term.rows - 1; row >= 0; row -= 1) {
-        const text = buffer.getLine(row)?.translateToString(true) ?? "";
-        const column = text.indexOf(target);
+      for (const [rowIndex, row] of (layer.term.renderSnapshot()?.rowData ?? []).entries()) {
+        const column = row.text.indexOf(target);
         if (column < 0) continue;
-        referenceRow = row;
+        referenceRow = buffer.viewportY + rowIndex;
         referenceColumn = column;
         break;
       }
@@ -167,40 +184,43 @@ async function terminalLinkState(page: Page, reference?: string) {
 }
 
 async function revealReference(page: Page, reference: string): Promise<{ x: number; y: number; cellWidth: number }> {
-  await expect.poll(() => terminalLinkState(page, reference).then((state) => state.referenceRow))
-    .toBeGreaterThanOrEqual(0);
-  await page.evaluate((target) => {
+  await expect.poll(() => page.evaluate(async (target) => {
     const stage = (window as LinkReturnWindow).__pmStage!;
     const debug = stage.debugSnapshot().find((candidate) => candidate.visible)!;
     const layer = stage.layers.get(debug.key)!;
-    const buffer = layer.term.buffer.active;
-    for (let row = buffer.baseY + layer.term.rows - 1; row >= 0; row -= 1) {
-      if (!(buffer.getLine(row)?.translateToString(true) ?? "").includes(target)) continue;
-      layer.term.scrollToLine(Math.max(0, row - Math.floor(layer.term.rows / 2)));
-      return;
+    const savedViewport = layer.term.buffer.active.viewportY;
+    const painted = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const step = Math.max(1, layer.term.rows - 1);
+    for (let line = 0; line < layer.term.buffer.active.length; line += step) {
+      layer.term.scrollToLine(line);
+      await painted();
+      const viewport = layer.term.buffer.active.viewportY;
+      const rows = layer.term.renderSnapshot()?.rowData ?? [];
+      for (const [index, row] of rows.entries()) {
+        if (!row.text.includes(target)) continue;
+        layer.term.scrollToLine(Math.max(0, viewport + index - Math.floor(layer.term.rows / 2)));
+        await painted();
+        return true;
+      }
     }
-    throw new Error(`missing ${target}`);
-  }, reference);
+    layer.term.scrollToLine(savedViewport);
+    await painted();
+    return false;
+  }, reference), { message: `find retained output ${reference}` }).toBe(true);
   const state = await terminalLinkState(page, reference);
-  const terminal = page.locator('.term-layer[style*="visible"] .xterm');
-  const point = await terminal.evaluate((element, position) => {
-    const screen = element.querySelector<HTMLElement>(".xterm-screen")!;
-    const input = element.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")!;
-    const bounds = screen.getBoundingClientRect();
-    const cellWidth = input.getBoundingClientRect().width;
-    const cellHeight = input.getBoundingClientRect().height;
-    return {
-      x: bounds.left + cellWidth * (position.referenceColumn + 0.5),
-      y: bounds.top + cellHeight * (position.referenceRow - position.viewportY + 0.5),
-      cellWidth,
-    };
-  }, state);
+  expect(state.referenceRow).toBeGreaterThanOrEqual(0);
+  const terminal = page.locator('.term-layer[style*="visible"] .ghostty-terminal');
+  const geometry = await terminalCanvasGeometry(terminal);
+  const point = {
+    x: geometry.left + geometry.cellWidth * (state.referenceColumn + 0.5),
+    y: geometry.top + geometry.cellHeight * (state.referenceRow - state.viewportY + 0.5),
+    cellWidth: geometry.cellWidth,
+  };
   await expect.poll(async () => {
-    // xterm caches the last buffer cell, including across a retained route.
     // Cross a full cell boundary before re-entering the link.
     await page.mouse.move(point.x + point.cellWidth * 3, point.y);
     await page.mouse.move(point.x, point.y);
-    return page.locator(".xterm-cursor-pointer").count();
+    return page.locator(".ghostty-link-hover").count();
   }, { message: `hover ${reference}` }).toBe(1);
   return point;
 }
@@ -208,9 +228,10 @@ async function revealReference(page: Page, reference: string): Promise<{ x: numb
 async function returnThroughSidebar(page: Page, sessionId: string): Promise<void> {
   await page.locator(".sb-session").filter({ has: page.locator(".sb-session-title", { hasText: /^browser-e2e$/ }) }).click();
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${sessionId}$`));
+  await expectRoutedTerminalVisible(page);
 }
 
-test("item-link returns restore scroll and finish xterm selection gestures", async ({ page }) => {
+test("item-link returns restore scroll and finish selection gestures", async ({ page }) => {
   const itemOutput = cli([
     "items", "add", "--bucket", "1", "--project", "1", "--status", "planned",
     "Terminal return lifecycle target",
@@ -225,7 +246,7 @@ test("item-link returns restore scroll and finish xterm selection gestures", asy
   await expect(page).toHaveURL(/#\/session\/\d+$/);
   const sessionId = page.url().match(/#\/session\/(\d+)$/)?.[1];
   if (!sessionId) throw new Error("seeded browser session did not open");
-  const input = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const input = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await input.focus();
   await input.pressSequentially("lineout 700");
   await input.press("Enter");
@@ -251,7 +272,7 @@ test("item-link returns restore scroll and finish xterm selection gestures", asy
     // Exercise the stale document-level selection listeners that used to stay
     // installed after the link's mouseup hid the terminal layer.
     await page.mouse.move(710, 4);
-    // e2e-real-time-wait: xterm's drag-scroll lifecycle ticks every 50ms
+    // e2e-real-time-wait: allow the pointer release to finish before hiding the layer
     await page.waitForTimeout(120);
     if (path === "back") {
       await page.goBack();
@@ -259,6 +280,7 @@ test("item-link returns restore scroll and finish xterm selection gestures", asy
     } else {
       await returnThroughSidebar(page, sessionId);
     }
+    await expectRoutedTerminalVisible(page);
     await expect(page.locator('.term-layer[style*="visible"]')).toBeVisible();
     await expect.poll(async () => (await terminalLinkState(page, reference)).linesFromBottom)
       .toBeLessThanOrEqual(departing.linesFromBottom + 2);
@@ -333,7 +355,7 @@ test("PM links preserve selection and route from session and workspace terminals
   await expect(missingAlert).toContainText("Session 999999 is missing or inaccessible.");
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${targetId}$`));
 
-  const terminalInput = page.locator(".term-layer .xterm").filter({ visible: true }).locator(".xterm-helper-textarea");
+  const terminalInput = page.locator(".term-layer .ghostty-terminal").filter({ visible: true }).locator(".ghostty-input");
   await terminalInput.focus();
   await terminalInput.pressSequentially("mouseon");
   await terminalInput.press("Enter");
@@ -350,7 +372,7 @@ test("PM links preserve selection and route from session and workspace terminals
   await page.getByLabel("name", { exact: true }).fill("link workspace");
   await page.getByRole("button", { name: "create workspace" }).click();
   await page.getByLabel("terminal shown in pane").selectOption({ index: 2 });
-  await expect(page.locator(".workspace-terminal-host .xterm")).toBeVisible();
+  await expect(page.locator(".workspace-terminal-host .ghostty-terminal")).toBeVisible();
 
   const workspaceLink = await writeReference(page, ".workspace-terminal-host", `pm:item/1/${itemId}`);
   await expectLinkHover(page, workspaceLink);
@@ -361,7 +383,13 @@ test("PM links preserve selection and route from session and workspace terminals
 
 test("HTTP links open intentionally from session and workspace terminals", async ({ page }) => {
   await logIn(page);
-  await page.locator(".sb-session").first().click();
+  await page.locator(".sb-session-title")
+    .filter({ hasText: /^browser-e2e$/ })
+    .locator("xpath=ancestor::button[contains(@class, 'sb-session')][1]")
+    .click();
+  const sessionId = page.url().match(/#\/session\/(\d+)$/)?.[1];
+  if (!sessionId) throw new Error("browser-e2e session did not open");
+  await expectTerminalRevealed(page, `s:${sessionId}`);
   await recordOpenedUrls(page);
 
   const sessionUrl = "https://example.test/session?q=one#result";
@@ -390,7 +418,7 @@ test("HTTP links open intentionally from session and workspace terminals", async
     sessionUrl,
   ]);
 
-  const terminalInput = page.locator(".term-layer .xterm").filter({ visible: true }).locator(".xterm-helper-textarea");
+  const terminalInput = page.locator(".term-layer .ghostty-terminal").filter({ visible: true }).locator(".ghostty-input");
   await terminalInput.focus();
   await terminalInput.pressSequentially("mouseon");
   await terminalInput.press("Enter");
@@ -400,6 +428,7 @@ test("HTTP links open intentionally from session and workspace terminals", async
   await expect(page.locator(".terminal-pm-link-hint")).toContainText("Shift-click (Option-click on macOS)");
   await page.mouse.click(trackedLink.x, trackedLink.y);
   await expect.poll(() => openedUrls(page)).toHaveLength(4);
+  await terminalInput.press("Enter");
   await expectLinkHover(page, trackedLink);
   await clickWithModifier(page, trackedLink, "Shift");
   await expect.poll(() => openedUrls(page)).toEqual([
@@ -413,17 +442,17 @@ test("HTTP links open intentionally from session and workspace terminals", async
   await page.getByTitle("new workspace").click();
   await page.getByLabel("name", { exact: true }).fill("URL workspace");
   await page.getByRole("button", { name: "create workspace" }).click();
-  await page.getByLabel("terminal shown in pane").selectOption({ index: 2 });
-  await expect(page.locator(".workspace-terminal-host .xterm")).toBeVisible();
+  await page.getByLabel("terminal shown in pane").selectOption({ label: "browser-e2e · agent" });
+  await expect(page.locator(".workspace-terminal-host .ghostty-terminal")).toBeVisible();
 
   const workspaceUrl = "https://example.test/saved-workspace";
-  const workspaceLink = await writeReference(page, ".workspace-terminal-host", `${workspaceUrl}.`, workspaceUrl);
-  await expectLinkHover(page, workspaceLink);
+  const workspaceLink = await writeReference(page, ".workspace-terminal-host", `${workspaceUrl}.`, workspaceUrl, "Shift");
+  await expectLinkHover(page, workspaceLink, "Shift");
   await expect(page.locator(".terminal-pm-link-hint")).toContainText("Shift-click (Option-click on macOS)");
   const beforeWorkspaceClick = (await openedUrls(page)).length;
   await page.mouse.click(workspaceLink.x, workspaceLink.y);
   await expect.poll(async () => (await openedUrls(page)).length).toBe(beforeWorkspaceClick);
-  await expectLinkHover(page, workspaceLink);
+  await expectLinkHover(page, workspaceLink, "Shift");
   await clickWithModifier(page, workspaceLink, "Shift");
   await expect.poll(() => openedUrls(page)).toContain(workspaceUrl);
   expect(await openedUrls(page)).not.toContain(`${workspaceUrl}.`);
@@ -457,8 +486,10 @@ test("an agent's HTTP review link opens only the fullscreen review and closes wh
   ]);
   await expect(opened.locator(".review-rail-file").first()).toBeVisible();
   await expect(opened.locator(".shell")).toHaveClass(/is-focus-mode/);
-  await expect(opened.locator(".xterm, .sidebar, .topbar")).toHaveCount(0);
+  await expect(opened.locator(".ghostty-terminal, .sidebar, .topbar")).toHaveCount(0);
   await expect(page.locator(".terminal-size-prompt")).toBeHidden();
+  await expect(opened.locator(".review-head-bot .review-session")).toHaveText("browser-e2e");
+  await expect(opened.getByRole("alert")).toHaveCount(0);
   await Promise.all([
     opened.waitForEvent("close"),
     opened.getByRole("button", { name: "Finish review" }).click(),

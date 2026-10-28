@@ -8601,20 +8601,19 @@ impl Daemon {
         data: bytes::Bytes,
         submitted: bool,
     ) {
-        if data.is_empty() || !self.deliver_terminal_input(t, data) {
+        if data.is_empty() {
             return;
         }
-        if t.kind != pm_protocol::domain::TerminalKind::Agent {
+        let is_agent = t.kind == pm_protocol::domain::TerminalKind::Agent;
+        let input_state = (is_agent && submitted)
+            .then(|| self.storage.get_session(t.session_id).map(|s| s.state).ok())
+            .flatten();
+        if !self.deliver_terminal_input(t, data) || !is_agent {
             return;
         }
         let daemon = std::sync::Arc::clone(self);
         let t = t.clone();
         tokio::task::spawn_blocking(move || {
-            let input_state = daemon
-                .storage
-                .get_session(t.session_id)
-                .map(|s| s.state)
-                .ok();
             daemon.observe_user_interaction(t.session_id, submitted);
             if let Some(input_state) = input_state {
                 daemon.acknowledge_user_input(&t, submitted, input_state);

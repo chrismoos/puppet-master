@@ -581,6 +581,13 @@ async fn needs_input_attention_is_seen_separately_and_only_submission_acknowledg
     assert!(session.last_user_interaction_at_unix_ms > 0);
     assert!(session.last_activity_at_unix_ms >= session.last_user_interaction_at_unix_ms);
     env.daemon.checkpoint_session_activity();
+
+    const ACK_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(25);
+    env.daemon
+        .terminal_input_for(&terminal, bytes::Bytes::from_static(b"needs\r"), true);
+    env.daemon.handle_pty_needs_input(id);
+    tokio::time::sleep(ACK_SETTLE_DELAY).await;
+    assert_eq!(state_of(&env, id).0, SessionState::NeedsInput);
 }
 
 #[tokio::test]

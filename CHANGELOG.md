@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [Web] Switch browser terminals from xterm.js to Ghostty with Canvas 2D rendering.
 - [Web] Talk to Puppet Master from the topbar: ask what needs you, what a session is doing, or tell it to start work, across every bucket you can see. Answers are read aloud when a speech provider is configured, and typing does the same thing.
 - [iOS] A voice screen in the overflow menu, with tap to talk or a call that keeps the microphone open and sends what you say as you say it. Speech is transcribed on the device, so no audio leaves the phone, and answers come out of the speaker or the earpiece, whichever you pick.
 - [Daemon] A message can be handed to any session's agent as the user, and the short answer it sends back is read out in the agent's own words.

@@ -1,4 +1,4 @@
-// Narrow browser probe for the client render path. Synthesizes a fixed
+// xterm baseline for terminal framing cost. Synthesizes a fixed
 // flood as real ServerMessage/PtyOutput frames and measures, per framing,
 // the two costs coalescing would change: protobuf-es decode + xterm
 // term.write drain (main-thread ms), plus requestAnimationFrame gaps
@@ -7,7 +7,7 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ServerMessageSchema } from "../src/gen/pm/v1/pm_pb";
+import { ServerMessageSchema } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
 
 const TOTAL = 4 * 1024 * 1024;
 const FRAME_BUDGET_MS = 1000 / 60;
@@ -33,6 +33,7 @@ function buildFrames(chunkSize: number): Uint8Array[] {
 }
 
 interface Result {
+  renderer: "xterm baseline";
   name: string;
   frames: number;
   avgFrameBytes: number;
@@ -86,6 +87,7 @@ async function runScenario(name: string, chunkSize: number): Promise<Result> {
   host.remove();
   const r1 = (n: number) => Math.round(n * 10) / 10;
   return {
+    renderer: "xterm baseline",
     name,
     frames: frames.length,
     avgFrameBytes: Math.round(TOTAL / frames.length),

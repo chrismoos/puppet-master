@@ -33,17 +33,11 @@ interface StageWindow extends Window {
       term: {
         cols: number;
         rows: number;
-        buffer: {
-          active: {
-            baseY: number;
-            cursorX: number;
-            cursorY: number;
-            getLine(row: number): {
-              isWrapped: boolean;
-              translateToString(trimRight?: boolean): string;
-            } | undefined;
-          };
-        };
+        renderSnapshot(): {
+          cursorX: number;
+          cursorY: number;
+          rowData: Array<{ text: string; isWrapContinuation: boolean }>;
+        } | null;
       };
     }>;
   };
@@ -65,35 +59,30 @@ async function readScreen(page: Page): Promise<Screen | null> {
     const visible = stage?.debugSnapshot().find((layer) => layer.visible);
     const layer = visible ? stage?.layers.get(visible.key) : undefined;
     if (!visible || !layer) return null;
-    const buffer = layer.term.buffer.active;
-    const lines: string[] = [];
-    const wrapped: boolean[] = [];
-    for (let row = buffer.baseY; row < buffer.baseY + layer.term.rows; row += 1) {
-      const line = buffer.getLine(row);
-      lines.push(line?.translateToString(true) ?? "");
-      wrapped.push(line?.isWrapped ?? false);
-    }
+    const snapshot = layer.term.renderSnapshot();
+    const lines = snapshot?.rowData.map((row) => row.text) ?? [];
+    const wrapped = snapshot?.rowData.map((row) => row.isWrapContinuation) ?? [];
     return {
       cols: layer.term.cols,
       rows: layer.term.rows,
       lines,
       wrapped,
-      cursorX: buffer.cursorX,
-      cursorY: buffer.cursorY,
+      cursorX: snapshot?.cursorX ?? -1,
+      cursorY: snapshot?.cursorY ?? -1,
       ptySize: visible.socket?.ptySize ?? null,
     };
   });
 }
 
 /** Every way the visible screen differs from what gridtui paints for the
- * xterm's own size. Empty means the frame is exactly right. */
+ * terminal's own size. Empty means the frame is exactly right. */
 function gridProblems(screen: Screen | null): string[] {
   if (!screen) return ["no visible terminal layer"];
   const { cols, rows, lines } = screen;
   const size = `${cols}x${rows}`;
   const problems: string[] = [];
   if (!screen.ptySize || screen.ptySize.cols !== cols || screen.ptySize.rows !== rows) {
-    problems.push(`daemon reports PTY ${screen.ptySize ? `${screen.ptySize.cols}x${screen.ptySize.rows}` : "unknown"}, xterm is ${size}`);
+    problems.push(`daemon reports PTY ${screen.ptySize ? `${screen.ptySize.cols}x${screen.ptySize.rows}` : "unknown"}, terminal is ${size}`);
   }
   const statusRows = lines.flatMap((line, row) => (line.includes("STATUS ") ? [row] : []));
   if (statusRows.length !== 1) {
@@ -166,7 +155,7 @@ async function openViewer(browser: Browser, width: number): Promise<Page> {
 
 async function openSession(page: Page): Promise<void> {
   await page.locator(".sb-session").nth(0).click();
-  await expect(page.locator('.term-layer[style*="visible"] .xterm')).toBeVisible();
+  await expect(page.locator('.term-layer[style*="visible"] .ghostty-terminal')).toBeVisible();
   await expectTerminalRevealed(page, "s:");
 }
 
@@ -176,7 +165,7 @@ async function startGrid(page: Page): Promise<string> {
   const socketUrl = page.waitForEvent("websocket", (socket) => socket.url().includes("/ws/terminal/"));
   await openSession(page);
   const url = new URL((await socketUrl).url());
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(GRID_COMMAND);
   await page.keyboard.press("Enter");

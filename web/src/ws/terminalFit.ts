@@ -1,49 +1,21 @@
-import type { Terminal } from "@xterm/xterm";
-
-export const XTERM_DEFAULT_COLS = 80;
+export const DEFAULT_TERMINAL_COLS = 80;
 
 export interface TerminalGeometry {
   cols: number;
   rows: number;
 }
 
-interface FitInternals {
-  _core?: {
-    _renderService?: {
-      clear?: () => void;
-      dimensions?: { css?: { cell?: { width?: number; height?: number } } };
-    };
-  };
+export interface FittableTerminal {
+  readonly cols: number;
+  readonly rows: number;
+  readonly cellSize: TerminalGeometry | null;
+  fit(): boolean;
+  resize(cols: number, rows: number): void;
 }
 
-export function measureFit(term: Terminal): TerminalGeometry | null {
-  const element = term.element;
-  const host = element?.parentElement;
-  if (!element || !host) return null;
-  const core = (term as unknown as FitInternals)._core;
-  const cell = core?._renderService?.dimensions?.css?.cell;
-  const cellWidth = cell?.width ?? 0;
-  const cellHeight = cell?.height ?? 0;
-  if (cellWidth <= 0 || cellHeight <= 0) return null;
-
-  const hostStyle = window.getComputedStyle(host);
-  const elementStyle = window.getComputedStyle(element);
-  const paddingHorizontal =
-    parseFloat(elementStyle.getPropertyValue("padding-left")) +
-    parseFloat(elementStyle.getPropertyValue("padding-right"));
-  const paddingVertical =
-    parseFloat(elementStyle.getPropertyValue("padding-top")) +
-    parseFloat(elementStyle.getPropertyValue("padding-bottom"));
-  const width = parseInt(hostStyle.getPropertyValue("width"), 10) - paddingHorizontal;
-  const height = parseInt(hostStyle.getPropertyValue("height"), 10) - paddingVertical;
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return null;
-  }
-
-  return {
-    cols: Math.max(2, Math.floor(width / cellWidth)),
-    rows: Math.max(1, Math.floor(height / cellHeight)),
-  };
+export function measureFit(term: FittableTerminal): TerminalGeometry | null {
+  term.fit();
+  return term.cellSize;
 }
 
 export function isRealPaneFit(hostWidth: number, measuredCols: number | null): boolean {
@@ -57,14 +29,8 @@ export function isRealPaneFit(hostWidth: number, measuredCols: number | null): b
  * overlays the content at the right edge instead of narrowing every
  * terminal by a column strip.
  */
-export function fitFullWidth(term: Terminal): boolean {
-  const measured = measureFit(term);
-  if (!measured) return false;
-  if (measured.cols === term.cols && measured.rows === term.rows) return false;
-  const core = (term as unknown as FitInternals)._core;
-  core?._renderService?.clear?.();
-  term.resize(measured.cols, measured.rows);
-  return true;
+export function fitFullWidth(term: FittableTerminal): boolean {
+  return term.fit();
 }
 
 /**

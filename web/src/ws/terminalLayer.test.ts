@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, showLayer, waitForTerminalRender } from "./terminalLayer";
+import { TerminalSizePrompt } from "@puppet-master/client-core/ws/terminalSizePrompt";
+import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, showLayer, showLayerSizePrompt, waitForTerminalRender } from "./terminalLayer";
 
 describe("hidden layers", () => {
   it("keep parsing every frame into the emulator when sizes already match", () => {
@@ -239,5 +240,46 @@ describe("historyWasTruncated", () => {
   it("is true once the first snapshot reached the bound", () => {
     expect(historyWasTruncated(500, 500)).toBe(true);
     expect(historyWasTruncated(540, 500)).toBe(true);
+  });
+});
+
+describe("showLayerSizePrompt", () => {
+  it("preserves the initial attach claim while the first replay is still pending", () => {
+    const resize = vi.fn();
+    const prompt = new TerminalSizePrompt(() => ({ cols: 55, rows: 29 }), () => {}, resize);
+    prompt.requested({ cols: 55, rows: 29 });
+
+    showLayerSizePrompt(prompt, true, true, true, true);
+
+    expect(prompt.needsClaim()).toBe(false);
+    expect(resize).not.toHaveBeenCalled();
+  });
+
+  it("resets and claims a warm layer when switching back to it", () => {
+    const resize = vi.fn();
+    const prompt = new TerminalSizePrompt(() => ({ cols: 142, rows: 48 }), () => {}, resize);
+    prompt.requested({ cols: 142, rows: 48 });
+    prompt.observe({ cols: 142, rows: 48, local: true });
+    prompt.observe({ cols: 55, rows: 29, local: false });
+    expect(prompt.blocked()).toBe(true);
+
+    showLayerSizePrompt(prompt, true, false, true, true);
+
+    expect(prompt.blocked()).toBe(false);
+    expect(prompt.needsClaim()).toBe(false);
+    expect(resize).toHaveBeenCalledExactlyOnceWith({ cols: 142, rows: 48 });
+  });
+
+  it("unblocks a layer that lost ownership before its first replay painted", () => {
+    const resize = vi.fn();
+    const prompt = new TerminalSizePrompt(() => ({ cols: 125, rows: 39 }), () => {}, resize);
+    prompt.requested({ cols: 125, rows: 39 });
+    prompt.observe({ cols: 60, rows: 37, local: false });
+    expect(prompt.blocked()).toBe(true);
+
+    showLayerSizePrompt(prompt, true, true, true, true);
+
+    expect(prompt.blocked()).toBe(false);
+    expect(resize).not.toHaveBeenCalled();
   });
 });

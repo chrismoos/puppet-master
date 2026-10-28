@@ -25,12 +25,11 @@ interface Stream {
 }
 
 interface ProbeWindow extends Window {
-  __cacheProbe: { contexts: WebGL2RenderingContext[]; releases: number; streams: Record<string, Stream> };
+  __cacheProbe: { gpuContextRequests: number; wrappersCreated: number; wrappersRemoved: number; streams: Record<string, Stream> };
   __pmStage?: { visibleId: string; layers: Map<string, {
     el: HTMLElement;
     initialReplayPending: boolean;
     replayPainted: boolean;
-    webgl: { active: boolean };
     pendingFit: unknown;
     pendingWrites: number;
     swapPending: boolean;
@@ -39,28 +38,27 @@ interface ProbeWindow extends Window {
 
 async function installProbe(page: Page): Promise<void> {
   await page.addInitScript((tags) => {
-    const probe = { contexts: [] as WebGL2RenderingContext[], releases: 0, streams: {} as Record<string, Stream> };
+    const probe = { gpuContextRequests: 0, wrappersCreated: 0, wrappersRemoved: 0, streams: {} as Record<string, Stream> };
     (window as ProbeWindow).__cacheProbe = probe;
-    const extensions = new WeakSet<object>();
-    const nativeExtension = WebGL2RenderingContext.prototype.getExtension;
-    WebGL2RenderingContext.prototype.getExtension = function (name: string) {
-      const result = nativeExtension.call(this, name);
-      if (name === "WEBGL_lose_context" && result && !extensions.has(result)) {
-        extensions.add(result);
-        const extension = result as WEBGL_lose_context;
-        const nativeLoss = extension.loseContext;
-        extension.loseContext = () => { probe.releases += 1; nativeLoss.call(extension); };
-      }
-      return result;
-    };
     const nativeGetContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = new Proxy(nativeGetContext, {
       apply(target, receiver, args) {
-        const context = Reflect.apply(target, receiver, args);
-        if (args[0] === "webgl2" && context && !probe.contexts.includes(context)) probe.contexts.push(context);
-        return context;
+        if (args[0] === "webgl" || args[0] === "webgl2" || args[0] === "experimental-webgl") {
+          probe.gpuContextRequests += 1;
+        }
+        return Reflect.apply(target, receiver, args);
       },
     });
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof Element && node.matches(".ghostty-terminal")) probe.wrappersCreated += 1;
+        }
+        for (const node of record.removedNodes) {
+          if (node instanceof Element && node.matches(".ghostty-terminal")) probe.wrappersRemoved += 1;
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
     window.WebSocket = new Proxy(window.WebSocket, {
       construct(target, args) {
         const socket = Reflect.construct(target, args) as WebSocket;
@@ -99,7 +97,7 @@ async function settle(page: Page): Promise<void> {
     const sessionId = location.hash.match(/^#\/session\/(\d+)$/)?.[1];
     const layer = stage?.layers.get(stage.visibleId);
     return Boolean(sessionId && stage?.visibleId === `s:${sessionId}` && layer?.replayPainted
-      && layer.webgl.active && layer.el.style.visibility === "visible" && !layer.initialReplayPending
+      && layer.el.querySelector(".ghostty-terminal canvas") && layer.el.style.visibility === "visible" && !layer.initialReplayPending
       && !layer.pendingFit && !layer.pendingWrites && !layer.swapPending);
   })).toBe(true);
 }
@@ -151,21 +149,25 @@ test("a full cache releases only the session eviction victim after revisits", as
   for (const title of titles.slice(0, TERMINAL_CACHE_SIZE)) await visit(title);
   await visit(titles[0]);
   await visit(titles[TERMINAL_CACHE_SIZE - 1]);
-  expect(await page.evaluate(() => (window as ProbeWindow).__cacheProbe.contexts.filter((gl) => !gl.isContextLost()).length))
-    .toBe(TERMINAL_CACHE_SIZE);
-  const before = await page.evaluate(() => (window as ProbeWindow).__cacheProbe.releases);
+  const before = await page.evaluate(() => ({
+    wrappers: document.querySelectorAll(".ghostty-terminal").length,
+    removed: (window as ProbeWindow).__cacheProbe.wrappersRemoved,
+  }));
+  expect(before.wrappers).toBe(TERMINAL_CACHE_SIZE);
   await visit(titles[TERMINAL_CACHE_SIZE]);
   const observed = await page.evaluate(() => {
     const probe = (window as ProbeWindow).__cacheProbe;
-    const visible = document.querySelector('.term-layer[style*="visibility: visible"]');
-    return { releases: probe.releases, active: probe.contexts.filter((gl) => !gl.isContextLost()).length,
-      selectedGpu: probe.contexts.some((gl) => visible?.contains(gl.canvas as HTMLCanvasElement) && !gl.isContextLost()) };
+    return {
+      wrappers: document.querySelectorAll(".ghostty-terminal").length,
+      removed: probe.wrappersRemoved,
+      gpuContextRequests: probe.gpuContextRequests,
+    };
   });
-  expect(observed.releases - before).toBe(1);
-  expect(observed.active).toBe(TERMINAL_CACHE_SIZE);
-  expect(observed.selectedGpu).toBe(true);
+  expect(observed.removed - before.removed).toBe(1);
+  expect(observed.wrappers).toBe(TERMINAL_CACHE_SIZE);
+  expect(observed.gpuContextRequests).toBe(0);
   await visit(titles[0]);
-  expect(await page.evaluate(() => (window as ProbeWindow).__cacheProbe.releases)).toBe(observed.releases);
+  expect(await page.evaluate(() => (window as ProbeWindow).__cacheProbe.wrappersRemoved)).toBe(observed.removed);
 });
 
 

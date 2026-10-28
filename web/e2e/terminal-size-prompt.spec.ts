@@ -1,18 +1,18 @@
 import { expect, test } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 test("a second viewer's size offers Update or Dismiss without reclaiming on focus", async ({ page, context }, testInfo) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await logIn(page);
   await page.locator(".sb-session-title").filter({ hasText: /^browser-e2e$/ }).locator("xpath=ancestor::button[contains(@class, 'sb-session')][1]").click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expectTerminalRevealed(page, "s:");
   const firstBanner = page.locator(".terminal-size-prompt");
   await expect(firstBanner).toBeHidden();
 
   const other = await context.newPage();
   await other.setViewportSize({ width: 700, height: 600 });
   await other.goto(page.url());
-  await expect(other.locator(".xterm")).toBeVisible();
+  await expectTerminalRevealed(other, "s:");
   await expect(firstBanner).toBeVisible();
   await expect(other.locator(".terminal-size-prompt")).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath("size-mismatch-banner.png") });
@@ -46,7 +46,7 @@ test("workspace terminals offer the same explicit size choice", async ({ page, c
   await page.setViewportSize({ width: 1400, height: 900 });
   await logIn(page);
   await page.locator(".sb-session-title").filter({ hasText: /^browser-e2e$/ }).locator("xpath=ancestor::button[contains(@class, 'sb-session')][1]").click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expectTerminalRevealed(page, "s:");
   const sessionUrl = page.url();
   await page.getByTitle("new workspace").click();
   await page.getByRole("button", { name: "create workspace" }).click();
@@ -56,6 +56,7 @@ test("workspace terminals offer the same explicit size choice", async ({ page, c
   const other = await context.newPage();
   await other.setViewportSize({ width: 700, height: 600 });
   await other.goto(sessionUrl);
+  await expectTerminalRevealed(other, "s:");
   await expect(banner).toBeVisible();
   await banner.getByRole("button", { name: "Update", exact: true }).click();
   await expect(banner).toBeHidden();

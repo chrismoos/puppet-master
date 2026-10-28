@@ -16,20 +16,20 @@ async function openActiveBoardControl(page: Page) {
 test("active Board control toggles back with terminal state intact", async ({ page }) => {
   await logIn(page);
   await page.locator(".sb-session").first().click();
-  await expect(page.locator(".term-host .xterm-screen")).toBeVisible();
+  await expect(page.locator(".term-host .ghostty-canvas")).toBeVisible();
 
   await page.getByRole("button", { name: "+ Shell" }).click();
   const shellTab = page.locator(".terminal-tab").last();
   await expect(shellTab).toHaveClass(/active/);
   await expectTerminalRevealed(page, "t:");
   const visibleTerminal = page.locator('.term-layer[style*="visibility: visible"]');
-  await visibleTerminal.locator(".xterm-helper-textarea").pressSequentially("seq 1 300");
+  await visibleTerminal.locator(".ghostty-input").pressSequentially("seq 1 300");
   await page.keyboard.press("Enter");
   await expect.poll(() => page.evaluate(() => {
     const stage = (window as Window & { __pmStage?: { debugSnapshot(): Array<{ visible: boolean; baseY: number }> } }).__pmStage;
     return stage?.debugSnapshot().find((entry) => entry.visible)?.baseY ?? 0;
   })).toBeGreaterThan(200);
-  await visibleTerminal.locator("canvas.xterm-link-layer").hover();
+  await visibleTerminal.locator(".ghostty-canvas").hover();
   await page.mouse.wheel(0, -1200);
   await visibleTerminal.evaluate((node) => { node.setAttribute("data-board-viewport-probe", "retained"); });
 

@@ -1,4 +1,3 @@
-import type { Terminal } from "@xterm/xterm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureTerminalViewport,
@@ -12,7 +11,7 @@ function terminal(baseY: number, viewportY: number, type = "normal") {
     buffer: { active: { baseY, viewportY, type } },
     scrollToBottom: vi.fn(),
     scrollToLine: vi.fn(),
-  } as unknown as Terminal;
+  };
 }
 
 describe("terminal viewport bookmarks", () => {

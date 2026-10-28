@@ -17,14 +17,7 @@ interface StageWindow extends Window {
     debugSnapshot(): Array<{ key: string; visible: boolean }>;
     layers: Map<string, {
       term: {
-        rows: number;
-        buffer: {
-          active: {
-            baseY: number;
-            length: number;
-            getLine(row: number): { translateToString(trimRight?: boolean): string } | undefined;
-          };
-        };
+        renderSnapshot(): { rowData: Array<{ text: string }> } | null;
       };
     }>;
   };
@@ -36,12 +29,7 @@ async function visibleRows(page: Page, key: string): Promise<string[]> {
     const stage = (window as StageWindow).__pmStage;
     const layer = stage?.layers.get(layerKey);
     if (!layer) return [];
-    const buffer = layer.term.buffer.active;
-    const rows: string[] = [];
-    for (let row = buffer.baseY; row < buffer.baseY + layer.term.rows; row += 1) {
-      rows.push(buffer.getLine(row)?.translateToString(true) ?? "");
-    }
-    return rows;
+    return layer.term.renderSnapshot()?.rowData.map((row) => row.text) ?? [];
   }, key);
 }
 
@@ -68,10 +56,10 @@ test("switching away from a streaming agent and back leaves the screen consisten
   await expect(sessions.nth(1)).toBeVisible();
 
   await sessions.nth(0).click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await expectTerminalRevealed(page, "s:");
 
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(`claudestream ${HISTORY_LINES} ${FRAMES} ${FRAME_DELAY_MS} ${LINE_LEN}`);
   await page.keyboard.press("Enter");

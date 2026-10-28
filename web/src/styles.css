@@ -1304,8 +1304,6 @@ textarea {
   min-height: 0;
   min-width: 0;
   position: relative;
-  /* Contain xterm's internal z-indexes so they stay below the ended
-     overlay, whose buttons would otherwise be unclickable. */
   isolation: isolate;
 }
 
@@ -1589,17 +1587,54 @@ textarea {
   transform: translateX(-200%);
 }
 
-.terminal-scrollbar-shell .xterm .xterm-scrollable-element > .scrollbar.vertical.visible {
-  opacity: 0;
-  /* Faded scrollbar must not block clicks or selection on the rightmost
-     cells now that the terminal extends under it at full width. */
-  pointer-events: none;
-  transition: opacity 160ms linear;
+.ghostty-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.terminal-scrollbar-shell.is-terminal-scrollbar-active .xterm .xterm-scrollable-element > .scrollbar.vertical.visible {
+.ghostty-terminal {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.ghostty-input {
+  position: absolute;
+  z-index: -1;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  resize: none;
+  pointer-events: none;
+}
+
+.ghostty-scrollbar {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  right: 1px;
+  bottom: 4px;
+  width: 10px;
+  cursor: default;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 160ms linear;
+  pointer-events: none;
+}
+
+.terminal-scrollbar-shell.is-terminal-scrollbar-active .ghostty-scrollbar {
   opacity: 1;
   pointer-events: auto;
+}
+
+.ghostty-scrollbar-thumb {
+  position: absolute;
+  inset: 0 1px auto;
+  border-radius: 3px;
+  background: var(--ghostty-scrollbar-color);
+  opacity: 0.65;
 }
 
 .term-overlay {
@@ -4092,7 +4127,7 @@ body.resizing-col {
   padding: 2px;
 }
 
-.workspace-terminal-host .xterm {
+.workspace-terminal-host .ghostty-canvas {
   height: 100%;
 }
 
@@ -6083,9 +6118,7 @@ body.resizing-col {
   font-size: 11px;
 }
 
-/* The review covers the terminal rather than replacing it. Taking the
-   terminal out of the layout would make xterm re-measure at zero and
-   refit on the way back, which costs a spurious resize of the PTY. */
+/* The review covers the terminal rather than replacing it, preserving its measured size. */
 .term-review {
   position: absolute;
   inset: 0;

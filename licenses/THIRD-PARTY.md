@@ -558,7 +558,7 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | zlib-rs | 0.6.7 | Zlib |
 | zmij | 1.0.23 | MIT |
 
-## npm packages reachable from the shipped web bundle (9)
+## npm packages reachable from the shipped web bundle (7)
 
 Build-time tooling is excluded: it is not distributed, so its license places no
 obligation on the binaries.
@@ -568,8 +568,6 @@ obligation on the binaries.
 | @bufbuild/protobuf | 2.14.1 | (Apache-2.0 AND BSD-3-Clause) |
 | @fontsource-variable/inter | 5.3.0 | OFL-1.1 |
 | @fontsource-variable/jetbrains-mono | 5.3.0 | OFL-1.1 |
-| @xterm/addon-webgl | 0.19.0 | MIT |
-| @xterm/xterm | 6.0.0 | MIT |
 | highlight.js | 11.12.0 | BSD-3-Clause |
 | react | 19.2.8 | MIT |
 | react-dom | 19.2.8 | MIT |

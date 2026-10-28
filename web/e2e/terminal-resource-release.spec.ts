@@ -75,7 +75,7 @@ async function openSession(page: Page, title: string): Promise<string> {
 }
 
 async function exitVisibleAgent(page: Page, code: number): Promise<void> {
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(`exit ${code}`);
   await page.keyboard.press("Enter");
@@ -143,7 +143,7 @@ test("ended, failed, and removed terminals release cached layers and sockets", a
   const shellId = terminalIdOf(shellSocket);
   if (!shellId) throw new Error(`missing terminal id in ${shellSocket}`);
   await expectTerminalOnline(page, `t:${shellId}`);
-  const shellInput = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const shellInput = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await shellInput.focus();
   await page.keyboard.type("exit");
   await page.keyboard.press("Enter");

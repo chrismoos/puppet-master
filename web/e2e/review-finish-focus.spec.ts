@@ -42,7 +42,7 @@ test("finishing a review leaves focus mode", async ({ page, isolatedDaemon }) =>
 
   await logIn(page);
   await page.locator(".sb-session").first().click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
 
   await page.getByRole("button", { name: "enter focus mode" }).click();
   await expect(page.locator(".shell")).toHaveClass(/is-focus-mode/);
@@ -63,7 +63,7 @@ test("a review tab opens the review in its own window and leaves the pane alone"
 
   await logIn(page);
   await page.locator(".sb-session").filter({ has: page.locator(".sb-session-title", { hasText: /^browser-e2e$/ }) }).click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await expect(page.locator(".shell")).not.toHaveClass(/is-focus-mode/);
 
   // A real link, which is what makes middle-click, a modifier click and
@@ -80,7 +80,7 @@ test("a review tab opens the review in its own window and leaves the pane alone"
   // The window that held the link never moved, which is the point of
   // opening the review somewhere else.
   await expect(page.locator(".shell")).not.toHaveClass(/is-focus-mode/);
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await expect(page).toHaveURL(/#\/session\/\d+$/);
 
   // Leaving focus mode in the review's own window puts the reader on the
@@ -88,7 +88,7 @@ test("a review tab opens the review in its own window and leaves the pane alone"
   await expect(opened.getByRole("button", { name: "exit focus mode" })).toBeVisible();
   await opened.getByRole("button", { name: "exit focus mode" }).click();
   await expect(opened.locator(".shell")).not.toHaveClass(/is-focus-mode/);
-  await expect(opened.locator(".xterm")).toBeVisible();
+  await expect(opened.locator(".ghostty-terminal")).toBeVisible();
   await expect(opened).toHaveURL(/#\/session\/\d+$/);
   await opened.close();
 });
@@ -110,12 +110,12 @@ test("finishing a review in its own window closes it", async ({ page, context, i
   });
   await context.addInitScript(() => {
     new MutationObserver(() => {
-      if (document.querySelector(".xterm")) console.log("review-terminal-mounted");
+      if (document.querySelector(".ghostty-terminal")) console.log("review-terminal-mounted");
     }).observe(document, { childList: true, subtree: true });
   });
   await logIn(page);
   await page.locator(".sb-session").filter({ has: page.locator(".sb-session-title", { hasText: /^browser-e2e$/ }) }).click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
 
   const [opened] = await Promise.all([
     context.waitForEvent("page"),
@@ -123,7 +123,7 @@ test("finishing a review in its own window closes it", async ({ page, context, i
   ]);
   await opened.setViewportSize({ width: 900, height: 600 });
   await expect(opened.locator(".review-rail-file").first()).toBeVisible();
-  await expect(opened.locator(".xterm, .sidebar, .topbar, .terminal-tabs")).toHaveCount(0);
+  await expect(opened.locator(".ghostty-terminal, .sidebar, .topbar, .terminal-tabs")).toHaveCount(0);
   await expect(page.locator(".terminal-size-prompt")).toBeHidden();
   expect(terminalConnections).toBe(0);
   const bounds = await opened.locator(".review").boundingBox();
@@ -143,7 +143,7 @@ test("finishing a review in its own window closes it", async ({ page, context, i
   await expect(page.locator(".terminal-size-prompt")).toBeHidden();
 
   // The window that opened the review is left where it was.
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
   await expect(page).toHaveURL(/#\/session\/\d+$/);
 });
 
@@ -154,7 +154,7 @@ test("a review in its own window takes comments", async ({ page, context, isolat
 
   await logIn(page);
   await page.locator(".sb-session").filter({ has: page.locator(".sb-session-title", { hasText: /^browser-e2e$/ }) }).click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
 
   const [opened] = await Promise.all([
     context.waitForEvent("page"),
@@ -181,7 +181,7 @@ test("pressing Escape in a review window exits focus mode and returns to the age
 
   await logIn(page);
   await page.locator(".sb-session").filter({ has: page.locator(".sb-session-title", { hasText: /^browser-e2e$/ }) }).click();
-  await expect(page.locator(".xterm")).toBeVisible();
+  await expect(page.locator(".ghostty-terminal")).toBeVisible();
 
   const [opened] = await Promise.all([
     context.waitForEvent("page"),
@@ -191,7 +191,7 @@ test("pressing Escape in a review window exits focus mode and returns to the age
 
   await opened.keyboard.press("Escape");
   await expect(opened.locator(".shell")).not.toHaveClass(/is-focus-mode/);
-  await expect(opened.locator(".xterm")).toBeVisible();
+  await expect(opened.locator(".ghostty-terminal")).toBeVisible();
   await opened.close();
 });
 

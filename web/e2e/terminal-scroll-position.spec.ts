@@ -13,18 +13,18 @@ interface StageWindow {
     debugSnapshot(): Array<{ key: string; visible: boolean; baseY: number; viewportY: number; backgroundBytes: number }>;
     layers: Map<string, {
       term: {
-        buffer: { active: {
-          baseY: number;
-          viewportY: number;
-          getLine(line: number): { translateToString(trimRight?: boolean): string } | undefined;
-        } };
+        renderSnapshot(): { rowData: Array<{ text: string }> } | null;
         scrollToLine(line: number): void;
       };
     }>;
   };
 }
 
-type MetricWindow = Window & { __terminalScrollBytes: number };
+type MetricWindow = Window & {
+  __terminalScrollBytes: number;
+  __terminalScrollTail: string;
+  __terminalScrollIndex: number;
+};
 
 const TERMINAL_READY_TIMEOUT_MS = 20_000;
 
@@ -34,10 +34,9 @@ async function state(page: Page): Promise<ViewportState | null> {
     const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
     const layer = debug ? stage?.layers.get(debug.key) : undefined;
     if (!debug || !layer) return null;
-    const buffer = layer.term.buffer.active;
     let marker = "";
-    for (let row = buffer.viewportY; row < Math.min(buffer.baseY + 1, buffer.viewportY + 8); row += 1) {
-      const text = buffer.getLine(row)?.translateToString(true) ?? "";
+    for (const row of layer.term.renderSnapshot()?.rowData.slice(0, 8) ?? []) {
+      const text = row.text;
       if (text.includes("CODEX-SYNC-")) {
         marker = text.match(/CODEX-SYNC-\d+/)?.[0] ?? "";
         break;
@@ -61,7 +60,7 @@ async function readyState(page: Page): Promise<ViewportState> {
 }
 
 async function typeCommand(page: Page, command: string): Promise<void> {
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");
@@ -71,7 +70,7 @@ async function typeCommand(page: Page, command: string): Promise<void> {
  * stream still arriving after it switches away, and waiting here lets a short
  * burst finish while the layer is still visible. */
 async function startSyncOutput(page: Page, command: string): Promise<number> {
-  const bytes = await page.evaluate(() => (window as MetricWindow).__terminalScrollBytes);
+  const bytes = await page.evaluate(() => (window as unknown as MetricWindow).__terminalScrollBytes);
   await readyState(page);
   await typeCommand(page, command);
   return bytes;
@@ -107,9 +106,12 @@ async function boardDetourAndReturn(page: Page, sessionId: string): Promise<void
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${sessionId}$`));
 }
 
-test("codex-style output preserves bottom following and scrolled markers across returns", async ({ page }) => {
+async function installTerminalStreamProbe(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    (window as MetricWindow).__terminalScrollBytes = 0;
+    const probe = window as unknown as MetricWindow;
+    probe.__terminalScrollBytes = 0;
+    probe.__terminalScrollTail = "";
+    probe.__terminalScrollIndex = -1;
     const NativeWebSocket = window.WebSocket;
     window.WebSocket = new Proxy(NativeWebSocket, {
       construct(target, args) {
@@ -118,12 +120,22 @@ test("codex-style output preserves bottom following and scrolled markers across 
         socket.addEventListener("message", (event) => {
           if (!(event.data instanceof ArrayBuffer) || event.data.byteLength < 10) return;
           if (new DataView(event.data).getUint8(0) !== 1) return;
-          (window as MetricWindow).__terminalScrollBytes += event.data.byteLength - 10;
+          const bytes = new Uint8Array(event.data, 10);
+          probe.__terminalScrollBytes += bytes.byteLength;
+          const text = probe.__terminalScrollTail + new TextDecoder().decode(bytes);
+          for (const match of text.matchAll(/CODEX-SYNC-(\d+)/g)) {
+            probe.__terminalScrollIndex = Math.max(probe.__terminalScrollIndex, Number(match[1]));
+          }
+          probe.__terminalScrollTail = text.slice(-32);
         });
         return socket;
       },
     }) as typeof WebSocket;
   });
+}
+
+test("codex-style output preserves bottom following and scrolled markers across returns", async ({ page }) => {
+  await installTerminalStreamProbe(page);
   await logIn(page, { minimumSessions: 2 });
   const sessions = page.locator(".sb-session");
   await sessions.nth(0).click();
@@ -134,7 +146,7 @@ test("codex-style output preserves bottom following and scrolled markers across 
   const belowCapStart = await startSyncOutput(page, "syncout 900 60");
   await sessions.nth(1).click();
   await waitForHiddenLayer(page, `s:${sessionId}`);
-  await expect.poll(() => page.evaluate(() => (window as MetricWindow).__terminalScrollBytes))
+  await expect.poll(() => page.evaluate(() => (window as unknown as MetricWindow).__terminalScrollBytes))
     .toBeGreaterThan(belowCapStart + 15_000);
   await expect.poll(async () => {
     const snapshots = await page.evaluate(() => (window as unknown as StageWindow).__pmStage?.debugSnapshot() ?? []);
@@ -143,14 +155,14 @@ test("codex-style output preserves bottom following and scrolled markers across 
   await sessions.nth(0).click();
   await expectAtBottom(page);
 
-  // Above the 5,000-line xterm cap: trimming must not walk a follower to row zero.
+  // Keep output arriving while the active viewport is hidden.
   const aboveCapStart = await startSyncOutput(page, "syncout 6200 5");
   await sessions.nth(1).click();
   await waitForHiddenLayer(page, `s:${sessionId}`);
-  await expect.poll(() => page.evaluate(() => (window as MetricWindow).__terminalScrollBytes))
+  await expect.poll(() => page.evaluate(() => (window as unknown as MetricWindow).__terminalScrollBytes))
     .toBeGreaterThan(aboveCapStart + 120_000);
   await sessions.nth(0).click();
-  await expect.poll(() => state(page).then((viewport) => viewport?.baseY)).toBe(5_000);
+  await expect.poll(() => state(page).then((viewport) => viewport?.baseY)).toBeGreaterThan(5_000);
   await expectAtBottom(page);
 
   // The Board route keeps the layer live but CSS-hidden while more sync frames parse.
@@ -160,11 +172,11 @@ test("codex-style output preserves bottom following and scrolled markers across 
   await expect.poll(async () => {
     const snapshots = await page.evaluate(() => (window as unknown as StageWindow).__pmStage?.debugSnapshot() ?? []);
     return snapshots.find((candidate) => candidate.key === `s:${sessionId}`)?.baseY ?? 0;
-  }).toBe(5_000);
+  }).toBeGreaterThan(5_000);
   await page.locator(".sb-session").nth(0).click();
   await expectAtBottom(page);
 
-  // A fresh xterm receives the server snapshot; the zero-distance bookmark
+  // A fresh terminal receives the server snapshot; the zero-distance bookmark
   // must explicitly clear any spurious user-scroll state after parsing it.
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${sessionId}$`));
@@ -198,39 +210,37 @@ async function topRowText(page: Page): Promise<string> {
   return page.evaluate(() => {
     const stage = (window as unknown as StageWindow).__pmStage;
     const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
-    const buffer = debug ? stage?.layers.get(debug.key)?.term.buffer.active : undefined;
-    return buffer?.getLine(buffer.viewportY)?.translateToString(true) ?? "";
+    return debug ? stage?.layers.get(debug.key)?.term.renderSnapshot()?.rowData[0]?.text ?? "" : "";
   });
 }
 
 /** The highest CODEX-SYNC index printed so far, from the buffer tail. */
 async function lastSyncIndex(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const stage = (window as unknown as StageWindow).__pmStage;
-    const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
-    const buffer = debug ? stage?.layers.get(debug.key)?.term.buffer.active : undefined;
-    if (!buffer) return -1;
-    for (let row = buffer.baseY + 40; row >= Math.max(0, buffer.baseY - 120); row -= 1) {
-      const index = buffer.getLine(row)?.translateToString(true).match(/CODEX-SYNC-(\d+)/)?.[1];
-      if (index) return Number(index);
-    }
-    return -1;
-  });
+  return page.evaluate(() => (window as unknown as MetricWindow).__terminalScrollIndex);
 }
 
 test("live output leaves the text a scrolled-up reader is on in place", async ({ page }) => {
+  await installTerminalStreamProbe(page);
   await logIn(page, { minimumSessions: 1 });
   await page.locator(".sb-session").nth(0).click();
   await expectTerminalRevealed(page, "s:");
 
-  // Past the 5,000-line cap, every new line also trims the oldest one.
-  await typeCommand(page, "syncout 5200 0");
+  // A long live stream must keep the terminal's viewport position coherent.
+  const preloadLines = 5200;
+  await typeCommand(page, `syncout ${preloadLines} 0`);
   await expect.poll(() => state(page).then((viewport) => viewport?.baseY), {
     timeout: TERMINAL_READY_TIMEOUT_MS,
-  }).toBe(5_000);
+  }).toBeGreaterThan(5_000);
+  await expect.poll(() => lastSyncIndex(page), { timeout: TERMINAL_READY_TIMEOUT_MS }).toBe(preloadLines - 1);
   await expectAtBottom(page);
 
+  await page.evaluate(() => {
+    const probe = window as unknown as MetricWindow;
+    probe.__terminalScrollIndex = -1;
+    probe.__terminalScrollTail = "";
+  });
   await typeCommand(page, "syncout 2000 100");
+  await expect.poll(() => lastSyncIndex(page), { timeout: TERMINAL_READY_TIMEOUT_MS }).toBeGreaterThanOrEqual(0);
   await expect.poll(() => lastSyncIndex(page), { timeout: TERMINAL_READY_TIMEOUT_MS })
     .toBeLessThan(LINES_WHILE_READING);
 

@@ -58,7 +58,7 @@ test("actual session rows show, resize, and internally route linked items", asyn
   // Opening a session moves focus into its terminal from a later effect, which
   // would otherwise take the keyboard back from the link mid-press.
   await expect.poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
-    .toContain("xterm-helper-textarea");
+    .toContain("ghostty-input");
   await link.press("Space");
   await expect(page).toHaveURL(new RegExp(`#\\/bucket\\/1\\/item\\/${itemId}$`));
 

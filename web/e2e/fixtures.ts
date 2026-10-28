@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test as base } from "@playwright/test";
 import { startDaemon, stopDaemon } from "./daemonHarness";
 
+
 const DATABASE_BUSY_TIMEOUT_MS = 5000;
 
 // The daemon writes to this database too, so a fixture waits out its lock.
@@ -481,4 +482,4 @@ export const test = base.extend<E2eFixtures>({
 });
 
 export { expect } from "@playwright/test";
-export type { BrowserContext, Locator, Page } from "@playwright/test";
+export type { Browser, BrowserContext, Locator, Page, TestInfo } from "@playwright/test";

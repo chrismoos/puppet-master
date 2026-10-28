@@ -48,7 +48,7 @@ and updates your shell's `PATH` if needed.
 
 Keep the daemon running and open **http://127.0.0.1:7676/**. Create your login,
 add a bucket and a project directory, then start a session with your chosen
-agent and a task. Browser terminals require WebGL2.
+agent and a task. Browser terminals use Canvas 2D and WebAssembly.
 
 By default, the local worker runs on the same machine as the daemon, so you
 can start running agents without setting up another worker.

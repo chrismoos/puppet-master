@@ -46,7 +46,7 @@ function bufferLength(page: Page, key: string): Promise<number> {
 test("a hidden busy terminal draws nothing and is drawn fresh by the frame that shows it", async ({ page }) => {
   await logIn(page);
   const streaming = await selectSession(page, 0);
-  await page.locator('.term-layer[style*="visible"] .xterm-helper-textarea').focus();
+  await page.locator('.term-layer[style*="visible"] .ghostty-input').focus();
   await page.keyboard.type(`claudestream ${HISTORY_LINES} ${FRAMES} ${FRAME_DELAY_MS} ${LINE_LEN}`);
   await page.keyboard.press("Enter");
   await expect.poll(() => bufferLength(page, streaming)).toBeGreaterThan(HISTORY_LINES);
@@ -61,7 +61,7 @@ test("a hidden busy terminal draws nothing and is drawn fresh by the frame that 
     new MutationObserver(() => {
       if (shown || layer.el.style.visibility !== "visible") return;
       shown = true;
-      // Runs in the first frame painted with the layer shown, after xterm's
+      // Runs in the first frame painted with the layer shown, after the terminal's
       // own frame callback for anything it was asked to draw before then.
       requestAnimationFrame(() => probe.rendersByFirstShownFrame = probe.renders);
     }).observe(layer.el, { attributes: true, attributeFilter: ["style"] });

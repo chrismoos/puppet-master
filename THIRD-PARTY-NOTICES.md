@@ -31,11 +31,14 @@ upstream projects' own published sources. `node-forge` is offered under
 - SQLite is compiled from the C sources bundled in `libsqlite3-sys`, through
   `rusqlite`'s `bundled` feature. SQLite itself is public domain and its
   authors have disclaimed copyright.
-- The iOS app bundles React Native, Expo, and the xterm.js terminal it renders
-  in a WebView.
-- `@xterm/addon-webgl` is patched in this repository. The patch is
-  `patches/@xterm__addon-webgl@0.19.0.patch` and the addon stays under its own
-  MIT license.
+- The web project keeps `@xterm/xterm` as a development dependency for terminal
+  probes and layout comparisons; the web bundle uses libghostty-vt instead.
+- The iOS app bundles React Native, Expo, `@xterm/xterm`, and
+  `@xterm/addon-webgl` in its WebView terminal. The addon patch is
+  `patches/@xterm__addon-webgl@0.19.0.patch`; its MIT license still applies.
+- The web UI ships `web/public/THIRD-PARTY-NOTICES.txt` with full MIT notices
+  for libghostty-vt, the adapted T3 Code Canvas 2D adapter, and Symbols Nerd
+  Font Mono.
 
 ## Works carrying their own attribution
 
@@ -47,6 +50,16 @@ files in that package.
 **Inter**, the interface typeface of the Graphite and Studio themes, is bundled
 into the web UI through `@fontsource-variable/inter` under the same license and
 on the same terms.
+
+**Ghostty / libghostty-vt** provides the web terminal parser and input encoders
+under the MIT License. Its pinned revision is recorded in
+`web/src/ws/ghostty/vendor/VERSION`, with the license in that directory.
+
+**Symbols Nerd Font Mono** provides terminal prompt symbols under the MIT
+License. Its license text is kept beside the bundled font.
+
+The Canvas 2D browser adapter is adapted from T3 Code under the MIT License.
+Its license text is kept beside the adapter.
 
 The built-in terminal palettes are taken from each project's own published
 terminal definition. Each palette carries its author and license in its own

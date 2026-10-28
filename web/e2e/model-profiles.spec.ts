@@ -92,6 +92,7 @@ test("a model profile is configured, attached, and previewed before a spawn", as
   await expect(modal.getByTestId("effective-model-profile"))
     .toHaveText("Gateway has no endpoint Codex can use — this spawn will be rejected");
   await page.keyboard.press("Escape");
+  await expect(page.locator(".modal")).toBeHidden();
 
   await page.goto(`${process.env.PM_E2E_BASE_URL!}#/settings/models`);
   await page.locator(".model-profile").first().locator(".catalog-name").click();
@@ -112,6 +113,7 @@ test("a model profile is configured, attached, and previewed before a spawn", as
   await expect(spawnModal.getByTestId("effective-model-profile"))
     .toHaveText("Gateway has no endpoint Gemini can use — this spawn will be rejected");
   await page.keyboard.press("Escape");
+  await expect(page.locator(".modal")).toBeHidden();
 
   await page.goto(`${process.env.PM_E2E_BASE_URL!}#/settings/models`);
   await page.locator(".model-profile").first().locator(".catalog-name").click();
@@ -127,6 +129,7 @@ test("a model profile is configured, attached, and previewed before a spawn", as
   await expect(page.locator(".modal").getByTestId("effective-model-profile"))
     .toHaveText("Effective: Gateway · gateway/gem · bucket default");
   await page.keyboard.press("Escape");
+  await expect(page.locator(".modal")).toBeHidden();
 
   // A referenced profile cannot be deleted, and the error names the referent.
   await page.goto(`${process.env.PM_E2E_BASE_URL!}#/settings/models`);

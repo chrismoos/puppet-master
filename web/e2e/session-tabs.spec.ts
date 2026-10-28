@@ -20,7 +20,7 @@ test("sidebar selections route sessions without creating top-level tabs", async 
   const secondRoute = page.url();
   expect(secondRoute).not.toBe(firstRoute);
   await expect(tabs).toHaveCount(0);
-  await expect(page.locator('.term-layer[style*="visible"] .xterm-helper-textarea')).toBeFocused();
+  await expect(page.locator('.term-layer[style*="visible"] .ghostty-input')).toBeFocused();
 
   await page.goBack();
   await expect(page).toHaveURL(firstRoute);

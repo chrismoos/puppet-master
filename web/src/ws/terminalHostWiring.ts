@@ -1,4 +1,3 @@
-import type { IDisposable } from "@xterm/xterm";
 import { normalizeTerminalSelection } from "@puppet-master/client-core/ws/clipboard";
 import { decodeOsc52 } from "@puppet-master/client-core/ws/osc52";
 import type { TerminalClipboard } from "./terminalClipboard";
@@ -9,19 +8,19 @@ const CLIPBOARD_OSC = 52;
 
 export interface OscTerminal {
   parser: {
-    registerOscHandler(id: number, callback: (data: string) => boolean): IDisposable;
+    registerOscHandler(id: number, callback: (data: string) => boolean): Disposable;
   };
+}
+
+export interface Disposable {
+  dispose(): void;
 }
 
 export interface CopyTerminal extends OscTerminal {
   getSelection(): string;
   hasSelection(): boolean;
+  onSelectionComplete(listener: () => void): Disposable;
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void;
-}
-
-export interface CopyHost {
-  addEventListener(type: "mouseup", listener: () => void): void;
-  removeEventListener(type: "mouseup", listener: () => void): void;
 }
 
 export interface CopyShortcutEvent {
@@ -36,7 +35,7 @@ export interface CopyShortcutEvent {
 export function registerForegroundCommandHandler(
   term: OscTerminal,
   onCommand: (command: string) => void,
-): IDisposable {
+): Disposable {
   return term.parser.registerOscHandler(FOREGROUND_COMMAND_OSC, (data) => {
     if (!data.startsWith(FOREGROUND_COMMAND_OSC_PREFIX)) return false;
     onCommand(data.slice(FOREGROUND_COMMAND_OSC_PREFIX.length));
@@ -51,19 +50,18 @@ export function isCopyShortcut(event: CopyShortcutEvent): boolean {
 }
 
 /**
- * Every xterm host gets the same three copy paths from here: select-to-copy
- * (xterm keeps its selection outside the DOM, so a native browser copy never
- * sees it), the explicit copy shortcut, and the application's own OSC 52
+ * Every terminal host gets the same three copy paths from here: completed selection,
+ * the explicit copy shortcut, and the application's own OSC 52
  * copies, which is how Claude Code and Codex copy over a mouse-tracking TUI.
  * OSC 52 read requests are refused by decodeOsc52. Only the two selection
  * paths are normalized: an OSC 52 copy names its own text exactly.
  */
-export function wireTerminalClipboard(term: CopyTerminal, host: CopyHost, clipboard: TerminalClipboard): () => void {
+export function wireTerminalClipboard(term: CopyTerminal, clipboard: TerminalClipboard): () => void {
   const copySelection = () => {
     const selection = normalizeTerminalSelection(term.getSelection());
     if (selection) void clipboard.copySelection(selection);
   };
-  host.addEventListener("mouseup", copySelection);
+  const selection = term.onSelectionComplete(copySelection);
   const osc = term.parser.registerOscHandler(CLIPBOARD_OSC, (data) => {
     const text = decodeOsc52(data);
     if (text === null) return false;
@@ -76,7 +74,7 @@ export function wireTerminalClipboard(term: CopyTerminal, host: CopyHost, clipbo
     return false;
   });
   return () => {
-    host.removeEventListener("mouseup", copySelection);
+    selection.dispose();
     osc.dispose();
   };
 }

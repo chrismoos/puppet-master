@@ -85,11 +85,11 @@ test("switching back to a warm session displays without a resize kick", async ({
   await expect(sessions.nth(1)).toBeVisible();
 
   await sessions.nth(0).click();
-  await expect(page.locator('.term-layer[style*="visible"] .xterm')).toBeVisible();
+  await expect(page.locator('.term-layer[style*="visible"] .ghostty-terminal')).toBeVisible();
 
   // Paced output keeps arriving after the reader looks away, which is what
   // leaves a hidden layer holding frames its program never laid out for.
-  const textarea = page.locator('.term-layer[style*="visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(`pacedout ${HIDDEN_OUTPUT_BYTES} ${HIDDEN_OUTPUT_CHUNK}`);
   await page.keyboard.press("Enter");
@@ -122,7 +122,7 @@ test("switching back to a warm session displays without a resize kick", async ({
       `expected no row jiggle cycle on switch-back, got ${JSON.stringify(observed)}`,
     ).toBe(false);
   }
-  await expect(page.locator('.term-layer[style*="visible"] .xterm')).toBeVisible();
+  await expect(page.locator('.term-layer[style*="visible"] .ghostty-terminal')).toBeVisible();
 });
 
 test("cold session attach negotiates size on connect without redundant resize frames", async ({ page }) => {
@@ -131,7 +131,7 @@ test("cold session attach negotiates size on connect without redundant resize fr
   await expect(sessions.nth(0)).toBeVisible();
 
   await sessions.nth(0).click();
-  await expect(page.locator('.term-layer[style*="visible"] .xterm')).toBeVisible();
+  await expect(page.locator('.term-layer[style*="visible"] .ghostty-terminal')).toBeVisible();
 
   // e2e-real-time-wait: allow post-attach viewer debounce to settle
   await page.waitForTimeout(200);

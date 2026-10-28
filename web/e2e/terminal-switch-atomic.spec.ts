@@ -19,7 +19,10 @@ interface StageWindow extends Window {
   __switchSampling: boolean;
   __switchRenderListeners: Array<{ dispose(): void }>;
   __pmStage: {
-    theme: { background: string; foreground: string };
+    theme: {
+      background: { r: number; g: number; b: number };
+      foreground: { r: number; g: number; b: number };
+    };
     layers: Map<string, {
       el: HTMLElement;
       replayPainted: boolean;
@@ -38,7 +41,7 @@ interface StageWindow extends Window {
 }
 
 async function fillHistory(page: Page, frames = 1, frameMs = 0): Promise<void> {
-  const textarea = page.locator('.term-layer[style*="visibility: visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visibility: visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type(`claudestream ${HISTORY_LINES} ${frames} ${frameMs} ${LINE_LEN}`);
   await page.keyboard.press("Enter");
@@ -315,8 +318,8 @@ test("a session still reaching for its terminal shows a loading curtain in the t
   const terminalColors = await page.evaluate(() => {
     const theme = (window as unknown as StageWindow).__pmStage.theme;
     const probe = document.createElement("span");
-    probe.style.backgroundColor = theme.background;
-    probe.style.color = theme.foreground;
+    probe.style.backgroundColor = `rgb(${theme.background.r}, ${theme.background.g}, ${theme.background.b})`;
+    probe.style.color = `rgb(${theme.foreground.r}, ${theme.foreground.g}, ${theme.foreground.b})`;
     document.body.appendChild(probe);
     const style = getComputedStyle(probe);
     const colors = { background: style.backgroundColor, color: style.color };
@@ -362,10 +365,6 @@ interface DebugStageWindow extends Window {
     }>;
     layers: Map<string, {
       el: HTMLElement;
-      term: {
-        rows: number;
-        buffer: { active: { length: number; viewportY: number; getLine(index: number): { translateToString(trim: boolean): string } | undefined } };
-      };
     }>;
   };
 }
@@ -377,12 +376,10 @@ function shownHistory(page: Page) {
     if (!stage) return null;
     const shown = stage.debugSnapshot().find((entry) => entry.visible);
     if (!shown) return null;
-    const layer = [...stage.layers.values()].find((entry) => entry.el.style.visibility === "visible")!;
-    const buffer = layer.term.buffer.active;
     return {
-      lines: buffer.length,
-      rows: layer.term.rows,
-      viewportY: buffer.viewportY,
+      lines: shown.bufferLines,
+      rows: shown.rows,
+      viewportY: shown.viewportY,
       replays: shown.socket?.replayCount ?? 0,
     };
   });
@@ -417,7 +414,7 @@ test("a session that has ended shows no other session's terminal behind its card
   const liveRow = sessionRowByTitle(page, "browser-e2e-two");
   await endedRow.click();
   await expect.poll(() => page.locator('.term-layer[style*="visibility: visible"]').count()).toBe(1);
-  const textarea = page.locator('.term-layer[style*="visibility: visible"] .xterm-helper-textarea');
+  const textarea = page.locator('.term-layer[style*="visibility: visible"] .ghostty-input');
   await textarea.focus();
   await page.keyboard.type("exit 7");
   await page.keyboard.press("Enter");
