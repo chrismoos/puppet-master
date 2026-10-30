@@ -453,7 +453,7 @@ impl TerminalModel {
         if self.term.mode().contains(TermMode::INSERT) {
             out.push_str("\x1b[4h");
         }
-        out.push_str("\x1b[0m");
+        self.write_pen(&mut out);
         let limit = MODEL_SCROLLBACK_LINES + SPILL_HISTORY_MARGIN;
         let mut rebuilt = TerminalModel::with_history(cols, rows, limit);
         rebuilt.advance(out.as_bytes());
@@ -470,8 +470,8 @@ impl TerminalModel {
 
     /// Escape sequences that rebuild the terminal's current state on a
     /// freshly reset emulator: private modes, content, scrolling region,
-    /// cursor, origin, and insert. Client replay prefixes RIS, which
-    /// clears region/origin/insert, so the snapshot must put them back.
+    /// cursor, origin, insert, and drawing attributes. Client replay prefixes
+    /// RIS, so the snapshot must restore the state that reset clears.
     /// While the alternate screen is active the primary screen's content
     /// is not reachable through the public grid API, so the snapshot
     /// restores modes and the alternate screen only.
@@ -512,7 +512,7 @@ impl TerminalModel {
         if mode.contains(TermMode::INSERT) {
             out.push_str("\x1b[4h");
         }
-        out.push_str("\x1b[0m");
+        self.write_pen(&mut out);
         out.into_bytes()
     }
 
@@ -663,6 +663,11 @@ impl TerminalModel {
             out.push_str(&format!("\x1b[{};1H\x1b[0m", line + 1));
             out.push_str(&text);
         }
+    }
+
+    fn write_pen(&self, out: &mut String) {
+        let pen = &self.term.grid().cursor.template;
+        SgrState::default().apply(out, pen.fg, pen.bg, pen.flags);
     }
 
     fn write_cursor(&self, out: &mut String) {
@@ -1341,5 +1346,62 @@ mod tests {
         assert_eq!(state.size(), (80, 24));
         state.push(b"still live");
         assert_eq!(state.model.visible_text()[0], "still live");
+    }
+
+    #[test]
+    fn snapshot_preserves_the_pen_for_following_output() {
+        for alternate in [false, true] {
+            let mut original = TerminalModel::new(20, 4);
+            if alternate {
+                original.advance(b"\x1b[?1049h");
+            }
+            original.advance(b"\x1b[1;3;38;2;248;248;242;48;2;10;10;10mcolored\x1b[2;1H");
+            let mut restored = TerminalModel::new(20, 4);
+            restored.advance(&original.snapshot());
+            original.advance(b" ");
+            restored.advance(b" ");
+            let expected = &original.term.grid()[Line(1)][Column(0)];
+            let actual = &restored.term.grid()[Line(1)][Column(0)];
+            assert_eq!(
+                actual.bg, expected.bg,
+                "background after replay (alternate={alternate})"
+            );
+            assert_eq!(
+                actual.fg, expected.fg,
+                "foreground after replay (alternate={alternate})"
+            );
+            assert_eq!(
+                actual.flags, expected.flags,
+                "style after replay (alternate={alternate})"
+            );
+        }
+    }
+
+    #[test]
+    fn resize_replays_keep_following_paints_in_the_program_background() {
+        const CAPACITY: usize = 4096;
+        let mut worker = Retained::new(CAPACITY, 20, 4);
+        worker.push(b"\x1b[?1049h\x1b[38;2;248;248;242;48;2;10;10;10mready");
+        let mut controller = Retained::new(CAPACITY, 20, 4);
+        for cols in [30, 12, 20] {
+            worker.resize(cols, 4);
+            controller.resize(cols, 4);
+            controller.reset_from_replay(&worker.model.snapshot());
+            let paint = format!("\x1b[2;1H{}", " ".repeat(usize::from(cols)));
+            worker.push(paint.as_bytes());
+            controller.push(paint.as_bytes());
+            for column in 0..usize::from(cols) {
+                let expected = &worker.model.term.grid()[Line(1)][Column(column)];
+                let actual = &controller.model.term.grid()[Line(1)][Column(column)];
+                assert_eq!(
+                    actual.bg, expected.bg,
+                    "resized background at {cols} columns, cell {column}"
+                );
+                assert_eq!(
+                    actual.fg, expected.fg,
+                    "resized foreground at {cols} columns, cell {column}"
+                );
+            }
+        }
     }
 }
