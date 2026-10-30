@@ -3229,7 +3229,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "pm"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -3263,7 +3263,7 @@ dependencies = [
 
 [[package]]
 name = "pm-adapters"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "pm-protocol",
  "rand 0.8.7",
@@ -3274,7 +3274,7 @@ dependencies = [
 
 [[package]]
 name = "pm-client"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3296,7 +3296,7 @@ dependencies = [
 
 [[package]]
 name = "pm-daemon"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3350,14 +3350,14 @@ dependencies = [
 
 [[package]]
 name = "pm-ghostty"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "sha2 0.10.9",
 ]
 
 [[package]]
 name = "pm-protocol"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "bytes",
  "prost",
@@ -3371,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "pm-push"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3391,7 +3391,7 @@ dependencies = [
 
 [[package]]
 name = "pm-pushgw"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -3409,7 +3409,7 @@ dependencies = [
 
 [[package]]
 name = "pm-tls"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "hex",
  "hmac",
@@ -3425,7 +3425,7 @@ dependencies = [
 
 [[package]]
 name = "pm-tui"
-version = "0.10.4-dev.3"
+version = "0.10.4-dev.4"
 dependencies = [
  "bytes",
  "crossterm",
