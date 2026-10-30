@@ -2937,10 +2937,11 @@ async fn a_remote_web_attach_has_the_worker_snapshot_at_the_viewers_size() {
         ROWS
     ));
 
-    // A row exactly as wide as the PTY leaves the cursor on the next row at
-    // this width, and one row further down at any narrower one.
     let mut screen = "A".repeat(usize::from(COLS)).into_bytes();
     screen.extend_from_slice(b"\r\nB");
+    let mut source = pm_ghostty::Terminal::new(COLS, ROWS).unwrap();
+    source.write(&screen);
+    let snapshot = source.snapshot().unwrap();
     let mut worker = host_dial(&env, &host_identity, "/worker/terminal", Some(&token))
         .await
         .expect("the enrolled host streams its terminal")
@@ -2952,8 +2953,9 @@ async fn a_remote_web_attach_has_the_worker_snapshot_at_the_viewers_size() {
                 pm_protocol::terminal_frame::FLAG_REPLAY
                     | pm_protocol::terminal_frame::FLAG_REPLAY_START
                     | pm_protocol::terminal_frame::FLAG_REPLAY_END
-                    | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
-                &screen,
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY,
+                &snapshot,
             ),
         ))
         .await
@@ -2972,11 +2974,12 @@ async fn a_remote_web_attach_has_the_worker_snapshot_at_the_viewers_size() {
     else {
         panic!("the joined viewer's replay follows its size echo");
     };
-    let snapshot = String::from_utf8_lossy(data);
-    assert!(
-        snapshot.ends_with("\x1b[2;2H\x1b[0m"),
-        "the mirror laid the worker's screen out at another width: {snapshot:?}"
-    );
+    let mut restored = pm_ghostty::Terminal::new(COLS, ROWS).unwrap();
+    restored.write(data);
+    assert_eq!(restored.cursor_position().unwrap(), (1, 1));
+    let rows = restored.visible_text().unwrap();
+    assert_eq!(rows[0], "A".repeat(usize::from(COLS)));
+    assert_eq!(rows[1], "B");
 }
 
 #[tokio::test]
@@ -6510,7 +6513,7 @@ async fn opening_viewer_waits_for_repaint(ownership_aware: bool) {
         _root,
     } = remote_relay_terminal(&env).await;
     let mut first = terminal_ws_connect(&env, terminal_id, 1).await;
-    let token = match tokio::time::timeout(TEST_TIMEOUT, registration.rx.recv())
+    let (token, size) = match tokio::time::timeout(TEST_TIMEOUT, registration.rx.recv())
         .await
         .unwrap()
         .unwrap()
@@ -6518,22 +6521,28 @@ async fn opening_viewer_waits_for_repaint(ownership_aware: bool) {
         ControllerMsg::TerminalAttach {
             terminal_id: attached,
             token,
+            size,
             ..
-        } if attached == terminal_id => token,
+        } if attached == terminal_id => (token, size),
         message => panic!("unexpected message {message:?}"),
     };
     let mut worker = host_dial(&env, &host_identity, "/worker/terminal", Some(&token))
         .await
         .expect("the enrolled host streams its terminal")
         .link;
+    let mut source = pm_ghostty::Terminal::new(size.0, size.1).unwrap();
+    source.write(b"screen before the resize");
+    let snapshot = source.snapshot().unwrap();
     worker
         .send(tungstenite::Message::Binary(
             pm_protocol::terminal_frame::encode_output(
                 1,
                 pm_protocol::terminal_frame::FLAG_REPLAY
                     | pm_protocol::terminal_frame::FLAG_REPLAY_START
-                    | pm_protocol::terminal_frame::FLAG_REPLAY_END,
-                b"screen before the resize",
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_END
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY,
+                &snapshot,
             ),
         ))
         .await
@@ -6629,7 +6638,7 @@ async fn an_in_band_resync_answers_with_a_snapshot_taken_after_the_repaint() {
         _root,
     } = remote_relay_terminal(&env).await;
     let mut browser = terminal_ws_connect(&env, terminal_id, 1).await;
-    let token = match tokio::time::timeout(TEST_TIMEOUT, registration.rx.recv())
+    let (token, size) = match tokio::time::timeout(TEST_TIMEOUT, registration.rx.recv())
         .await
         .unwrap()
         .unwrap()
@@ -6637,22 +6646,28 @@ async fn an_in_band_resync_answers_with_a_snapshot_taken_after_the_repaint() {
         ControllerMsg::TerminalAttach {
             terminal_id: attached,
             token,
+            size,
             ..
-        } if attached == terminal_id => token,
+        } if attached == terminal_id => (token, size),
         message => panic!("unexpected message {message:?}"),
     };
     let mut worker = host_dial(&env, &host_identity, "/worker/terminal", Some(&token))
         .await
         .expect("the enrolled host streams its terminal")
         .link;
+    let mut source = pm_ghostty::Terminal::new(size.0, size.1).unwrap();
+    source.write(b"wide screen");
+    let snapshot = source.snapshot().unwrap();
     worker
         .send(tungstenite::Message::Binary(
             pm_protocol::terminal_frame::encode_output(
                 1,
                 pm_protocol::terminal_frame::FLAG_REPLAY
                     | pm_protocol::terminal_frame::FLAG_REPLAY_START
-                    | pm_protocol::terminal_frame::FLAG_REPLAY_END,
-                b"wide screen",
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_END
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY,
+                &snapshot,
             ),
         ))
         .await

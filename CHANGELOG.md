@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Show gateway errors during agent installation instead of a JSON parsing error.
+
 - [Web] Restore terminals with the same Ghostty engine used on their worker, preserving both screens and in-progress output across reconnects.
 Migration: Update workers with the controller before opening their terminals, and reload older browser tabs.
 

@@ -26,7 +26,17 @@ export async function harnessStatus(request: SpawnRequest, install: boolean, sig
     }),
     signal,
   });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error || `Harness check failed (${response.status})`);
-  return body as HarnessReply;
+  const text = await response.text();
+  let body: HarnessReply & { error?: string };
+  try {
+    body = JSON.parse(text);
+  } catch {
+    if (!response.ok) throw new Error(text.trim() || `Harness check failed (${response.status})`);
+    throw new Error("The harness check returned an invalid response. Try again.");
+  }
+  if (!response.ok) throw new Error(body?.error || `Harness check failed (${response.status})`);
+  if (!body?.agent || !body.status?.state) {
+    throw new Error("The harness check returned an invalid response. Try again.");
+  }
+  return body;
 }
