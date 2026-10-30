@@ -465,6 +465,10 @@ fn dashboard_router(daemon: Arc<Daemon>) -> Router {
         .route("/ws", any(ws_upgrade))
         .route("/ws/terminal/{id}", any(terminal_ws_upgrade))
         .route(
+            "/api/terminals/{id}/snapshot-compatibility",
+            get(terminal_snapshot_compatibility),
+        )
+        .route(
             "/mcp",
             post(crate::mcp::handle).layer(axum::extract::DefaultBodyLimit::max(
                 crate::connections::MAX_HTTP_BODY_BYTES,
@@ -3138,6 +3142,7 @@ const WEB_TERMINAL_REPLAY_TIMEOUT: std::time::Duration = std::time::Duration::fr
 #[derive(serde::Deserialize)]
 struct TerminalStreamQuery {
     generation: u64,
+    ghostty: Option<String>,
     /// One-use mobile attach ticket; the cookie and bearer paths do
     /// not use it. Consumed (and thereby invalidated) at upgrade.
     ticket: Option<String>,
@@ -3149,6 +3154,62 @@ struct TerminalStreamQuery {
     /// screen paints before the whole scrollback is parsed. Absent or zero
     /// carries all of it, and every later snapshot carries all of it.
     history: Option<u16>,
+}
+
+#[derive(serde::Deserialize)]
+struct SnapshotCompatibilityQuery {
+    ghostty: Option<String>,
+}
+
+fn require_snapshot_identity(identity: Option<&str>) -> Result<(), &'static str> {
+    if identity.is_some_and(|identity| identity != pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY) {
+        Err("terminal engine changed. Reload this page to use the controller's Ghostty version.")
+    } else {
+        Ok(())
+    }
+}
+
+async fn terminal_snapshot_compatibility(
+    State(daemon): State<Arc<Daemon>>,
+    Path(terminal_id): Path<u64>,
+    Query(query): Query<SnapshotCompatibilityQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if authed_identity(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if let Err(error) = require_snapshot_identity(query.ghostty.as_deref()) {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    if let Err(error) = daemon.require_terminal_snapshot_compatibility(terminal_id) {
+        return (StatusCode::CONFLICT, error.to_string()).into_response();
+    }
+    Json(
+        serde_json::json!({ "snapshotCompatibility": pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY }),
+    )
+    .into_response()
+}
+
+fn terminal_snapshot_frames(generation: u64, bytes: &[u8], binary: bool) -> Option<Vec<Bytes>> {
+    if bytes.is_empty() || bytes.len() > pm_protocol::terminal_frame::MAX_SNAPSHOT_BYTES {
+        return None;
+    }
+    let (bytes, flags) = if binary {
+        (
+            bytes.to_vec(),
+            pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+                | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY,
+        )
+    } else {
+        let terminal = crate::term_model::TerminalModel::restore(bytes).ok()?;
+        (
+            terminal.try_snapshot_vt().ok()?,
+            pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
+        )
+    };
+    Some(pm_protocol::terminal_frame::replay_frames_with_flags(
+        generation, &bytes, flags,
+    ))
 }
 
 async fn terminal_ws_upgrade(
@@ -3172,6 +3233,12 @@ async fn terminal_ws_upgrade(
     let Some((user_id, replay_cap)) = auth else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
+    if let Err(error) = require_snapshot_identity(query.ghostty.as_deref()) {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    if let Err(error) = daemon.require_terminal_snapshot_compatibility(terminal_id) {
+        return (StatusCode::CONFLICT, error.to_string()).into_response();
+    }
     let supports_protocol = headers
         .get(header::SEC_WEBSOCKET_PROTOCOL)
         .and_then(|value| value.to_str().ok())
@@ -3232,6 +3299,7 @@ async fn terminal_ws_connection(
     replay_cap: usize,
     query: TerminalStreamQuery,
 ) {
+    let binary_snapshot = query.ghostty.is_some();
     let TerminalStreamQuery {
         generation,
         cols: initial_cols,
@@ -3340,11 +3408,10 @@ async fn terminal_ws_connection(
         crate::daemon::WebTerminalReplay::Complete { .. } if hold_first_snapshot => {}
         crate::daemon::WebTerminalReplay::Complete { bytes } => {
             history = None;
-            for frame in pm_protocol::terminal_frame::replay_frames_with_flags(
-                generation,
-                &bytes[..],
-                pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
-            ) {
+            let Some(frames) = terminal_snapshot_frames(generation, &bytes, binary_snapshot) else {
+                return;
+            };
+            for frame in frames {
                 if sink.send(Message::Binary(frame)).await.is_err() {
                     return;
                 }
@@ -3368,33 +3435,59 @@ async fn terminal_ws_connection(
                 if sink.send(Message::Binary(size)).await.is_err() {
                     return;
                 }
-                for frame in pm_protocol::terminal_frame::replay_frames_with_flags(
-                    generation,
-                    &snapshot[..],
-                    pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
-                ) {
+                let Some(frames) = terminal_snapshot_frames(generation, &snapshot, binary_snapshot)
+                else {
+                    return;
+                };
+                for frame in frames {
                     if sink.send(Message::Binary(frame)).await.is_err() {
                         return;
                     }
                 }
             }
         }
-        crate::daemon::WebTerminalReplay::Streaming(mut replay) => loop {
-            let chunk = match tokio::time::timeout(WEB_TERMINAL_REPLAY_TIMEOUT, replay.recv()).await
-            {
-                Ok(Some(chunk)) => chunk,
-                _ => return,
-            };
-            let end = chunk.flags & pm_protocol::terminal_frame::FLAG_REPLAY_END != 0;
-            let frame =
-                pm_protocol::terminal_frame::encode_output(generation, chunk.flags, &chunk.data);
-            if !hold_first_snapshot && sink.send(Message::Binary(frame)).await.is_err() {
-                return;
+        crate::daemon::WebTerminalReplay::Streaming(mut replay) => {
+            let mut buffered = Vec::new();
+            loop {
+                let chunk =
+                    match tokio::time::timeout(WEB_TERMINAL_REPLAY_TIMEOUT, replay.recv()).await {
+                        Ok(Some(chunk)) => chunk,
+                        _ => return,
+                    };
+                let end = chunk.flags & pm_protocol::terminal_frame::FLAG_REPLAY_END != 0;
+                let frame = pm_protocol::terminal_frame::encode_output(
+                    generation,
+                    chunk.flags,
+                    &chunk.data,
+                );
+                if binary_snapshot {
+                    if !hold_first_snapshot && sink.send(Message::Binary(frame)).await.is_err() {
+                        return;
+                    }
+                } else {
+                    if buffered.len().saturating_add(chunk.data.len())
+                        > pm_protocol::terminal_frame::MAX_SNAPSHOT_BYTES
+                    {
+                        return;
+                    }
+                    buffered.extend_from_slice(&chunk.data);
+                }
+                if end {
+                    if !binary_snapshot && !hold_first_snapshot {
+                        let Some(frames) = terminal_snapshot_frames(generation, &buffered, false)
+                        else {
+                            return;
+                        };
+                        for frame in frames {
+                            if sink.send(Message::Binary(frame)).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    break;
+                }
             }
-            if end {
-                break;
-            }
-        },
+        }
     }
     let write = async {
         // While a viewer waits for a resized snapshot, live output is absorbed
@@ -3419,21 +3512,19 @@ async fn terminal_ws_connection(
                     let Some((snapshot, fresh, (cols, rows))) =
                         daemon.web_terminal_resnapshot(terminal_id, &progress, history.take())
                     else {
-                        if hold_first_snapshot {
-                            return;
-                        }
-                        continue;
+                        let _ = sink.send(Message::Close(Some(CloseFrame {
+                            code: WS_CLOSE_RESYNC_REQUIRED,
+                            reason: "terminal snapshot unavailable".into(),
+                        }))).await;
+                        return;
                     };
                     output = fresh;
                     let size = pm_protocol::terminal_frame::encode_resize(generation, cols, rows);
                     if sink.send(Message::Binary(size)).await.is_err() {
                         return;
                     }
-                    for frame in pm_protocol::terminal_frame::replay_frames_with_flags(
-                        generation,
-                        &snapshot[..],
-                        pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
-                    ) {
+                    let Some(frames) = terminal_snapshot_frames(generation, &snapshot, binary_snapshot) else { return; };
+            for frame in frames {
                         if sink.send(Message::Binary(frame)).await.is_err() {
                             return;
                         }
@@ -3492,18 +3583,19 @@ async fn terminal_ws_connection(
                     let Some((snapshot, fresh, (cols, rows))) =
                         daemon.web_terminal_resnapshot(terminal_id, &progress, None)
                     else {
-                        continue;
+                        let _ = sink.send(Message::Close(Some(CloseFrame {
+                            code: WS_CLOSE_RESYNC_REQUIRED,
+                            reason: "terminal snapshot unavailable".into(),
+                        }))).await;
+                        return;
                     };
                     output = fresh;
                     let size = pm_protocol::terminal_frame::encode_resize(generation, cols, rows);
                     if sink.send(Message::Binary(size)).await.is_err() {
                         return;
                     }
-                    for frame in pm_protocol::terminal_frame::replay_frames_with_flags(
-                        generation,
-                        &snapshot[..],
-                        pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
-                    ) {
+                    let Some(frames) = terminal_snapshot_frames(generation, &snapshot, binary_snapshot) else { return; };
+            for frame in frames {
                         if sink.send(Message::Binary(frame)).await.is_err() {
                             return;
                         }
@@ -3807,12 +3899,15 @@ pub(crate) async fn worker_terminal_connection(
             if generation != claim.generation {
                 break;
             }
-            claim.link.feed_terminal_output(
+            if !claim.link.feed_terminal_snapshot_output(
                 claim.terminal_id,
                 generation,
+                stream_epoch,
                 flags,
                 Bytes::copy_from_slice(data),
-            );
+            ) {
+                break;
+            }
             claim.link.wait_for_viewers(claim.terminal_id).await;
         }
     };
@@ -4053,6 +4148,7 @@ pub(crate) async fn worker_session(
         _ => None,
     };
     let Some(WorkerMsg::Register {
+        snapshot_compatibility,
         protocol_version,
         enrollment_token,
         credential,
@@ -4100,6 +4196,7 @@ pub(crate) async fn worker_session(
     };
 
     let registration = match daemon.register_worker_connection(crate::daemon::WorkerHello {
+        snapshot_compatibility: &snapshot_compatibility,
         enrollment_token: &enrollment_token,
         credential: &credential,
         peer_key_hash,
@@ -4295,6 +4392,51 @@ fn debug_asset_path(root: &std::path::Path, candidate: &str) -> Option<std::path
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn snapshot_identity_allows_vt_viewers_and_requires_matching_ghostty() {
+        assert!(super::require_snapshot_identity(None).is_ok());
+        assert!(super::require_snapshot_identity(Some(
+            pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY
+        ))
+        .is_ok());
+        assert!(super::require_snapshot_identity(Some("old-ghostty")).is_err());
+    }
+
+    #[test]
+    fn terminal_snapshot_codec_keeps_binary_out_of_vt_viewers() {
+        let mut source = crate::term_model::TerminalModel::new(80, 24);
+        source.advance(b"\x1b[?1049h\x1b[31mhello");
+        let snapshot = source.snapshot();
+        for binary in [false, true] {
+            let frames = super::terminal_snapshot_frames(1, &snapshot, binary).unwrap();
+            let mut bytes = Vec::new();
+            for frame in frames {
+                let Some(pm_protocol::terminal_frame::TerminalFrame::Output {
+                    flags, data, ..
+                }) = pm_protocol::terminal_frame::decode(&frame)
+                else {
+                    panic!("output frame");
+                };
+                assert_eq!(
+                    flags & pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY != 0,
+                    binary
+                );
+                bytes.extend_from_slice(data);
+            }
+            let restored = if binary {
+                crate::term_model::TerminalModel::restore(&bytes).unwrap()
+            } else {
+                let mut restored = crate::term_model::TerminalModel::new(80, 24);
+                restored.advance(&bytes);
+                restored
+            };
+            assert!(restored.is_alternate());
+            assert!(restored.visible_text().join("\n").contains("hello"));
+        }
+        assert!(super::terminal_snapshot_frames(1, &[], true).is_none());
+        assert!(super::terminal_snapshot_frames(1, b"invalid", false).is_none());
+    }
+
     #[test]
     fn enrollment_bucket_access_is_optional_and_accepts_multiple_buckets() {
         let legacy: super::EnrollRequest = serde_json::from_str(r#"{"label":"worker"}"#).unwrap();

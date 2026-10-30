@@ -38,6 +38,7 @@ fn enroll_host(env: &TestEnv, protocol_version: u32) -> FakeHost {
     let registration = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-remote",

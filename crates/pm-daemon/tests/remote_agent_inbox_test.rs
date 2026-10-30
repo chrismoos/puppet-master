@@ -70,6 +70,7 @@ fn enroll_worker(env: &TestEnv, protocol_version: u32, outcome: AgentInboxOutcom
     let registration = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-remote",
@@ -503,6 +504,7 @@ async fn a_worker_that_reconnects_older_stops_being_sent_the_capability() {
     let downgraded = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential: &worker.credential,
             peer_key_hash: "key-remote",

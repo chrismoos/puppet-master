@@ -107,6 +107,7 @@ async fn a_remote_forward_streams_through_the_dial_back_endpoint() {
     let (enroll_token, _) = daemon.create_worker_enrollment("laptop").unwrap();
     let mut reg = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enroll_token,
             credential: "",
             peer_key_hash: &host_identity.key_hash().to_hex(),
@@ -757,6 +758,7 @@ async fn a_remote_http_route_proxies_through_the_worker_stream() {
     let (enroll_token, _) = daemon.create_worker_enrollment("laptop").unwrap();
     let mut reg = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enroll_token,
             credential: "",
             peer_key_hash: &host_identity.key_hash().to_hex(),
@@ -2483,6 +2485,7 @@ async fn sequential_requests_through_a_remote_forward_open_one_upstream() {
     let (enroll, _) = daemon.create_worker_enrollment("laptop").unwrap();
     let mut reg = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enroll,
             credential: "",
             peer_key_hash: &identity.key_hash().to_hex(),

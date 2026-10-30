@@ -3,6 +3,7 @@ export interface PtyFrame {
   replay: boolean;
   /** The replay payload is a serialized state snapshot, not a ring tail. */
   snapshot?: boolean;
+  ghosttySnapshot?: boolean;
 }
 
 export interface TerminalSize {

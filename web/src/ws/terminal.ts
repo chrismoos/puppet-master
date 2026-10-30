@@ -13,7 +13,7 @@ import { isRealPaneFit, measureFit, spawnGeometry, type TerminalGeometry } from 
 import { collectTerminalSurfaceDebug, type TerminalLayerDebug } from "./terminalDiagnostics";
 import { wireViewerSize, type ViewerSizeController } from "@puppet-master/client-core/ws/terminalRepaint";
 import { applyEchoedPtySize } from "@puppet-master/client-core/ws/terminalResize";
-import { applyMeasuredFit, deliverLayerFrame, historyWasTruncated, holdInput, isInitialSnapshotFrame, showLayer, showLayerSizePrompt, waitForTerminalRender, type HeldInput } from "./terminalLayer";
+import { applyMeasuredFit, deliverLayerFrame, holdInput, isInitialSnapshotFrame, showLayer, showLayerSizePrompt, waitForTerminalRender, type HeldInput } from "./terminalLayer";
 import { resumeRendering } from "./terminalRendering";
 import { TerminalClipboard } from "./terminalClipboard";
 import { registerForegroundCommandHandler, wireTerminalClipboard } from "./terminalHostWiring";
@@ -73,9 +73,6 @@ interface Layer {
   pendingFit: TerminalSize | null;
   /** The pending size came from another viewer, which this one follows. */
   pendingFollow: boolean;
-  /** The first snapshot was bounded, so the whole scrollback is still to
-   * be asked for once this layer has painted. */
-  historyPending: boolean;
   /** Typed before the terminal was attached, delivered once it is. */
   heldInput: HeldInput[];
   /** The latest size measured while a width change was in flight, sent once
@@ -96,10 +93,6 @@ type TerminalCommandListener = (terminalId: bigint, command: string) => void;
  */
 let activeStage: TerminalStage | null = null;
 
-/** History lines in a layer's first snapshot. The screen is always whole,
- * so this only sets how far back the reader can scroll until the rest of
- * the scrollback arrives, which it asks for as soon as it has painted. */
-const FIRST_SNAPSHOT_HISTORY_LINES = 500;
 /** Keystrokes held for a terminal that is not attached yet. */
 const HELD_INPUT_CAP_BYTES = 64 * 1024;
 const SWAP_RECHECK_MS = 2_000;
@@ -325,7 +318,6 @@ export class TerminalStage {
     const viewport = layer.viewport;
     const viewportRevision = layer.viewportRevision;
     layer.term.focus();
-    this.askForWholeHistory(layer);
     // A show can coincide with React attaching the shared stage into a host
     // whose layout is still settling. Keep the synchronous fit for the first
     // paint, then reconcile once after layout and once after the terminal has parsed
@@ -380,6 +372,8 @@ export class TerminalStage {
       this.theme,
       () => this.scheduleRefitVisible(),
       (error) => {
+        layer.handle?.close();
+        curtainEl.hidden = true;
         statusEl.hidden = false;
         statusEl.className = "terminal-stream-status is-error";
         statusEl.textContent = error instanceof Error ? error.message : "Terminal renderer failed";
@@ -441,7 +435,6 @@ export class TerminalStage {
       ackTimer: null,
       initialReplayPending: true,
       swapPending: false,
-      historyPending: false,
       heldInput: [],
       focusAtShow: null,
       replayPainted: false,
@@ -716,10 +709,9 @@ export class TerminalStage {
     applyMeasuredFit(layer.term, measured, false);
     const size = { cols: measured.cols, rows: measured.rows };
     const handle = layer.addressedTerminal
-      ? this.client.openTerminal(layer.sessionId, size, FIRST_SNAPSHOT_HISTORY_LINES)
-      : this.client.openPty(layer.sessionId, size, FIRST_SNAPSHOT_HISTORY_LINES);
+      ? this.client.openTerminal(layer.sessionId, size)
+      : this.client.openPty(layer.sessionId, size);
     layer.handle = handle;
-    layer.historyPending = true;
     layer.lastResize = size;
     layer.sizePrompt.requested(size);
     // The size this viewer claims is the one it is moving to: while a resize
@@ -912,18 +904,6 @@ export class TerminalStage {
     restoreTerminalViewport(layer.term, layer.viewport);
     layer.term.refresh(0, layer.term.rows - 1);
     if (focusTerminal) layer.term.focus();
-    this.askForWholeHistory(layer);
-  }
-
-  /** Asks for the scrollback the first snapshot left out, as soon as the
-   * screen it did carry is up. The answer is another snapshot, which
-   * replaces the buffer in place and keeps the reader's distance from the
-   * bottom, so the lines on screen do not move. */
-  private askForWholeHistory(layer: Layer): void {
-    if (!layer.historyPending) return;
-    if (!historyWasTruncated(layer.term.buffer.active.length, FIRST_SNAPSHOT_HISTORY_LINES)) return;
-    layer.historyPending = false;
-    layer.handle?.requestWholeHistory();
   }
 
   private disposeLayer(key: string): void {

@@ -51,9 +51,10 @@ files in that package.
 into the web UI through `@fontsource-variable/inter` under the same license and
 on the same terms.
 
-**Ghostty / libghostty-vt** provides the web terminal parser and input encoders
-under the MIT License. Its pinned revision is recorded in
-`web/src/ws/ghostty/vendor/VERSION`, with the license in that directory.
+**Ghostty / libghostty-vt** provides the backend terminal model and browser
+terminal parser and input encoders under the MIT License. Its pinned revision
+and license are recorded in `crates/pm-ghostty/vendor` and
+`web/src/ws/ghostty/vendor`.
 
 **Symbols Nerd Font Mono** provides terminal prompt symbols under the MIT
 License. Its license text is kept beside the bundled font.

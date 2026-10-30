@@ -5,6 +5,8 @@ export const GHOSTTY_TERMINAL_OPTION = {
   palette: 14,
   selection: 21,
   defaultCursorBlink: 23,
+  scrollbackMaxBytes: 27,
+  mode: 30,
 } as const;
 
 export const GHOSTTY_TERMINAL_DATA = {
@@ -14,6 +16,7 @@ export const GHOSTTY_TERMINAL_DATA = {
   cursorX: 3,
   cursorY: 4,
   viewportActive: 32,
+  mode: 37,
   defaultPalette: 25,
 } as const;
 
@@ -124,3 +127,7 @@ export const GHOSTTY_MOUSE_ENCODER_OPTION = {
 } as const;
 
 export type GhosttyPointTag = (typeof GHOSTTY_GRID_REF_TAG)[keyof typeof GHOSTTY_GRID_REF_TAG];
+
+export const GHOSTTY_SNAPSHOT_DECODER_DATA = {
+  sourceOffset: 2,
+} as const;

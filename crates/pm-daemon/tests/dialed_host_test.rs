@@ -99,6 +99,7 @@ async fn listening_host(
     .await?;
 
     let register = WorkerMsg::Register {
+        snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY.into(),
         protocol_version: pm_protocol::WORKER_PROTOCOL_VERSION,
         enrollment_token: token,
         credential: String::new(),

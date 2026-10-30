@@ -13,8 +13,10 @@ import {
   TERMINAL_FLAG_REPLAY,
   TERMINAL_FLAG_REPLAY_END,
   TERMINAL_FLAG_REPLAY_SNAPSHOT,
+  TERMINAL_FLAG_REPLAY_GHOSTTY,
   TERMINAL_FLAG_REPLAY_START,
   TERMINAL_SUBPROTOCOL,
+  TERMINAL_CLOSE_INCOMPATIBLE,
 } from "./terminalFrame";
 
 const RECONNECT_MIN_DELAY_MS = 250;
@@ -89,6 +91,7 @@ export class TerminalSocket {
   private replayTimer: ReturnType<typeof setTimeout> | null = null;
   private failureStartedAt: number | null = null;
   private lastError = "";
+  private compatibilityRefused = false;
   private pendingResize: (TerminalSize & { request: bigint }) | null = null;
   private pendingClaim = 0n;
   private ownershipRevision = -1n;
@@ -97,6 +100,7 @@ export class TerminalSocket {
   private replayChunks: Uint8Array[] = [];
   private replayBytes = 0;
   private replaySnapshot = false;
+  private replayGhosttySnapshot = false;
   private snapshotPending = false;
   private lastReplaySnapshot = false;
   private listeners = new Set<StatusListener>();
@@ -254,7 +258,7 @@ export class TerminalSocket {
   subscribe(listener: StatusListener): () => void {
     this.listeners.add(listener);
     if (this.replayComplete) listener({ phase: "online" });
-    else if (!this.available) listener(this.reconnectingStatus());
+    else if (!this.available || this.compatibilityRefused) listener(this.reconnectingStatus());
     else if (this.failureStartedAt !== null && Date.now() - this.failureStartedAt >= STATUS_DELAY_MS) {
       listener(this.reconnectingStatus());
     }
@@ -409,6 +413,9 @@ export class TerminalSocket {
         if ((frame.flags & TERMINAL_FLAG_REPLAY_SNAPSHOT) !== 0) {
           this.replaySnapshot = true;
         }
+        if ((frame.flags & TERMINAL_FLAG_REPLAY_GHOSTTY) !== 0) {
+          this.replayGhosttySnapshot = true;
+        }
         this.replayChunks.push(frame.data);
         this.replayBytes += frame.data.byteLength;
         if ((frame.flags & TERMINAL_FLAG_REPLAY_END) !== 0) {
@@ -419,6 +426,7 @@ export class TerminalSocket {
             offset += chunk.byteLength;
           }
           const snapshot = this.replaySnapshot;
+          const ghosttySnapshot = this.replayGhosttySnapshot;
           this.clearReplay();
           this.replayCount += 1;
           this.lastReplayBytes = data.byteLength;
@@ -426,7 +434,7 @@ export class TerminalSocket {
           this.lastReplaySnapshot = snapshot;
           this.outputBytes += data.byteLength;
           this.lastOutputAt = this.lastReplayAt;
-          this.sink({ data, replay: true, snapshot });
+          this.sink({ data, replay: true, snapshot, ...(ghosttySnapshot ? { ghosttySnapshot } : {}) });
           this.flushPendingLive();
           this.markOnline(socket);
         }
@@ -457,7 +465,10 @@ export class TerminalSocket {
       }
       this.lastError = event.reason || this.lastError || `connection closed (${event.code || 1006})`;
       this.beginFailure();
-      if (this.available) this.scheduleReconnect();
+      if (event.code === TERMINAL_CLOSE_INCOMPATIBLE) {
+        this.compatibilityRefused = true;
+        this.emit(this.reconnectingStatus());
+      } else if (this.available) this.scheduleReconnect();
     };
   }
 
@@ -467,6 +478,7 @@ export class TerminalSocket {
     this.reconnectDelayMs = RECONNECT_MIN_DELAY_MS;
     this.failureStartedAt = null;
     this.lastError = "";
+    this.compatibilityRefused = false;
     this.clearStatusTimers();
     this.clearReplayTimer();
     this.flushPendingResizeAfterMatchingPaint(socket);
@@ -505,8 +517,8 @@ export class TerminalSocket {
         lastError: this.lastError || "terminal worker unavailable",
       };
     }
-    const canRetry = this.failureStartedAt !== null
-      && Date.now() - this.failureStartedAt >= MANUAL_RETRY_DELAY_MS;
+    const canRetry = this.compatibilityRefused || (this.failureStartedAt !== null
+      && Date.now() - this.failureStartedAt >= MANUAL_RETRY_DELAY_MS);
     return {
       phase: "reconnecting",
       canRetry,
@@ -571,6 +583,7 @@ export class TerminalSocket {
     this.replayChunks = [];
     this.replayBytes = 0;
     this.replaySnapshot = false;
+    this.replayGhosttySnapshot = false;
   }
 
   private emit(status: TerminalStreamStatus): void {

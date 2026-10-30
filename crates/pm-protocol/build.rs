@@ -14,6 +14,7 @@ fn main() {
         // Keeps the resolved endpoint from dominating the size of every
         // ControllerMessage.
         .boxed(".pm.v1.ControllerSpawn.model_endpoint")
+        .boxed(".pm.v1.WorkerMessage.msg.register")
         .compile_fds(descriptors)
         .expect("generate rust from proto");
 }

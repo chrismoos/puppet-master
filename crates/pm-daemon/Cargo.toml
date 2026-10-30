@@ -42,7 +42,7 @@ pm-tls = { workspace = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging"] }
 tokio-tungstenite = { version = "0.26", features = ["handshake"] }
 tokio-util = { version = "0.7", features = ["io"] }
-alacritty_terminal = "0.26.0"
+pm-ghostty = { path = "../pm-ghostty" }
 ring = "0.17"
 
 hyper = { version = "1", features = ["client", "http1", "http2"] }

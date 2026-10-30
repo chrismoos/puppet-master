@@ -4,6 +4,7 @@ members = [
     "crates/pm",
     "crates/pm-protocol",
     "crates/pm-daemon",
+    "crates/pm-ghostty",
     "crates/pm-push",
     "crates/pm-pushgw",
     "crates/pm-client",

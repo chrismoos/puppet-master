@@ -2907,6 +2907,7 @@ impl From<WorkerMsg> for wire::WorkerMessage {
         use wire::worker_message::Msg;
         let msg = match v {
             WorkerMsg::Register {
+                snapshot_compatibility,
                 protocol_version,
                 enrollment_token,
                 credential,
@@ -2920,7 +2921,8 @@ impl From<WorkerMsg> for wire::WorkerMessage {
                 live_dir_shares,
                 runtime,
                 container,
-            } => Msg::Register(wire::WorkerRegister {
+            } => Msg::Register(Box::new(wire::WorkerRegister {
+                snapshot_compatibility,
                 protocol_version,
                 enrollment_token,
                 credential,
@@ -2957,7 +2959,7 @@ impl From<WorkerMsg> for wire::WorkerMessage {
                         port: share.port as u32,
                     })
                     .collect(),
-            }),
+            })),
             WorkerMsg::Heartbeat => Msg::Heartbeat(wire::WorkerHeartbeat {}),
             WorkerMsg::SessionState {
                 session_id,
@@ -3167,6 +3169,7 @@ impl TryFrom<wire::WorkerMessage> for WorkerMsg {
                     answer: m.answer.to_vec(),
                 },
                 Msg::Register(m) => WorkerMsg::Register {
+                    snapshot_compatibility: m.snapshot_compatibility,
                     protocol_version: m.protocol_version,
                     enrollment_token: m.enrollment_token,
                     credential: m.credential,
@@ -3499,12 +3502,14 @@ impl From<ControllerMsg> for wire::ControllerMessage {
                 body,
             }),
             ControllerMsg::TerminalAttach {
+                snapshot_compatibility,
                 terminal_id,
                 generation,
                 token,
                 replay_bytes,
                 size: (cols, rows),
             } => Msg::Attach(wire::ControllerAttach {
+                snapshot_compatibility,
                 terminal_id,
                 generation,
                 token,
@@ -3679,6 +3684,7 @@ impl TryFrom<wire::ControllerMessage> for ControllerMsg {
                     body: m.body,
                 },
                 Msg::Attach(m) => ControllerMsg::TerminalAttach {
+                    snapshot_compatibility: m.snapshot_compatibility,
                     terminal_id: m.terminal_id,
                     generation: m.generation,
                     token: m.token,
@@ -4356,6 +4362,7 @@ mod tests {
                 },
             },
             WorkerMsg::Register {
+                snapshot_compatibility: crate::GHOSTTY_SNAPSHOT_COMPATIBILITY.into(),
                 protocol_version: crate::WORKER_PROTOCOL_VERSION,
                 enrollment_token: "enr".into(),
                 credential: String::new(),
@@ -4561,6 +4568,7 @@ mod tests {
                 program_status: true,
             },
             ControllerMsg::TerminalAttach {
+                snapshot_compatibility: crate::GHOSTTY_SNAPSHOT_COMPATIBILITY.into(),
                 terminal_id: 9,
                 generation: 2,
                 token: "terminal-token".into(),

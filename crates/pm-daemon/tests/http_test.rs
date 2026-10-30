@@ -2182,6 +2182,7 @@ async fn websocket_snapshot_and_actions_preserve_awaiting_worker_state() {
     let mut registration = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-host.local",
@@ -2346,6 +2347,7 @@ async fn register_announcing(env: &WsEnv, label: &str, protocol_version: u32) ->
     let (enrollment, _) = env.daemon.create_worker_enrollment(label).unwrap();
     let mut worker = host_control_link(env, &identity, Some(&enrollment)).await;
     let register = WorkerMsg::Register {
+        snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY.into(),
         protocol_version,
         enrollment_token: enrollment,
         credential: String::new(),
@@ -2503,6 +2505,7 @@ async fn worker_transcript_upload_is_separate_and_acknowledged_after_persistence
     let mut registration = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enrollment,
             credential: "",
             peer_key_hash: &host_identity.key_hash().to_hex(),
@@ -2636,6 +2639,7 @@ async fn remote_relay_terminal(env: &WsEnv) -> RemoteRelay {
     let mut registration = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enrollment,
             credential: "",
             peer_key_hash: &host_identity.key_hash().to_hex(),
@@ -2700,50 +2704,121 @@ async fn remote_terminal_bytes_use_the_dedicated_worker_stream_in_both_direction
         session,
         _root,
     } = remote_relay_terminal(&env).await;
-    let mut browser = terminal_ws_connect(&env, terminal_id, 1).await;
-    let (token, replay_bytes) = match tokio::time::timeout(TEST_TIMEOUT, registration.rx.recv())
-        .await
-        .unwrap()
-        .unwrap()
-    {
-        ControllerMsg::TerminalAttach {
-            terminal_id: attached,
-            generation: 1,
-            token,
-            replay_bytes,
-            ..
-        } if attached == terminal_id => (token, replay_bytes),
-        message => panic!("unexpected message {message:?}"),
-    };
+    let uri: tungstenite::http::Uri = format!(
+        "ws://{}/ws/terminal/{terminal_id}?generation=1&ghostty={}",
+        env.addr,
+        pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
+    )
+    .parse()
+    .unwrap();
+    let builder = tungstenite::client::ClientRequestBuilder::new(uri)
+        .with_header(header::AUTHORIZATION.as_str(), env.auth.clone())
+        .with_sub_protocol("pm-terminal-v1");
+    let mut browser = tokio_tungstenite::connect_async(builder).await.unwrap().0;
+    let (token, replay_bytes, size) =
+        match tokio::time::timeout(TEST_TIMEOUT, registration.rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            ControllerMsg::TerminalAttach {
+                terminal_id: attached,
+                generation: 1,
+                token,
+                replay_bytes,
+                size,
+                ..
+            } if attached == terminal_id => (token, replay_bytes, size),
+            message => panic!("unexpected message {message:?}"),
+        };
     assert!(replay_bytes > 0);
     let mut worker = host_dial(&env, &host_identity, "/worker/terminal", Some(&token))
         .await
         .expect("the enrolled host streams its terminal")
         .link;
+    let mut source = pm_ghostty::Terminal::new(size.0, size.1).unwrap();
+    source.write(b"remote replay");
+    let snapshot = source.snapshot().unwrap();
+    let split = snapshot.len() / 2;
+    let replay_flags = pm_protocol::terminal_frame::FLAG_REPLAY
+        | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+        | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY;
     worker
         .send(tungstenite::Message::Binary(
             pm_protocol::terminal_frame::encode_output(
                 1,
-                pm_protocol::terminal_frame::FLAG_REPLAY
-                    | pm_protocol::terminal_frame::FLAG_REPLAY_START,
-                b"remote ",
+                replay_flags | pm_protocol::terminal_frame::FLAG_REPLAY_START,
+                &snapshot[..split],
             ),
         ))
         .await
         .unwrap();
-    terminal_wait_for_text(&mut browser, b"remote ").await;
+    let first_chunk = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            let message = browser.next().await.unwrap().unwrap();
+            let tungstenite::Message::Binary(frame) = message else {
+                continue;
+            };
+            if let Some(pm_protocol::terminal_frame::TerminalFrame::Output {
+                generation,
+                flags,
+                data,
+            }) = pm_protocol::terminal_frame::decode(&frame)
+            {
+                assert_eq!(generation, 1);
+                assert_eq!(
+                    flags,
+                    replay_flags | pm_protocol::terminal_frame::FLAG_REPLAY_START
+                );
+                break data.to_vec();
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(first_chunk, snapshot[..split]);
     worker
         .send(tungstenite::Message::Binary(
             pm_protocol::terminal_frame::encode_output(
                 1,
-                pm_protocol::terminal_frame::FLAG_REPLAY
-                    | pm_protocol::terminal_frame::FLAG_REPLAY_END,
-                b"replay",
+                replay_flags | pm_protocol::terminal_frame::FLAG_REPLAY_END,
+                &snapshot[split..],
             ),
         ))
         .await
         .unwrap();
-    terminal_wait_for_replay(&mut browser).await;
+    let mut restored_bytes = first_chunk;
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            let message = browser.next().await.unwrap().unwrap();
+            let tungstenite::Message::Binary(frame) = message else {
+                continue;
+            };
+            if let Some(pm_protocol::terminal_frame::TerminalFrame::Output {
+                generation,
+                flags,
+                data,
+            }) = pm_protocol::terminal_frame::decode(&frame)
+            {
+                assert_eq!(generation, 1);
+                assert_eq!(
+                    flags,
+                    replay_flags | pm_protocol::terminal_frame::FLAG_REPLAY_END
+                );
+                restored_bytes.extend_from_slice(data);
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(restored_bytes, snapshot);
+    let restored = pm_ghostty::Terminal::restore(&restored_bytes).unwrap();
+    assert!(restored
+        .visible_text()
+        .unwrap()
+        .join("\n")
+        .contains("remote replay"));
 
     browser
         .send(tungstenite::Message::Binary(
@@ -3622,6 +3697,7 @@ async fn reenrolling_a_host_takes_an_access_token_not_the_cookie() {
     let worker_id = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enrollment,
             credential: "",
             peer_key_hash: &host_key.key_hash().to_hex(),
@@ -3712,6 +3788,7 @@ async fn a_redeemed_reenrollment_rebinds_the_host_and_locks_the_old_key_out() {
     let (enrollment, _) = env.daemon.create_worker_enrollment("build-box").unwrap();
     fn hello<'a>(token: &'a str, key: &'a str) -> pm_daemon::daemon::WorkerHello<'a> {
         pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: token,
             credential: "",
             peer_key_hash: key,
@@ -3808,6 +3885,7 @@ async fn enrolling_a_dialed_host_records_its_address_and_needs_one() {
 
     let registered = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-dmz",
@@ -3861,6 +3939,7 @@ async fn enrolling_a_dialed_host_records_its_address_and_needs_one() {
 async fn worker_enroll_mints_a_single_use_token_with_a_bounded_expiry() {
     fn hello(token: &str) -> pm_daemon::daemon::WorkerHello<'_> {
         pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: token,
             credential: "",
             peer_key_hash: "key-build-box.local",
@@ -5795,6 +5874,7 @@ async fn dropping_a_bucket_host_over_http_moves_pinned_projects_to_the_named_rep
         let (enrollment, _) = daemon.create_worker_enrollment(name).unwrap();
         daemon
             .register_worker_connection(pm_daemon::daemon::WorkerHello {
+                snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
                 enrollment_token: &enrollment,
                 credential: "",
                 peer_key_hash: key,
@@ -5864,6 +5944,7 @@ async fn project_worker_path_http_sets_clears_validates_and_updates_payloads() {
     let (enrollment, _) = daemon.create_worker_enrollment("laptop").unwrap();
     let worker_id = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enrollment,
             credential: "",
             peer_key_hash: "key-host.local",

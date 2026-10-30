@@ -7,6 +7,7 @@ import {
   TERMINAL_FLAG_REPLAY,
   TERMINAL_FLAG_REPLAY_END,
   TERMINAL_FLAG_REPLAY_SNAPSHOT,
+  TERMINAL_FLAG_REPLAY_GHOSTTY,
   TERMINAL_FLAG_REPLAY_START,
   TERMINAL_TAG_OUTPUT,
   TERMINAL_TAG_RESIZE,
@@ -14,6 +15,7 @@ import {
   TERMINAL_TAG_INPUT_SUBMIT,
   TERMINAL_TAG_RESYNC,
   TERMINAL_TAG_HISTORY,
+  TERMINAL_CLOSE_INCOMPATIBLE,
 } from "./terminalFrame";
 
 class FakeWebSocket {
@@ -71,6 +73,20 @@ describe("TerminalSocket", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("shows compatibility refusal immediately and waits for an explicit retry", () => {
+    const statuses: TerminalStreamStatus[] = [];
+    const socket = new TerminalSocket(connect, 7n, 3n, () => {}, () => {});
+    socket.subscribe((status) => statuses.push(status));
+    FakeWebSocket.instances[0]!.onclose?.({ code: TERMINAL_CLOSE_INCOMPATIBLE, reason: "Reload to update Ghostty" });
+    expect(statuses.at(-1)).toEqual({ phase: "reconnecting", canRetry: true, lastError: "Reload to update Ghostty" });
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(statuses.at(-1)?.phase).toBe("reconnecting");
+    socket.retry();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    socket.close();
   });
 
   it("buffers replay before painting and sends the latest resize after it ends", () => {
@@ -245,6 +261,19 @@ describe("TerminalSocket", () => {
     expect(frames.at(-1)).toEqual({ replay: true, snapshot: false });
     expect(socket.stats().lastReplaySnapshot).toBe(false);
     expect(socket.stats().socketsOpened).toBe(2);
+    socket.close();
+  });
+
+  it("preserves the binary snapshot codec across chunks and clears it for live output", () => {
+    const frames: Array<{ ghosttySnapshot?: boolean; replay: boolean }> = [];
+    const socket = new TerminalSocket(connect, 7n, 3n, (frame) => frames.push(frame), () => {});
+    const wire = FakeWebSocket.instances[0];
+    wire.output(3n, TERMINAL_FLAG_REPLAY | TERMINAL_FLAG_REPLAY_START | TERMINAL_FLAG_REPLAY_GHOSTTY, [0]);
+    wire.output(3n, TERMINAL_FLAG_REPLAY | TERMINAL_FLAG_REPLAY_END | TERMINAL_FLAG_REPLAY_GHOSTTY, [255]);
+    expect(frames[0]).toMatchObject({ ghosttySnapshot: true, replay: true, data: new Uint8Array([0, 255]) });
+    wire.output(3n, 0, [65]);
+    expect(frames[1]).toMatchObject({ replay: false });
+    expect(frames[1]?.ghosttySnapshot).toBeUndefined();
     socket.close();
   });
 

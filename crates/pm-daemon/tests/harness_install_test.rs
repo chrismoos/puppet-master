@@ -11,6 +11,7 @@ fn enroll(env: &TestEnv, protocol_version: u32) -> pm_daemon::daemon::WorkerRegi
     let reg = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "installer-host-key",

@@ -20,6 +20,7 @@ fn enroll(
     let (token, _expires) = env.daemon.create_worker_enrollment(name).unwrap();
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: &format!("key-{name}"),
@@ -201,6 +202,7 @@ async fn a_host_that_reported_no_home_still_says_the_path_is_unset() {
     let reg = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-rootless",

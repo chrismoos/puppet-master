@@ -69,7 +69,10 @@ export class WorkspaceTerminal {
       host as HTMLDivElement,
       themeController.currentGhosttyTheme(),
       () => this.scheduleResize(),
-      () => onIssue?.("unavailable"),
+      () => {
+        this.handle?.close();
+        onIssue?.("unavailable");
+      },
       () => {
         onIssue?.(null);
         this.scheduleResize();

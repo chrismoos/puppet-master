@@ -2292,6 +2292,7 @@ async fn supervisor_send_input_distinguishes_busy_and_transport_failure() {
     let worker = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enrollment,
             credential: "",
             peer_key_hash: "key-remote",
@@ -2408,6 +2409,7 @@ async fn idle_codex_child_with_input_stream(
     let worker = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enrollment,
             credential: "",
             peer_key_hash: "key-remote",
@@ -2593,6 +2595,7 @@ async fn supervisor_input_connects_a_terminal_stream_nobody_has_opened() {
     let worker = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enrollment,
             credential: "",
             peer_key_hash: "key-remote",
@@ -4169,6 +4172,7 @@ fn enroll_host(env: &TestEnv, label: &str) -> pm_daemon::daemon::WorkerRegistrat
     let (token, _expires) = env.daemon.create_worker_enrollment(label).unwrap();
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-host.local",

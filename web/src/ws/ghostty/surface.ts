@@ -915,6 +915,20 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   }
 
+  restoreSnapshot(data: Uint8Array, onParsed?: () => void): void {
+    if (this.disposed) return;
+    this.resetCount += 1;
+    this.cancelSynchronizedRenderTimer();
+    this.lastMouseMotionData = "";
+    this.core.restoreSnapshot(data);
+    this.synchronizeMouseTrackingState();
+    this.cursorOn = true;
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    this.requestRender();
+    onParsed?.();
+  }
+
   setTheme(theme: GhosttyTheme): void {
     if (this.disposed) return;
     this.theme = theme;

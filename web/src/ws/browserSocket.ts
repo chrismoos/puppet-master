@@ -1,6 +1,8 @@
+import { TERMINAL_CLOSE_INCOMPATIBLE } from "@puppet-master/client-core/ws/terminalFrame";
+import ghosttyRevision from "./ghostty/vendor/VERSION?raw";
 import { WS_CLOSE_UNAUTHENTICATED } from "@puppet-master/client-core/ws/client";
 import type { SocketConnector, SocketLike } from "@puppet-master/client-core/platform";
-import { UnauthenticatedError } from "../api/token";
+import { authedFetch, UnauthenticatedError } from "../api/token";
 import { deferredSocket, WS_CLOSE_LOCAL_FAILURE } from "./deferredSocket";
 import { mintSocketTicket, withTicket } from "./socketTicket";
 
@@ -14,17 +16,33 @@ import { mintSocketTicket, withTicket } from "./socketTicket";
  * jar cannot open an agent's terminal with a cookie it did not have to be able
  * to read.
  */
+class TerminalCompatibilityError extends Error {}
+
 export const browserSocketConnector: SocketConnector = (path, subprotocol) =>
   deferredSocket(
     async () => {
-      const ticket = await mintSocketTicket(path);
+      const terminalPath = /^\/ws\/terminal\/\d+\?/.test(path)
+        ? `${path}&ghostty=${encodeURIComponent(`ghostty-vt:${ghosttyRevision.trim()}:pm-v1`)}`
+        : path;
+      const terminal = /^\/ws\/terminal\/(\d+)\?/.exec(terminalPath);
+      if (terminal) {
+        const compatibility = new URLSearchParams(terminalPath.split("?", 2)[1]).get("ghostty")!;
+        const response = await authedFetch(`/api/terminals/${terminal[1]}/snapshot-compatibility?ghostty=${encodeURIComponent(compatibility)}`);
+        if (!response.ok) {
+          const message = await response.text();
+          if (response.status === 409) throw new TerminalCompatibilityError(message);
+          throw new Error(message);
+        }
+      }
+      const ticket = await mintSocketTicket(terminalPath);
       const scheme = location.protocol === "https:" ? "wss://" : "ws://";
-      const url = `${scheme}${location.host}${ticket ? withTicket(path, ticket) : path}`;
+      const url = `${scheme}${location.host}${ticket ? withTicket(terminalPath, ticket) : terminalPath}`;
       return new WebSocket(url, subprotocol) as unknown as SocketLike;
     },
     // A ticket the signed-out cannot mint has to read as the daemon refusing
     // the socket, or the client reconnects against a session that is gone
     // instead of asking the user to sign in.
     (err) =>
-      err instanceof UnauthenticatedError ? WS_CLOSE_UNAUTHENTICATED : WS_CLOSE_LOCAL_FAILURE,
+      err instanceof UnauthenticatedError ? WS_CLOSE_UNAUTHENTICATED
+        : err instanceof TerminalCompatibilityError ? TERMINAL_CLOSE_INCOMPATIBLE : WS_CLOSE_LOCAL_FAILURE,
   );

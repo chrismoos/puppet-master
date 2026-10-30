@@ -1883,6 +1883,7 @@ message WorkerRegister {
   // what an operator passes to that runtime to read its log or restart
   // it. Empty off a container.
   string container = 13;
+  string snapshot_compatibility = 14;
 }
 
 // One directory share a worker currently serves, and the loopback port
@@ -2050,6 +2051,7 @@ message ControllerAttach {
   uint64 replay_bytes = 5;
   uint32 cols = 6;
   uint32 rows = 7;
+  string snapshot_compatibility = 8;
 }
 
 // Asks the worker to stop relaying a session's PTY (no viewer is

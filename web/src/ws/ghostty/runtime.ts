@@ -10,6 +10,8 @@ interface TypeField {
 }
 
 interface TypeLayout {
+  readonly underlying?: string;
+  readonly type?: string;
   readonly size: number;
   readonly align: number;
   readonly fields: Readonly<Record<string, TypeField>>;
@@ -40,7 +42,8 @@ export class GhosttyRuntime {
     const bytes = new Uint8Array(memory.buffer);
     let end = jsonPointer;
     while (end < bytes.length && bytes[end] !== 0) end += 1;
-    this.layouts = JSON.parse(textDecoder.decode(bytes.subarray(jsonPointer, end))) as TypeLayouts;
+    const manifest = JSON.parse(textDecoder.decode(bytes.subarray(jsonPointer, end))) as { types: TypeLayouts };
+    this.layouts = manifest.types;
   }
 
   static async load(): Promise<GhosttyRuntime> {
@@ -82,14 +85,14 @@ export class GhosttyRuntime {
   }
 
   alloc(size: number): number {
-    const pointer = this.call("ghostty_wasm_alloc_u8_array", size);
+    const pointer = this.call("ghostty_wasm_alloc", size);
     if (pointer === 0) throw new Error(`libghostty-vt failed to allocate ${size} bytes`);
     new Uint8Array(this.memory.buffer, pointer, size).fill(0);
     return pointer;
   }
 
   free(pointer: number, size: number): void {
-    if (pointer !== 0) this.call("ghostty_wasm_free_u8_array", pointer, size);
+    if (pointer !== 0) this.call("ghostty_wasm_free", pointer, size);
   }
 
   allocOpaque(): number {
@@ -145,7 +148,7 @@ export class GhosttyRuntime {
     if (!field) throw new Error(`libghostty-vt field is unavailable: ${structName}.${fieldName}`);
     const view = this.memoryDataView();
     const offset = pointer + field.offset;
-    switch (field.type) {
+    switch (this.layouts[field.type]?.underlying ?? this.layouts[field.type]?.type ?? field.type) {
       case "bool":
       case "u8":
         view.setUint8(offset, value);
@@ -173,7 +176,7 @@ export class GhosttyRuntime {
     if (!field) throw new Error(`libghostty-vt field is unavailable: ${structName}.${fieldName}`);
     const view = this.memoryDataView();
     const offset = pointer + field.offset;
-    switch (field.type) {
+    switch (this.layouts[field.type]?.underlying ?? this.layouts[field.type]?.type ?? field.type) {
       case "bool":
       case "u8":
         return view.getUint8(offset);

@@ -24,6 +24,9 @@ pub const FLAG_REPLAY_END: u8 = 0x04;
 /// The replay payload is a serialized terminal state snapshot rather
 /// than a raw scrollback tail; the client can skip repaint workarounds.
 pub const FLAG_REPLAY_SNAPSHOT: u8 = 0x08;
+pub const FLAG_REPLAY_GHOSTTY: u8 = 0x10;
+pub const GHOSTTY_SNAPSHOT_MAGIC: &[u8] = b"GHOSTSNP";
+pub const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 
 pub const MAX_REPLAY_CHUNK_BYTES: usize = 32 * 1024;
 

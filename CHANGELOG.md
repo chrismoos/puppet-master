@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- [Web] Restore terminals with the same Ghostty engine used on their worker, preserving both screens and in-progress output across reconnects.
+Migration: Update workers with the controller before opening their terminals, and reload older browser tabs.
+
 - [Web] Draw terminal block and shade characters as seamless cell graphics, matching native Ghostty progress bars.
 
 - [Web] Keep terminal colors and text styles intact after resizing or reconnecting.

@@ -47,6 +47,42 @@ describe("Ghostty terminal core", () => {
 
   afterAll(() => vi.unstubAllGlobals());
 
+  it("restores native backend state and continues its unfinished parser", async () => {
+    const bytes = new Uint8Array(await readFile(new URL("../../../../crates/pm-ghostty/testdata/native-state.snapshot", import.meta.url)));
+    const core = await createCore();
+    core.write("stale browser state");
+    core.restoreSnapshot(bytes);
+    expect(core.isAlternateScreen()).toBe(true);
+    expect(core.mouseTrackingMode()).toBe("any");
+    expect(core.snapshot().rowData[0]?.text).toContain("alternate state");
+    expect(core.cursorPosition()).toEqual({ x: 4, y: 2 });
+    core.write(";7mcontinued");
+    const snapshot = core.snapshot();
+    expect(snapshot.rowData[2]?.text).toContain("    continued");
+    expect(snapshot.rowData[2]?.cells[4]).toMatchObject({
+      foreground: { r: 9, g: 8, b: 7 }, background: { r: 10, g: 20, b: 30 },
+      bold: true, italic: true, underline: true,
+    });
+    core.write("\x1b[?1049l");
+    expect(core.snapshot().rowData[0]?.text).toContain("primary state");
+  });
+
+  it("rejects corrupt, truncated, and trailing snapshot data without replacing the current terminal", async () => {
+    const bytes = new Uint8Array(await readFile(new URL("../../../../crates/pm-ghostty/testdata/native-state.snapshot", import.meta.url)));
+    const corrupt = bytes.slice();
+    corrupt[corrupt.length - 1] ^= 1;
+    const trailing = new Uint8Array(bytes.length + 1);
+    trailing.set(bytes);
+    const core = await createCore();
+    core.write("keep this screen");
+    for (const invalid of [corrupt, bytes.subarray(0, bytes.length - 1), trailing]) {
+      expect(() => core.restoreSnapshot(invalid)).toThrow();
+      expect(core.snapshot().rowData[0]?.text).toContain("keep this screen");
+    }
+    core.write("!");
+    expect(core.snapshot().rowData[0]?.text).toContain("keep this screen!");
+  });
+
   it("parses UTF-8 text and ANSI colors into a render snapshot", async () => {
     const core = await createCore();
     core.write(new TextEncoder().encode("Hello \u{1f642}\u001b[31mred"));

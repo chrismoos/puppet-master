@@ -1,0 +1,10 @@
+Dimensions: 40 columns, 8 rows.
+Active screen: alternate.
+Modes: any-event mouse tracking, SGR mouse encoding, bracketed paste.
+Row 0: alternate state
+Cursor before continuation: column 4, row 2 (zero-based).
+Pending bytes: ESC [ 38 ; 2 ; 9 ; 8
+Continuation bytes: ;7mcontinued
+Row 2 after continuation:     continued
+Continuation style: foreground RGB(9,8,7), background RGB(10,20,30), bold, italic, underline.
+Primary row 0 after leaving alternate screen: primary state

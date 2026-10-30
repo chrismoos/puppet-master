@@ -43,6 +43,7 @@ export function writeTerminalFrame<Viewport>(
   onParsed?: (viewport: Viewport) => void,
   shouldRestore: () => boolean = () => true,
 ): void {
+  if (frame.ghosttySnapshot) throw new Error("This terminal viewer cannot restore Ghostty binary snapshots");
   if (!frame.replay) {
     terminal.write(frame.data, () => {
       if (shouldRestore()) restoreViewport(viewport);

@@ -705,6 +705,7 @@ async fn remote_share_env(protocol_version: u32) -> RemoteShareEnv {
     let (enroll, _) = daemon.create_worker_enrollment("laptop").unwrap();
     let mut reg = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enroll,
             credential: "",
             peer_key_hash: &identity.key_hash().to_hex(),
@@ -1143,6 +1144,7 @@ async fn served_remote_share_with(
     let (enroll, _) = daemon.create_worker_enrollment("laptop").unwrap();
     let mut reg = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enroll,
             credential: "",
             peer_key_hash: &identity.key_hash().to_hex(),

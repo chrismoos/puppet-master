@@ -8,7 +8,15 @@ pub mod worker_frame;
 /// capabilities a peer may use, not a compatibility boundary: a controller
 /// registers a worker announcing any version and adapts to what that
 /// version supports.
-pub const WORKER_PROTOCOL_VERSION: u32 = 23;
+pub const WORKER_PROTOCOL_VERSION: u32 = 24;
+pub const WORKER_PROTOCOL_GHOSTTY_SNAPSHOT: u32 = 24;
+pub const GHOSTTY_SNAPSHOT_COMPATIBILITY: &str =
+    "ghostty-vt:93404a48a9a8bf265bb1671e0e6d9985322f6682:pm-v1";
+
+pub fn ghostty_snapshot_compatible(protocol_version: u32, identity: &str) -> bool {
+    protocol_version >= WORKER_PROTOCOL_GHOSTTY_SNAPSHOT
+        && identity == GHOSTTY_SNAPSHOT_COMPATIBILITY
+}
 
 /// First protocol in which a worker serves a published directory from a
 /// loopback server it owns. An older worker cannot be asked to, so
@@ -211,7 +219,42 @@ pub fn negotiate_worker_protocol(announced: u32) -> Result<PeerProtocol, Protoco
 
 #[cfg(test)]
 mod protocol_tests {
+    #[test]
+    fn snapshot_identity_matches_native_and_browser_artifacts() {
+        let native = include_str!("../../pm-ghostty/vendor/VERSION").trim();
+        let browser = include_str!("../../../web/src/ws/ghostty/vendor/VERSION").trim();
+        assert_eq!(native, browser);
+        assert_eq!(
+            super::GHOSTTY_SNAPSHOT_COMPATIBILITY,
+            format!("ghostty-vt:{native}:pm-v1")
+        );
+    }
+
     use super::*;
+
+    #[test]
+    fn ghostty_snapshots_require_capability_and_exact_compatibility() {
+        assert!(!ghostty_snapshot_compatible(
+            WORKER_PROTOCOL_GHOSTTY_SNAPSHOT - 1,
+            GHOSTTY_SNAPSHOT_COMPATIBILITY
+        ));
+        assert!(!ghostty_snapshot_compatible(
+            WORKER_PROTOCOL_GHOSTTY_SNAPSHOT,
+            ""
+        ));
+        assert!(!ghostty_snapshot_compatible(
+            WORKER_PROTOCOL_GHOSTTY_SNAPSHOT,
+            "different-engine"
+        ));
+        assert!(ghostty_snapshot_compatible(
+            WORKER_PROTOCOL_GHOSTTY_SNAPSHOT,
+            GHOSTTY_SNAPSHOT_COMPATIBILITY
+        ));
+        assert!(ghostty_snapshot_compatible(
+            WORKER_PROTOCOL_GHOSTTY_SNAPSHOT + 1,
+            GHOSTTY_SNAPSHOT_COMPATIBILITY
+        ));
+    }
 
     #[test]
     fn every_announced_version_is_accepted() {

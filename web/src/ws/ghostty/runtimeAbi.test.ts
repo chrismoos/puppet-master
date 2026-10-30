@@ -29,7 +29,7 @@ describe("vendored libghostty-vt runtime", () => {
     const view = runtime.view(size, 8);
     const revision = new TextDecoder().decode(runtime.bytes(view.getUint32(0, true), view.getUint32(4, true)));
     expect(revision).toBe(pinnedRevision);
-    expect(runtime.layout("GhosttyTerminalOptions").fields.cols?.type).toBe("u16");
+    expect(runtime.layout("GhosttyTerminalScrollbar").fields.offset?.type).toBe("u64");
     const opaque = runtime.allocOpaque();
     expect(opaque).not.toBe(0);
     runtime.freeOpaque(opaque);

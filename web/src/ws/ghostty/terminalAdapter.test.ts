@@ -30,6 +30,7 @@ function surfaceDouble() {
     resize: (cols: number, rows: number) => events.push(`resize:${cols}x${rows}`),
     write: (data: string | Uint8Array) => events.push(`write:${typeof data === "string" ? data : data.length}`),
     reset: () => events.push("reset"),
+    restoreSnapshot: (_data: Uint8Array, callback?: () => void) => callback?.(),
     resetAndWrite: (data: string | Uint8Array) => events.push(`reset-write:${data.length}`),
     dispose: () => events.push("dispose"),
     getSelection: () => "",
@@ -114,6 +115,23 @@ describe("GhosttyTerminalAdapter", () => {
 
     expect(stub.events.filter((event) => event === "focus")).toHaveLength(moved ? 0 : 1);
     adapter.dispose();
+  });
+
+  it("reports a rejected snapshot and stops applying subsequent output", async () => {
+    const pending = deferred<GhosttyTerminalSurface>();
+    vi.mocked(GhosttyTerminalSurface.create).mockReturnValueOnce(pending.promise);
+    const issue = vi.fn();
+    const adapter = new GhosttyTerminalAdapter(mount(), theme, () => {}, issue, () => {}, () => {}, () => true);
+    const stub = surfaceDouble();
+    stub.surface.restoreSnapshot = () => { throw new Error("Invalid terminal snapshot"); };
+    pending.resolve(stub.surface);
+    await pending.promise;
+    await Promise.resolve();
+    expect(() => adapter.restoreSnapshot(new Uint8Array([0]))).toThrow("Invalid terminal snapshot");
+    expect(issue).toHaveBeenCalledWith(expect.objectContaining({ message: "Invalid terminal snapshot" }));
+    expect(stub.events).toContain("dispose");
+    adapter.write("must not reach the old parser");
+    expect(stub.events.some((event) => event.startsWith("write:"))).toBe(false);
   });
 
   it("keeps replayed command state while suppressing stale clipboard writes", async () => {

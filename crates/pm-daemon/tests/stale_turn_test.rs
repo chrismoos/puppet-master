@@ -426,6 +426,7 @@ fn enroll_remote_worker(env: &TestEnv) -> pm_daemon::daemon::WorkerRegistration 
     let (token, _expires) = env.daemon.create_worker_enrollment("host").unwrap();
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-host.local",
@@ -445,6 +446,7 @@ fn enroll_remote_worker(env: &TestEnv) -> pm_daemon::daemon::WorkerRegistration 
 fn reconnect_remote_worker(env: &TestEnv, credential: &str, live_sessions: &[u64]) {
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential,
             peer_key_hash: "key-host.local",

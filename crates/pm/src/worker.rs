@@ -570,6 +570,7 @@ fn register_frame(
     rt: &WorkerRuntime,
 ) -> anyhow::Result<WorkerMsg> {
     Ok(WorkerMsg::Register {
+        snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY.into(),
         protocol_version: pm_protocol::WORKER_PROTOCOL_VERSION,
         enrollment_token: enroll.unwrap_or_default().to_string(),
         credential: stored.credential.clone().unwrap_or_default(),
@@ -1953,12 +1954,20 @@ async fn handle_command(
             }
         }
         ControllerMsg::TerminalAttach {
+            snapshot_compatibility,
             terminal_id,
             generation,
             token,
             replay_bytes,
             size: (cols, rows),
         } => {
+            if snapshot_compatibility != pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY {
+                warn!(
+                    terminal = terminal_id,
+                    "terminal attach requires a controller with matching Ghostty support"
+                );
+                return;
+            }
             if cols > 0 && rows > 0 {
                 let _ = mux.resize(terminal_id, cols, rows);
             }
@@ -2729,7 +2738,8 @@ fn start_forwarding(
         for frame in pm_protocol::terminal_frame::replay_frames_with_flags(
             generation,
             &replay,
-            pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
+            pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+                | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY,
         ) {
             if sink.send(Message::Binary(frame)).await.is_err() {
                 return;
@@ -3463,6 +3473,7 @@ mod tests {
         let mux = Arc::new(mux);
         sleeping_terminal(&mux, 9);
         let attach = |size| ControllerMsg::TerminalAttach {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY.into(),
             terminal_id: 9,
             generation: 1,
             token: "attach-token".into(),
@@ -3474,6 +3485,31 @@ mod tests {
         assert_eq!(mux.current_size(9).unwrap(), (150, 30));
         dispatch(&mux, attach((0, 0))).await;
         assert_eq!(mux.current_size(9).unwrap(), (150, 30));
+        let _ = mux.kill(9);
+    }
+
+    #[tokio::test]
+    async fn an_incompatible_controller_cannot_resize_or_attach_a_terminal() {
+        let (mux, _channels) = Mux::new();
+        let mux = Arc::new(mux);
+        sleeping_terminal(&mux, 9);
+        let original_size = mux.current_size(9).unwrap();
+        for identity in ["", "different-ghostty"] {
+            let sent = dispatch(
+                &mux,
+                ControllerMsg::TerminalAttach {
+                    snapshot_compatibility: identity.into(),
+                    terminal_id: 9,
+                    generation: 1,
+                    token: "unused".into(),
+                    replay_bytes: 0,
+                    size: (150, 30),
+                },
+            )
+            .await;
+            assert!(sent.is_empty());
+            assert_eq!(mux.current_size(9).unwrap(), original_size);
+        }
         let _ = mux.kill(9);
     }
 

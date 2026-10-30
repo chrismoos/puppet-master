@@ -2142,6 +2142,10 @@ pub struct HarnessStatus {
 
 /// Worker-plane message from a remote worker up to the controller.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Registration metadata is exchanged only when a worker connects."
+)]
 pub enum WorkerMsg {
     HarnessStatus {
         req_id: u64,
@@ -2149,6 +2153,7 @@ pub enum WorkerMsg {
     },
     Register {
         protocol_version: u32,
+        snapshot_compatibility: String,
         enrollment_token: String,
         credential: String,
         hostname: String,
@@ -2500,6 +2505,7 @@ pub enum ControllerMsg {
         generation: u64,
     },
     TerminalAttach {
+        snapshot_compatibility: String,
         terminal_id: u64,
         generation: u64,
         token: String,

@@ -12,6 +12,7 @@ export const TERMINAL_TAG_RESYNC = 0x06;
 export const TERMINAL_FLAG_REPLAY = 0x01;
 export const TERMINAL_FLAG_REPLAY_START = 0x02;
 export const TERMINAL_FLAG_REPLAY_SNAPSHOT = 0x08;
+export const TERMINAL_FLAG_REPLAY_GHOSTTY = 0x10;
 export const TERMINAL_FLAG_REPLAY_END = 0x04;
 
 const GENERATION_OFFSET = 1;
@@ -165,3 +166,5 @@ export function encodeTerminalOwnership(state: TerminalOwnershipFrame): ArrayBuf
   view.setUint16(OWNERSHIP_ROWS_OFFSET, state.rows, true);
   return frame;
 }
+
+export const TERMINAL_CLOSE_INCOMPATIBLE = 4412;

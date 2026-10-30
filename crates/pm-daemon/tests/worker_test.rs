@@ -64,6 +64,7 @@ fn enroll(env: &TestEnv) -> pm_daemon::daemon::WorkerRegistration {
     let (token, _expires) = env.daemon.create_worker_enrollment("laptop").unwrap();
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-host.local",
@@ -86,6 +87,7 @@ fn enroll_second_machine(env: &TestEnv) -> pm_daemon::daemon::WorkerRegistration
     let (token, _expires) = env.daemon.create_worker_enrollment("desk-vm").unwrap();
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-desk.local",
@@ -120,6 +122,7 @@ fn reconnect_with_terminals(
 ) -> pm_daemon::daemon::WorkerRegistration {
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential,
             peer_key_hash: "key-host.local",
@@ -295,6 +298,7 @@ async fn remote_project_cwd_override_applies_to_one_session_and_survives_restart
     let (token, _) = daemon.create_worker_enrollment("remote").unwrap();
     let mut remote = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-remote",
@@ -475,6 +479,7 @@ async fn controller_restart_shows_eligible_remote_session_offline_then_reconcile
     let (enrollment, _) = daemon.create_worker_enrollment("remote-host").unwrap();
     let mut registration = daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &enrollment,
             credential: "",
             peer_key_hash: "key-host.local",
@@ -610,6 +615,7 @@ async fn controller_restart_shows_eligible_remote_session_offline_then_reconcile
     }];
     let mut reconnected = reopened
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential: &credential,
             peer_key_hash: "key-host.local",
@@ -685,6 +691,7 @@ async fn controller_restart_shows_eligible_remote_session_offline_then_reconcile
     }];
     let survivor = reopened
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential: &credential,
             peer_key_hash: "key-host.local",
@@ -1098,6 +1105,7 @@ fn enroll_at_protocol(
     let (token, _expires) = env.daemon.create_worker_enrollment("older").unwrap();
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-older.local",
@@ -1503,6 +1511,7 @@ async fn registration_records_the_reported_pm_build_and_a_missing_one_reads_as_u
     let versioned = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-host.local",
@@ -1526,6 +1535,7 @@ async fn registration_records_the_reported_pm_build_and_a_missing_one_reads_as_u
     let reconnected = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential: &versioned.credential,
             peer_key_hash: "key-host.local",
@@ -1551,6 +1561,7 @@ async fn registration_records_the_reported_pm_build_and_a_missing_one_reads_as_u
     let versionless = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-old.local",
@@ -2662,6 +2673,7 @@ async fn re_enrolling_rotates_a_host_in_place_and_keeps_what_points_at_it() {
     let second = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "rotated-key",
@@ -2725,6 +2737,7 @@ async fn enrolling_a_machine_that_is_already_a_host_is_refused_and_keeps_its_pat
     let err = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-host.local",
@@ -2783,6 +2796,7 @@ async fn a_rotated_host_stops_accepting_its_previous_key_and_credential() {
     let second = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "rotated-key",
@@ -2802,6 +2816,7 @@ async fn a_rotated_host_stops_accepting_its_previous_key_and_credential() {
     let stale_key = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential: &second.credential,
             peer_key_hash: "key-host.local",
@@ -2820,6 +2835,7 @@ async fn a_rotated_host_stops_accepting_its_previous_key_and_credential() {
     let stale_credential = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential: &first.credential,
             peer_key_hash: "rotated-key",
@@ -2850,6 +2866,7 @@ async fn registration_without_a_proven_key_is_refused() {
     let unauthenticated = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential: &registered.credential,
             peer_key_hash: "",
@@ -2871,6 +2888,7 @@ async fn registration_without_a_proven_key_is_refused() {
     let unknown_key = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: "",
             credential: &registered.credential,
             peer_key_hash: "some-other-key",
@@ -3097,6 +3115,7 @@ async fn spawn_initial_size_is_gated_on_worker_protocol_version() {
     let mut old_reg = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-old.local",
@@ -3147,6 +3166,7 @@ async fn spawn_initial_size_is_gated_on_worker_protocol_version() {
     let mut new_reg = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token2,
             credential: "",
             peer_key_hash: "key-new.local",
@@ -3224,6 +3244,7 @@ async fn enrolling_or_replacing_a_host_tells_the_user() {
         .unwrap();
     env.daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-somebody-else",

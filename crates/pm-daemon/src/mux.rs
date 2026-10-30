@@ -147,6 +147,8 @@ pub enum MuxError {
     Spawn(String),
     #[error("pty: {0}")]
     Pty(String),
+    #[error("terminal snapshot failed: {0}")]
+    Snapshot(String),
 }
 
 #[derive(Debug)]
@@ -593,7 +595,12 @@ impl Mux {
         let retained = entry.ring.lock().unwrap();
         let output = entry.out_tx.subscribe();
         Ok(TerminalSnapshot {
-            bytes: Bytes::from(retained.model.snapshot()),
+            bytes: Bytes::from(
+                retained
+                    .model
+                    .try_snapshot()
+                    .map_err(|error| MuxError::Snapshot(error.to_string()))?,
+            ),
             size: retained.size(),
             output,
         })
@@ -1819,7 +1826,8 @@ mod tests {
         retained.push(b"one\x1b]7501;?\x1b\\two\x1b]7501;state=working\x07three");
         let replay = retained.model.snapshot();
         assert!(find_subsequence(&replay, b"7501").is_none());
-        assert!(find_subsequence(&replay, b"onetwothree").is_some());
+        let restored = crate::term_model::TerminalModel::restore(&replay).unwrap();
+        assert!(restored.visible_text().join("").contains("onetwothree"));
     }
 
     #[tokio::test]

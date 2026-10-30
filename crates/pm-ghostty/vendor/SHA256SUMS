@@ -1,0 +1,9 @@
+6c411b5ea9005ba44826cf16b999eab0682e5a86121a336171c39b145010b395  src/bridge.c
+031adf743464cc70590267523b129ce2b44de9cafa2a80b676178ce57c7f6838  vendor/aarch64-apple-darwin/libghostty-vt-static.a
+53d6fc8589fd508eb46b548d4b27193d661a7012112631ca416d1cea982bcd6b  vendor/aarch64-apple-darwin/libpm-ghostty-bridge.a
+7dcfa9a46438b31df97ac26e7da0723340c02e567d26013339a6266686329c3c  vendor/aarch64-unknown-linux-gnu/libghostty-vt-static.a
+88438622ac598d6fa3a91b03423ed9f4ab19e582ef8374d36a2bad58d9400f7c  vendor/aarch64-unknown-linux-gnu/libpm-ghostty-bridge.a
+f89ce492d4184f73a8e43a608ccf5d146e11cdafd15f037d6d03cfac667a7d3e  vendor/x86_64-apple-darwin/libghostty-vt-static.a
+0eb64fdb1d05239143e10a9a64ca808453047a5ba87c695dac6504f4e3397451  vendor/x86_64-apple-darwin/libpm-ghostty-bridge.a
+bd6f976af6f16cfadcc3dd9c40f2fe25eedf74994f6dea74e0c3b662cdedc9bb  vendor/x86_64-unknown-linux-gnu/libghostty-vt-static.a
+8a0b57421b3a2b323eb1286e281b82f2c77d4e64fe751ef79c70d806c6495b98  vendor/x86_64-unknown-linux-gnu/libpm-ghostty-bridge.a

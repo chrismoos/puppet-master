@@ -17,6 +17,14 @@ function recordingTarget(): { writes: RecordedWrite[]; write(data: Uint8Array, c
 }
 
 describe("terminal frame writes", () => {
+  it("rejects binary state before it can enter a VT text viewer", () => {
+    const terminal = { write: vi.fn() };
+    expect(() => writeTerminalFrame(terminal, {
+      data: new Uint8Array([0, 255]), replay: true, ghosttySnapshot: true,
+    }, null, () => {})).toThrow("cannot restore Ghostty binary snapshots");
+    expect(terminal.write).not.toHaveBeenCalled();
+  });
+
   it("passes live output through as one write and restores the viewport after parse", () => {
     const terminal = recordingTarget();
     const restore = vi.fn();

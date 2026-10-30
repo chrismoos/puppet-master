@@ -13,6 +13,10 @@ function terminal() {
       operations.push({ kind: "write", data: typeof data === "string" ? new TextEncoder().encode(data) : data, callback });
       callback?.();
     }),
+    restoreSnapshot: vi.fn((data: Uint8Array, callback?: () => void) => {
+      operations.push({ kind: "snapshot", data });
+      callback?.();
+    }),
     reset: vi.fn(() => operations.push({ kind: "reset" })),
     setReplaying: vi.fn((replaying: boolean) => operations.push({ kind: `replay:${replaying}` })),
     scrollToBottom: vi.fn(),
@@ -21,6 +25,18 @@ function terminal() {
 }
 
 describe("terminal frame writes", () => {
+  it("restores binary snapshots without feeding them to the VT parser", () => {
+    const view = terminal();
+    const data = new Uint8Array([0, 255, 1]);
+    const parsed = vi.fn();
+    writeTerminalFrame(view, { data, replay: true, snapshot: true, ghosttySnapshot: true }, undefined, parsed);
+    expect(view.restoreSnapshot).toHaveBeenCalledWith(data, expect.any(Function));
+    expect(view.write).not.toHaveBeenCalled();
+    expect(view.reset).not.toHaveBeenCalled();
+    expect(view.operations.map(({ kind }) => kind)).toEqual(["replay:true", "snapshot", "replay:false"]);
+    expect(parsed).toHaveBeenCalledOnce();
+  });
+
   it("parses live bytes before acknowledging and preserves a reader's viewport", () => {
     const view = terminal();
     const data = new Uint8Array([1, 2]);

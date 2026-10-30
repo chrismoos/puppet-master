@@ -487,6 +487,7 @@ mod dir_share_path_tests {
 const DIR_SHARE_BIND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub struct WorkerHello<'a> {
+    pub snapshot_compatibility: &'a str,
     pub enrollment_token: &'a str,
     pub credential: &'a str,
     /// The public key the TLS handshake proved this peer holds. Registration
@@ -8402,18 +8403,34 @@ impl Daemon {
         let link = self.terminal_link(id)?;
         let attach = link.viewer_attach(id);
         let guard = crate::workers::ViewerGuard::new(link.clone(), id, terminal.generation);
-        match attach {
-            crate::workers::ViewerAttach::Joined { rx, replay } => Ok((replay, rx, Some(guard))),
+        let (replay, rx) = match attach {
+            crate::workers::ViewerAttach::Failed => {
+                return Err(DaemonError::Rejected(
+                    "terminal snapshot unavailable. Reconnect to refresh terminal state.".into(),
+                ))
+            }
+            crate::workers::ViewerAttach::Joined { rx, replay } => (replay, rx),
             crate::workers::ViewerAttach::Waiting { rx, replay } => {
                 let replay = self.await_terminal_replay(&link, id, replay).await?;
-                Ok((replay, rx, Some(guard)))
+                (replay, rx)
             }
             crate::workers::ViewerAttach::First { rx, replay } => {
                 self.start_terminal_stream(&link, &terminal, 0)?;
                 let replay = self.await_terminal_replay(&link, id, replay).await?;
-                Ok((replay, rx, Some(guard)))
+                (replay, rx)
             }
-        }
+        };
+        let replay = if replay.starts_with(pm_protocol::terminal_frame::GHOSTTY_SNAPSHOT_MAGIC) {
+            let model = crate::term_model::TerminalModel::restore(&replay).map_err(|error| {
+                DaemonError::Rejected(format!("could not restore terminal snapshot: {error}"))
+            })?;
+            bytes::Bytes::from(model.try_snapshot_vt().map_err(|error| {
+                DaemonError::Rejected(format!("could not format terminal snapshot: {error}"))
+            })?)
+        } else {
+            replay
+        };
+        Ok((replay, rx, Some(guard)))
     }
 
     /// Attaches a web viewer, first sizing the PTY to `size` when the viewer
@@ -8472,6 +8489,9 @@ impl Daemon {
             crate::workers::ReplaySource::Parsed(parsed) => WebTerminalReplay::Parsed(parsed),
         };
         match attach {
+            crate::workers::StreamingViewerAttach::Failed => Err(DaemonError::Rejected(
+                "terminal snapshot unavailable. Reconnect to refresh terminal state.".into(),
+            )),
             crate::workers::StreamingViewerAttach::Joined { rx, replay } => {
                 Ok(assemble(WebTerminalReplay::Complete { bytes: replay }, rx))
             }
@@ -8499,6 +8519,21 @@ impl Daemon {
                     "worker terminal stream did not become ready".into(),
                 ))
             }
+        }
+    }
+
+    pub(crate) fn require_terminal_snapshot_compatibility(
+        &self,
+        terminal_id: u64,
+    ) -> Result<(), DaemonError> {
+        let link = self.terminal_link(terminal_id)?;
+        if link.supports_ghostty_snapshot() {
+            Ok(())
+        } else {
+            Err(DaemonError::Rejected(
+                "terminal requires a worker with matching Ghostty support. Update this worker."
+                    .into(),
+            ))
         }
     }
 
@@ -8539,6 +8574,12 @@ impl Daemon {
         terminal: &pm_protocol::domain::Terminal,
         replay_bytes: usize,
     ) -> Result<(), DaemonError> {
+        if !link.supports_ghostty_snapshot() {
+            return Err(DaemonError::Rejected(
+                "terminal requires a worker with matching Ghostty support. Update this worker."
+                    .into(),
+            ));
+        }
         let token = crate::auth::generate_token();
         let token_hash = crate::auth::hash_token(&token);
         if !self
@@ -8550,6 +8591,7 @@ impl Daemon {
             ));
         }
         link.send(ControllerMsg::TerminalAttach {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY.into(),
             terminal_id: terminal.id,
             generation: terminal.generation,
             token,
@@ -9268,6 +9310,7 @@ impl Daemon {
         hello: WorkerHello<'_>,
     ) -> Result<WorkerRegistration, DaemonError> {
         let WorkerHello {
+            snapshot_compatibility,
             enrollment_token,
             credential,
             peer_key_hash,
@@ -9408,6 +9451,7 @@ impl Daemon {
 
         let (link, rx) = self.workers.connect(worker_id);
         link.set_protocol_version(protocol_version);
+        link.set_snapshot_compatibility(snapshot_compatibility.into());
         // A host the controller dials cannot dial back, so its streams are
         // opened from this end too.
         if let Ok(worker) = self.storage.get_worker(worker_id) {

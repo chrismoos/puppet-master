@@ -1639,6 +1639,7 @@ async fn a_review_on_a_worker_reads_that_worker_and_matches_a_local_one() {
     let registration = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-remote",
@@ -1713,6 +1714,7 @@ async fn a_worker_that_cannot_read_the_tree_reports_it_rather_than_answering_emp
     let registration = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-remote",
@@ -1765,6 +1767,7 @@ async fn a_worker_that_predates_the_reader_is_refused_with_the_version_it_needs(
     let registration = env
         .daemon
         .register_worker_connection(pm_daemon::daemon::WorkerHello {
+            snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
             enrollment_token: &token,
             credential: "",
             peer_key_hash: "key-old",

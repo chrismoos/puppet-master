@@ -209,11 +209,27 @@ struct RelayState {
     generation: u64,
     replay_pending: bool,
     replay_started: bool,
+    replay_flags: u8,
+    replay_failed: bool,
+    snapshot_required: bool,
     replay_complete_waiters: Vec<oneshot::Sender<Bytes>>,
     replay_stream_waiters: Vec<mpsc::UnboundedSender<ReplayChunk>>,
     replay: Vec<u8>,
     upstream: Option<mpsc::Sender<Bytes>>,
     stream_epoch: u64,
+}
+
+impl RelayState {
+    fn reject_snapshot(&mut self) -> bool {
+        self.replay_failed = true;
+        self.replay_pending = false;
+        self.replay_started = false;
+        self.replay.clear();
+        self.replay_complete_waiters.clear();
+        self.replay_stream_waiters.clear();
+        self.upstream.take();
+        false
+    }
 }
 
 impl RelaySession {
@@ -240,6 +256,7 @@ impl RelaySession {
 
 /// The result of a viewer attaching through a worker relay.
 pub enum ViewerAttach {
+    Failed,
     /// The first viewer: the caller asks the worker to start relaying and
     /// awaits the replay on this channel.
     First {
@@ -264,6 +281,7 @@ pub struct ReplayChunk {
 }
 
 pub enum StreamingViewerAttach {
+    Failed,
     First {
         rx: broadcast::Receiver<Bytes>,
         replay: ReplaySource,
@@ -291,11 +309,17 @@ pub enum ReplaySource {
 }
 
 /// The mirror's state, carrying at most the history a viewer asked for.
-fn mirror_snapshot(retained: &crate::term_model::Retained, history: Option<usize>) -> Vec<u8> {
-    match history {
-        Some(lines) => retained.model.snapshot_with_history(lines),
-        None => retained.model.snapshot(),
-    }
+fn mirror_snapshot(
+    retained: &crate::term_model::Retained,
+    _history: Option<usize>,
+) -> Option<Vec<u8>> {
+    retained
+        .model
+        .try_snapshot()
+        .map_err(|error| {
+            tracing::warn!(%error, "could not encode terminal snapshot");
+        })
+        .ok()
 }
 
 enum WorkerTransport {
@@ -323,6 +347,7 @@ pub struct WorkerLink {
     fs_seq: AtomicU64,
     /// What the peer announced it can do; 0 until it registers.
     protocol_version: AtomicU64,
+    snapshot_compatibility: Mutex<String>,
     repo_seq: AtomicU64,
     repo_pending: Mutex<HashMap<u64, oneshot::Sender<RepoResponseResult>>>,
     fs_pending: Mutex<HashMap<u64, oneshot::Sender<FsListingResult>>>,
@@ -363,6 +388,7 @@ impl WorkerLink {
             sessions: Mutex::new(HashMap::new()),
             fs_seq: AtomicU64::new(0),
             protocol_version: AtomicU64::new(0),
+            snapshot_compatibility: Mutex::new(String::new()),
             repo_seq: AtomicU64::new(0),
             repo_pending: Mutex::new(HashMap::new()),
             fs_pending: Mutex::new(HashMap::new()),
@@ -413,6 +439,18 @@ impl WorkerLink {
     pub fn set_protocol_version(&self, version: u32) {
         self.protocol_version
             .store(version as u64, Ordering::Relaxed);
+    }
+
+    pub fn set_snapshot_compatibility(&self, identity: String) {
+        *self.snapshot_compatibility.lock().unwrap() = identity;
+    }
+
+    pub fn supports_ghostty_snapshot(&self) -> bool {
+        self.is_local()
+            || pm_protocol::ghostty_snapshot_compatible(
+                self.protocol_version(),
+                &self.snapshot_compatibility.lock().unwrap(),
+            )
     }
 
     pub fn protocol_version(&self) -> u32 {
@@ -750,8 +788,18 @@ impl WorkerLink {
         let replay_flags = pm_protocol::terminal_frame::FLAG_REPLAY
             | pm_protocol::terminal_frame::FLAG_REPLAY_START
             | pm_protocol::terminal_frame::FLAG_REPLAY_END
-            | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT;
-        self.feed_terminal_output(terminal_id, generation, replay_flags, replay);
+            | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+            | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY;
+        if !self.feed_terminal_snapshot_output(
+            terminal_id,
+            generation,
+            stream_epoch,
+            replay_flags,
+            replay,
+        ) {
+            self.disconnect_terminal_stream(terminal_id, stream_epoch);
+            return Err(WorkerError::Closed);
+        }
         // A resize that raced the snapshot reflows the mirror the way it
         // reflowed the PTY's own model, before any later output reaches it.
         if let Ok((cols, rows)) = mux.current_size(terminal_id) {
@@ -787,7 +835,8 @@ impl WorkerLink {
         let Some(session) = session else {
             return false;
         };
-        if session.relay.lock().unwrap().stream_epoch != stream_epoch {
+        let relay = session.relay.lock().unwrap();
+        if relay.stream_epoch != stream_epoch || relay.replay_failed || relay.snapshot_required {
             return false;
         }
         let mut retained = session.retained.lock().unwrap();
@@ -804,27 +853,112 @@ impl WorkerLink {
     /// Applies a relayed PTY chunk. A replay chunk (the worker's
     /// scrollback when it starts relaying) resets the ring and is handed
     /// to the viewer awaiting it; live chunks append and fan out.
-    pub fn feed_terminal_output(&self, session_id: u64, generation: u64, flags: u8, data: Bytes) {
+    pub fn feed_terminal_output(
+        &self,
+        session_id: u64,
+        generation: u64,
+        flags: u8,
+        data: Bytes,
+    ) -> bool {
+        self.feed_terminal_output_inner(session_id, generation, None, flags, data)
+    }
+
+    pub fn feed_terminal_snapshot_output(
+        &self,
+        session_id: u64,
+        generation: u64,
+        stream_epoch: u64,
+        flags: u8,
+        data: Bytes,
+    ) -> bool {
+        if !self.supports_ghostty_snapshot() {
+            return false;
+        }
+        self.feed_terminal_output_inner(session_id, generation, Some(stream_epoch), flags, data)
+    }
+
+    fn feed_terminal_output_inner(
+        &self,
+        session_id: u64,
+        generation: u64,
+        stream_epoch: Option<u64>,
+        flags: u8,
+        data: Bytes,
+    ) -> bool {
+        use pm_protocol::terminal_frame::{
+            FLAG_REPLAY, FLAG_REPLAY_END, FLAG_REPLAY_GHOSTTY, FLAG_REPLAY_SNAPSHOT,
+            FLAG_REPLAY_START, MAX_SNAPSHOT_BYTES,
+        };
+        const SNAPSHOT_FLAGS: u8 = FLAG_REPLAY_SNAPSHOT | FLAG_REPLAY_GHOSTTY;
         let session = self.session(session_id);
-        let replay = flags & pm_protocol::terminal_frame::FLAG_REPLAY != 0;
+        let replay = flags & FLAG_REPLAY != 0;
         let mut relay = session.relay.lock().unwrap();
-        if generation < relay.generation {
-            return;
+        if stream_epoch.is_some_and(|epoch| relay.stream_epoch != epoch)
+            || generation < relay.generation
+        {
+            return false;
+        }
+        if relay.replay_failed {
+            return false;
         }
         if generation > relay.generation {
             relay.generation = generation;
             relay.replay.clear();
+            relay.replay_started = false;
         }
-        if replay && flags & pm_protocol::terminal_frame::FLAG_REPLAY_START != 0 {
-            relay.replay.clear();
-            relay.replay_started = true;
-        }
+        let codec_flags = flags & SNAPSHOT_FLAGS;
         if replay {
-            let overflow = (relay.replay.len() + data.len()).saturating_sub(SCROLLBACK_CAP_BYTES);
-            if overflow > 0 {
-                relay.replay.drain(..overflow);
+            if stream_epoch.is_some() && codec_flags != SNAPSHOT_FLAGS {
+                tracing::warn!(
+                    terminal = session_id,
+                    "worker terminal replay requires a Ghostty snapshot"
+                );
+                return relay.reject_snapshot();
+            }
+            if flags & FLAG_REPLAY_START != 0 {
+                if relay.replay_started {
+                    return relay.reject_snapshot();
+                }
+                relay.replay.clear();
+                relay.replay_started = true;
+                relay.replay_flags = codec_flags;
+            } else if !relay.replay_started {
+                return relay.reject_snapshot();
+            }
+            if codec_flags != relay.replay_flags
+                || relay.replay.len().saturating_add(data.len()) > MAX_SNAPSHOT_BYTES
+            {
+                tracing::warn!(
+                    terminal = session_id,
+                    "terminal snapshot has inconsistent flags or exceeds the transfer limit"
+                );
+                return relay.reject_snapshot();
             }
             relay.replay.extend_from_slice(&data);
+            if flags & FLAG_REPLAY_END == 0 {
+                relay.replay_stream_waiters.retain(|tx| {
+                    tx.send(ReplayChunk {
+                        flags,
+                        data: data.clone(),
+                    })
+                    .is_ok()
+                });
+                return true;
+            }
+            let snapshot = Bytes::copy_from_slice(&relay.replay);
+            let mut retained = session.retained.lock().unwrap();
+            if codec_flags & FLAG_REPLAY_GHOSTTY != 0 {
+                if let Err(error) = retained.try_reset_from_replay(&snapshot) {
+                    tracing::warn!(terminal = session_id, %error, "invalid Ghostty terminal snapshot");
+                    return relay.reject_snapshot();
+                }
+            } else {
+                let (cols, rows) = retained.size();
+                retained.model = crate::term_model::TerminalModel::new(cols, rows);
+                retained.model.advance(&snapshot);
+                retained.ring.reset(&snapshot);
+            }
+            drop(retained);
             relay.replay_stream_waiters.retain(|tx| {
                 tx.send(ReplayChunk {
                     flags,
@@ -832,31 +966,27 @@ impl WorkerLink {
                 })
                 .is_ok()
             });
-            if flags & pm_protocol::terminal_frame::FLAG_REPLAY_END == 0 {
-                return;
-            }
-            let snapshot = Bytes::copy_from_slice(&relay.replay);
             relay.replay.clear();
             relay.replay_pending = false;
             relay.replay_started = false;
+            relay.snapshot_required = false;
             relay.replay_stream_waiters.clear();
             let waiters = std::mem::take(&mut relay.replay_complete_waiters);
-            session
-                .retained
-                .lock()
-                .unwrap()
-                .reset_from_replay(&snapshot);
             drop(relay);
             for tx in waiters {
                 let _ = tx.send(snapshot.clone());
             }
-            return;
+            return true;
         }
-        drop(relay);
+        if relay.replay_started || relay.snapshot_required || flags != 0 {
+            tracing::warn!(
+                terminal = session_id,
+                "live terminal output arrived before a valid snapshot"
+            );
+            return relay.reject_snapshot();
+        }
         let mut retained = session.retained.lock().unwrap();
         retained.push(&data);
-        // A repaint the mirror recognised removed lines every viewer already
-        // has, so each takes a fresh snapshot.
         if retained.model.take_rewritten() {
             let _ = session.rewrite_tx.send(());
         }
@@ -864,6 +994,7 @@ impl WorkerLink {
             .fed
             .fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
         let _ = session.out_tx.send(data);
+        true
     }
 
     /// A counter a web viewer advances as its socket accepts output. A
@@ -908,18 +1039,19 @@ impl WorkerLink {
         history: Option<usize>,
     ) -> Option<(Bytes, broadcast::Receiver<Bytes>, (u16, u16))> {
         let session = self.sessions.lock().unwrap().get(&session_id)?.clone();
+        let relay = session.relay.lock().unwrap();
+        if relay.replay_failed || relay.snapshot_required {
+            return None;
+        }
         let retained = session.retained.lock().unwrap();
+        let snapshot = mirror_snapshot(&retained, history)?;
         let rx = session.out_tx.subscribe();
         progress.sent.store(
             session.fed.load(std::sync::atomic::Ordering::Relaxed),
             std::sync::atomic::Ordering::Relaxed,
         );
         session.drained.notify_waiters();
-        Some((
-            Bytes::from(mirror_snapshot(&retained, history)),
-            rx,
-            retained.size(),
-        ))
+        Some((Bytes::from(snapshot), rx, retained.size()))
     }
 
     /// Waits until every viewer is within the backlog budget of what the
@@ -969,6 +1101,9 @@ impl WorkerLink {
         relay.generation = generation;
         relay.stream_epoch = relay.stream_epoch.wrapping_add(1);
         relay.upstream = Some(upstream);
+        relay.replay_failed = false;
+        relay.snapshot_required = true;
+        relay.replay_started = false;
         relay.stream_epoch
     }
 
@@ -1077,9 +1212,14 @@ impl WorkerLink {
             relay.replay_complete_waiters.push(tx);
             ViewerAttach::First { rx, replay }
         } else {
-            ViewerAttach::Joined {
-                rx,
-                replay: Bytes::from(retained.model.snapshot()),
+            match mirror_snapshot(&retained, None) {
+                Some(replay) if !relay.replay_failed && !relay.snapshot_required => {
+                    ViewerAttach::Joined {
+                        rx,
+                        replay: Bytes::from(replay),
+                    }
+                }
+                _ => ViewerAttach::Failed,
             }
         }
     }
@@ -1111,9 +1251,14 @@ impl WorkerLink {
             let replay = pending(&mut relay);
             StreamingViewerAttach::First { rx, replay }
         } else {
-            StreamingViewerAttach::Joined {
-                rx,
-                replay: Bytes::from(mirror_snapshot(&retained, history)),
+            match mirror_snapshot(&retained, history) {
+                Some(replay) if !relay.replay_failed && !relay.snapshot_required => {
+                    StreamingViewerAttach::Joined {
+                        rx,
+                        replay: Bytes::from(replay),
+                    }
+                }
+                _ => StreamingViewerAttach::Failed,
             }
         }
     }
@@ -1167,7 +1312,8 @@ impl WorkerLink {
         if relay.replay_started {
             let _ = tx.send(ReplayChunk {
                 flags: pm_protocol::terminal_frame::FLAG_REPLAY
-                    | pm_protocol::terminal_frame::FLAG_REPLAY_START,
+                    | pm_protocol::terminal_frame::FLAG_REPLAY_START
+                    | relay.replay_flags,
                 data: Bytes::copy_from_slice(&relay.replay),
             });
         }
@@ -1522,6 +1668,7 @@ impl WorkerRegistry {
             sessions: Mutex::new(HashMap::new()),
             fs_seq: AtomicU64::new(0),
             protocol_version: AtomicU64::new(0),
+            snapshot_compatibility: Mutex::new(String::new()),
             repo_seq: AtomicU64::new(0),
             repo_pending: Mutex::new(HashMap::new()),
             fs_pending: Mutex::new(HashMap::new()),
@@ -1637,22 +1784,269 @@ mod tests {
     /// When the mirror drops lines a repaint printed again, every viewer's
     /// snapshot is stale, including one sent before the repaint arrived, so
     /// the relay tells all of them.
-    #[test]
-    fn a_repaint_that_drops_spilled_lines_tells_every_viewer() {
+    fn snapshot_link() -> WorkerLink {
         let link = link();
-        let mut rewrites = link.viewer_rewrite_feed(1);
+        link.set_protocol_version(pm_protocol::WORKER_PROTOCOL_GHOSTTY_SNAPSHOT);
+        link.set_snapshot_compatibility(pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY.into());
+        link
+    }
+
+    const BINARY_REPLAY_FLAGS: u8 = pm_protocol::terminal_frame::FLAG_REPLAY
+        | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+        | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY;
+
+    fn full_binary_replay_flags() -> u8 {
+        BINARY_REPLAY_FLAGS
+            | pm_protocol::terminal_frame::FLAG_REPLAY_START
+            | pm_protocol::terminal_frame::FLAG_REPLAY_END
+    }
+
+    #[test]
+    fn invalid_binary_replay_closes_waiters_and_blocks_live_output() {
+        let link = snapshot_link();
+        let ViewerAttach::First { mut rx, mut replay } = link.viewer_attach(7) else {
+            panic!("first viewer");
+        };
+        let (upstream, mut input) = mpsc::channel(1);
+        let epoch = link.connect_terminal_stream(7, 1, upstream);
+        assert!(!link.feed_terminal_snapshot_output(
+            7,
+            1,
+            epoch,
+            full_binary_replay_flags(),
+            Bytes::from_static(b"corrupt")
+        ));
+        assert!(matches!(
+            replay.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(matches!(
+            input.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
+        assert!(!link.feed_terminal_snapshot_output(
+            7,
+            1,
+            epoch,
+            0,
+            Bytes::from_static(b"must not be applied")
+        ));
+        assert!(link.scrollback(7).is_empty());
+        assert!(matches!(link.viewer_attach(7), ViewerAttach::Failed));
+        assert!(link
+            .resnapshot_viewer(7, &link.viewer_progress(7), None)
+            .is_none());
+        link.disconnect_terminal_stream(7, epoch);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Closed)
+        ));
+    }
+
+    #[test]
+    fn replay_chunks_cannot_downgrade_the_binary_codec() {
+        let link = snapshot_link();
+        let ViewerAttach::First { mut replay, .. } = link.viewer_attach(7) else {
+            panic!("first viewer");
+        };
+        let (upstream, _input) = mpsc::channel(1);
+        let epoch = link.connect_terminal_stream(7, 1, upstream);
+        let source = crate::term_model::TerminalModel::new(80, 24).snapshot();
+        let split = source.len() / 2;
+        assert!(link.feed_terminal_snapshot_output(
+            7,
+            1,
+            epoch,
+            BINARY_REPLAY_FLAGS | pm_protocol::terminal_frame::FLAG_REPLAY_START,
+            Bytes::copy_from_slice(&source[..split])
+        ));
+        assert!(!link.feed_terminal_snapshot_output(
+            7,
+            1,
+            epoch,
+            pm_protocol::terminal_frame::FLAG_REPLAY
+                | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+                | pm_protocol::terminal_frame::FLAG_REPLAY_END,
+            Bytes::copy_from_slice(&source[split..])
+        ));
+        assert!(matches!(
+            replay.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(link.scrollback(7).is_empty());
+    }
+
+    #[test]
+    fn a_worker_stream_requires_a_snapshot_before_live_output() {
+        let link = snapshot_link();
+        let (upstream, _input) = mpsc::channel(1);
+        let epoch = link.connect_terminal_stream(7, 1, upstream);
+        assert!(!link.feed_terminal_snapshot_output(7, 1, epoch, 0, Bytes::from_static(b"live")));
+        assert!(link.scrollback(7).is_empty());
+    }
+
+    #[test]
+    fn worker_replay_rejects_missing_capability_and_vt_payloads() {
+        let link = link();
+        let (upstream, _input) = mpsc::channel(1);
+        let epoch = link.connect_terminal_stream(7, 1, upstream);
+        assert!(!link.feed_terminal_snapshot_output(
+            7,
+            1,
+            epoch,
+            full_binary_replay_flags(),
+            Bytes::from_static(b"not accepted")
+        ));
+        assert!(link.scrollback(7).is_empty());
+        link.set_protocol_version(pm_protocol::WORKER_PROTOCOL_GHOSTTY_SNAPSHOT);
+        link.set_snapshot_compatibility(pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY.into());
+        assert!(!link.feed_terminal_snapshot_output(
+            7,
+            1,
+            epoch,
+            pm_protocol::terminal_frame::FLAG_REPLAY
+                | pm_protocol::terminal_frame::FLAG_REPLAY_START
+                | pm_protocol::terminal_frame::FLAG_REPLAY_END
+                | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT,
+            Bytes::from_static(b"legacy VT")
+        ));
+        assert!(link.scrollback(7).is_empty());
+    }
+
+    #[test]
+    fn a_stale_stream_cannot_invalidate_its_replacement() {
+        let link = snapshot_link();
+        let (upstream, _input) = mpsc::channel(1);
+        let stale = link.connect_terminal_stream(7, 1, upstream);
+        let (upstream, _input) = mpsc::channel(1);
+        let current = link.connect_terminal_stream(7, 1, upstream);
+        let source = Bytes::from(crate::term_model::TerminalModel::new(80, 24).snapshot());
+        assert!(!link.feed_terminal_snapshot_output(
+            7,
+            1,
+            stale,
+            full_binary_replay_flags(),
+            source.clone()
+        ));
+        assert!(link.feed_terminal_snapshot_output(
+            7,
+            1,
+            current,
+            full_binary_replay_flags(),
+            source
+        ));
+        assert!(link.feed_terminal_snapshot_output(
+            7,
+            1,
+            current,
+            0,
+            Bytes::from_static(b"current")
+        ));
+        assert_eq!(link.scrollback(7), Bytes::from_static(b"current"));
+    }
+
+    #[test]
+    fn binary_replay_restores_state_without_entering_the_transcript() {
+        let link = link();
+        let _first = link.viewer_attach(7);
+        let (upstream, _input) = mpsc::channel(1);
+        link.connect_terminal_stream(7, 1, upstream);
+        let mut source = crate::term_model::TerminalModel::new(80, 24);
+        source.advance(b"snapshot content");
+        let flags = pm_protocol::terminal_frame::FLAG_REPLAY
+            | pm_protocol::terminal_frame::FLAG_REPLAY_START
+            | pm_protocol::terminal_frame::FLAG_REPLAY_END
+            | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+            | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY;
+        link.feed_terminal_output(7, 1, flags, Bytes::from(source.snapshot()));
+        assert!(link.scrollback(7).is_empty());
+        link.feed_terminal_output(7, 1, 0, Bytes::from_static(b" live"));
+        assert_eq!(link.scrollback(7), Bytes::from_static(b" live"));
+        let ViewerAttach::Joined { replay, .. } = link.viewer_attach(7) else {
+            panic!("joined viewer");
+        };
+        let restored = crate::term_model::TerminalModel::restore(&replay).unwrap();
+        assert!(restored
+            .visible_text()
+            .join("\n")
+            .contains("snapshot content live"));
+    }
+
+    #[test]
+    fn a_late_streaming_viewer_receives_the_binary_codec_flag() {
+        let link = link();
+        let _first = link.streaming_viewer_attach(7, None);
+        link.feed_terminal_output(
+            7,
+            1,
+            pm_protocol::terminal_frame::FLAG_REPLAY
+                | pm_protocol::terminal_frame::FLAG_REPLAY_START
+                | pm_protocol::terminal_frame::FLAG_REPLAY_SNAPSHOT
+                | pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY,
+            Bytes::from_static(b"prefix"),
+        );
+        let StreamingViewerAttach::Waiting {
+            replay: ReplaySource::Chunks(mut replay),
+            ..
+        } = link.streaming_viewer_attach(7, None)
+        else {
+            panic!("waiting viewer");
+        };
+        let prefix = replay.try_recv().unwrap();
+        assert_ne!(
+            prefix.flags & pm_protocol::terminal_frame::FLAG_REPLAY_GHOSTTY,
+            0
+        );
+        assert_eq!(prefix.data, Bytes::from_static(b"prefix"));
+    }
+
+    #[test]
+    fn a_mirror_snapshot_matches_uninterrupted_ghostty_after_resize_and_repaint() {
+        let link = link();
+        let progress = link.viewer_progress(1);
         link.mirror_terminal_resize(1, 140, 10);
-        link.feed_terminal_output(1, 0, 0, Bytes::from_static(b"HEADER\r\n"));
+        let mut source = pm_ghostty::Terminal::new(140, 10).unwrap();
+        let mut initial = b"HEADER\r\n".to_vec();
         for _ in 0..6 {
-            link.feed_terminal_output(1, 0, 0, Bytes::from(vec![b'-'; 138]));
-            link.feed_terminal_output(1, 0, 0, Bytes::from_static(b"\r\n"));
+            initial.extend_from_slice(&[b'-'; 138]);
+            initial.extend_from_slice(b"\r\n");
         }
+        source.write(&initial);
+        link.feed_terminal_output(1, 0, 0, Bytes::from(initial));
+        source.resize(90, 10).unwrap();
         link.mirror_terminal_resize(1, 90, 10);
-        assert!(rewrites.try_recv().is_err());
-        link.feed_terminal_output(1, 0, 0, Bytes::from_static(b"\x1b[HHEADER\r\n"));
-        assert!(
-            rewrites.try_recv().is_ok(),
-            "the dropped spill reached no viewer"
+        let repaint = b"\x1b[HHEADER\r\n";
+        source.write(repaint);
+        link.feed_terminal_output(1, 0, 0, Bytes::from_static(repaint));
+
+        let (snapshot, mut live, size) = link.resnapshot_viewer(1, &progress, None).unwrap();
+        assert_eq!(size, (90, 10));
+        let mut restored = pm_ghostty::Terminal::restore(&snapshot).unwrap();
+        assert_eq!(
+            restored.visible_text().unwrap(),
+            source.visible_text().unwrap()
+        );
+        assert_eq!(
+            restored.scrollback_text().unwrap(),
+            source.scrollback_text().unwrap()
+        );
+        assert_eq!(
+            restored.cursor_position().unwrap(),
+            source.cursor_position().unwrap()
+        );
+
+        let after = b"\x1b[4;3H\x1b[48;2;10;20;30mcontinued";
+        source.write(after);
+        link.feed_terminal_output(1, 0, 0, Bytes::from_static(after));
+        restored.write(&live.try_recv().unwrap());
+        assert!(live.try_recv().is_err());
+        assert_eq!(
+            restored.visible_text().unwrap(),
+            source.visible_text().unwrap()
+        );
+        assert_eq!(
+            restored.snapshot_vt().unwrap(),
+            source.snapshot_vt().unwrap()
         );
     }
 
@@ -1724,6 +2118,7 @@ mod tests {
             sessions: Mutex::new(HashMap::new()),
             fs_seq: AtomicU64::new(0),
             protocol_version: AtomicU64::new(0),
+            snapshot_compatibility: Mutex::new(String::new()),
             repo_seq: AtomicU64::new(0),
             repo_pending: Mutex::new(HashMap::new()),
             fs_pending: Mutex::new(HashMap::new()),
@@ -1769,23 +2164,15 @@ mod tests {
         else {
             panic!("second viewer joins the running stream");
         };
-        let mut restored = crate::term_model::TerminalModel::new(
-            crate::mux::DEFAULT_COLS,
-            crate::mux::DEFAULT_ROWS,
-        );
-        restored.advance(&replay);
-        assert!(restored
-            .mode()
-            .contains(alacritty_terminal::term::TermMode::ALT_SCREEN));
-        assert!(restored
-            .mode()
-            .contains(alacritty_terminal::term::TermMode::MOUSE_MOTION));
+        let restored = crate::term_model::TerminalModel::restore(&replay).unwrap();
+        assert!(restored.is_alternate());
+        assert!(restored.mouse_tracking());
         let screen = restored.visible_text().join("\n");
         assert!(screen.contains("boxed live"), "screen was: {screen}");
     }
 
     #[test]
-    fn a_joiner_asking_for_part_of_the_history_is_served_that_much() {
+    fn a_joiner_receives_complete_native_history_with_the_screen() {
         let link = link();
         let StreamingViewerAttach::First { .. } = link.streaming_viewer_attach(7, None) else {
             panic!("first viewer starts the stream");
@@ -1817,17 +2204,10 @@ mod tests {
         else {
             panic!("a joiner is served the mirror");
         };
-        let restore = |bytes: &Bytes| {
-            let mut model = crate::term_model::TerminalModel::new(
-                crate::mux::DEFAULT_COLS,
-                crate::mux::DEFAULT_ROWS,
-            );
-            model.advance(bytes);
-            model
-        };
+        let restore = |bytes: &Bytes| crate::term_model::TerminalModel::restore(bytes).unwrap();
         let bounded = restore(&bounded);
         let whole = restore(&whole);
-        assert_eq!(bounded.scrollback_text().len(), 50);
+        assert_eq!(bounded.scrollback_text(), whole.scrollback_text());
         assert_eq!(bounded.visible_text(), whole.visible_text());
         assert!(whole.scrollback_text().len() > 300);
     }
@@ -1879,11 +2259,7 @@ mod tests {
             Bytes::from_static(b"\x1b[2J\x1b[1;1Hlegacy tail"),
             "a joiner is never handed the retained byte stream"
         );
-        let mut restored = crate::term_model::TerminalModel::new(
-            crate::mux::DEFAULT_COLS,
-            crate::mux::DEFAULT_ROWS,
-        );
-        restored.advance(&replay);
+        let restored = crate::term_model::TerminalModel::restore(&replay).unwrap();
         let screen = restored.visible_text().join("\n");
         assert!(screen.contains("legacy tail"), "screen was: {screen}");
     }
@@ -1921,21 +2297,13 @@ mod tests {
         else {
             panic!("second viewer joins the running stream");
         };
-        let mut restored = crate::term_model::TerminalModel::new(
-            crate::mux::DEFAULT_COLS,
-            crate::mux::DEFAULT_ROWS,
-        );
-        restored.advance(&replay);
+        let restored = crate::term_model::TerminalModel::restore(&replay).unwrap();
         assert!(
-            restored
-                .mode()
-                .contains(alacritty_terminal::term::TermMode::ALT_SCREEN),
+            restored.is_alternate(),
             "the alt-screen switch was pushed out of the ring but is still screen state"
         );
         assert!(
-            restored
-                .mode()
-                .contains(alacritty_terminal::term::TermMode::MOUSE_MOTION),
+            restored.mouse_tracking(),
             "mouse tracking is enabled once per process and must survive too"
         );
         let screen = restored.visible_text().join("\n");
@@ -1960,8 +2328,7 @@ mod tests {
         else {
             panic!("second viewer joins the running stream");
         };
-        let mut restored = crate::term_model::TerminalModel::new(60, 10);
-        restored.advance(&replay);
+        let restored = crate::term_model::TerminalModel::restore(&replay).unwrap();
         assert!(restored.visible_text().join("").contains("sized"));
     }
 
