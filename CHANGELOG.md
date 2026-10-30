@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Draw terminal block and shade characters as seamless cell graphics, matching native Ghostty progress bars.
+
 - [Web] Keep terminal colors and text styles intact after resizing or reconnecting.
 - [Web] Switch browser terminals from xterm.js to Ghostty with Canvas 2D rendering.
 - [Web] Talk to Puppet Master from the topbar: ask what needs you, what a session is doing, or tell it to start work, across every bucket you can see. Answers are read aloud when a speech provider is configured, and typing does the same thing.
