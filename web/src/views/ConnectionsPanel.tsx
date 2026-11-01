@@ -422,6 +422,7 @@ export function ConnectionEditor({
     setConfig(next.config);
   };
   const oauth = {
+    grant: "authorization_code" as const,
     token_auth_method: "none" as const,
     authorization_url: "",
     token_url: "",
@@ -434,6 +435,7 @@ export function ConnectionEditor({
       config.oauth?.redirect_uri ||
       `${window.location.origin}/api/connections/oauth/callback`,
   };
+  const clientCredentials = oauth.grant === "client_credentials";
   const save = async () => {
     const next = {
       ...config,
@@ -670,7 +672,9 @@ export function ConnectionEditor({
 
   const secretLabel =
     mode === "oauth"
-      ? "Client secret (optional)"
+      ? clientCredentials
+        ? "Client secret"
+        : "Client secret (optional)"
       : mode === "basic"
         ? "Password"
         : mode === "api_key"
@@ -775,6 +779,30 @@ export function ConnectionEditor({
         <details className="cx-more" open>
           <summary>OAuth endpoints</summary>
           <div className="cx-fields">
+            <label className="cx-field">
+              <span>Grant</span>
+              <select
+                aria-label="Grant"
+                value={oauth.grant}
+                onChange={(event) => {
+                  const grant = event.target.value as typeof oauth.grant;
+                  patch({
+                    oauth: {
+                      ...oauth,
+                      grant,
+                      token_auth_method:
+                        grant === "client_credentials" &&
+                        oauth.token_auth_method === "none"
+                          ? "client_secret_basic"
+                          : oauth.token_auth_method,
+                    },
+                  });
+                }}
+              >
+                <option value="authorization_code">Sign in (authorization code)</option>
+                <option value="client_credentials">Client credentials</option>
+              </select>
+            </label>
             {(
               [
                 ["authorization_url", "Authorization URL"],
@@ -783,7 +811,13 @@ export function ConnectionEditor({
                 ["scopes", "Scopes"],
                 ["redirect_uri", "Redirect URI"],
               ] as const
-            ).map(([key, label]) => (
+            )
+              .filter(
+                ([key]) =>
+                  !clientCredentials ||
+                  (key !== "authorization_url" && key !== "redirect_uri"),
+              )
+              .map(([key, label]) => (
               <label className="cx-field" key={key}>
                 <span>{label}</span>
                 <input
@@ -809,7 +843,9 @@ export function ConnectionEditor({
                   })
                 }
               >
-                <option value="none">Public client (PKCE)</option>
+                {!clientCredentials && (
+                  <option value="none">Public client (PKCE)</option>
+                )}
                 <option value="client_secret_basic">
                   Client secret in Basic header
                 </option>
@@ -839,7 +875,7 @@ export function ConnectionEditor({
                     Discover OAuth endpoints
                   </button>
                 )}
-                {saved && config.oauth && (
+                {saved && config.oauth && !clientCredentials && (
                   <button
                     type="button"
                     className="btn"
@@ -879,7 +915,9 @@ export function ConnectionEditor({
                 )}
               </span>
               <small className="cx-dim">
-                {oauth.registered
+                {clientCredentials
+                  ? "Puppet Master requests a token with this client ID and secret whenever it needs one, with no sign-in. Test the connection to check them."
+                  : oauth.registered
                   ? `Registered automatically as client ${oauth.client_id}. Signing in again registers a fresh client.`
                   : "Without a client ID, sign-in registers this installation with the server automatically. Providers that do not offer that need the client ID they issued."}
               </small>

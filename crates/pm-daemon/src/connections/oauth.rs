@@ -5,7 +5,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::{
-    store::random_id, transport, validate_endpoint, Credential, Kind, OAuthConfig, TokenAuthMethod,
+    store::random_id, transport, validate_endpoint, Credential, Kind, OAuthConfig, OAuthGrant,
+    TokenAuthMethod,
 };
 use crate::{daemon::Daemon, storage::now_unix_ms};
 
@@ -213,20 +214,28 @@ impl Daemon {
         else {
             return Ok(credential);
         };
-        if access_token.is_empty() {
-            bail!("Complete OAuth sign-in before testing or calling tools");
-        }
-        if expires_at.is_none_or(|expiry| expiry > now_unix_ms() + TOKEN_EXPIRY_MARGIN_MS) {
+        if !access_token.is_empty()
+            && expires_at.is_none_or(|expiry| expiry > now_unix_ms() + TOKEN_EXPIRY_MARGIN_MS)
+        {
             return Ok(credential);
         }
-        let refresh = refresh_token
-            .as_ref()
-            .context("OAuth sign-in expired. Sign in again")?;
         let connection = self.storage.connection(id)?;
         let oauth = connection
             .config
             .oauth
+            .clone()
             .context("OAuth configuration is missing")?;
+        if oauth.grant == OAuthGrant::ClientCredentials {
+            return self
+                .client_credentials_token(id, &connection, &oauth, credential)
+                .await;
+        }
+        if access_token.is_empty() {
+            bail!("Complete OAuth sign-in before testing or calling tools");
+        }
+        let refresh = refresh_token
+            .as_ref()
+            .context("OAuth sign-in expired. Sign in again")?;
         let mut form = vec![
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh.as_str()),
@@ -245,6 +254,45 @@ impl Daemon {
             bail!("OAuth refresh failed. Sign in again");
         }
         let credential = token_credential(response_json(response).await?, credential)?;
+        self.save_connection_credential(id, &credential)?;
+        Ok(credential)
+    }
+
+    async fn client_credentials_token(
+        &self,
+        id: u64,
+        connection: &super::Connection,
+        oauth: &OAuthConfig,
+        old: Credential,
+    ) -> Result<Credential> {
+        if oauth.client_id.trim().is_empty() || oauth.token_url.is_empty() {
+            bail!("Configure the OAuth client ID and token endpoint first");
+        }
+        require_tls(&validate_endpoint(&oauth.token_url)?)?;
+        let secret = match &old {
+            Credential::OAuth { client_secret, .. } => client_secret.clone(),
+            _ => None,
+        };
+        let mut form = vec![
+            ("grant_type", "client_credentials"),
+            ("client_id", oauth.client_id.as_str()),
+        ];
+        if !oauth.scopes.is_empty() {
+            form.push(("scope", oauth.scopes.as_str()));
+        }
+        if connection.config.kind == Kind::Mcp {
+            form.push(("resource", connection.config.endpoint.as_str()));
+        }
+        let response = token_request(oauth, secret.as_deref(), form)?
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            if is_invalid_client(response).await {
+                bail!("The token endpoint refused the client ID or secret");
+            }
+            bail!("The token endpoint refused the client credentials request");
+        }
+        let credential = token_credential(response_json(response).await?, old)?;
         self.save_connection_credential(id, &credential)?;
         Ok(credential)
     }
@@ -338,11 +386,18 @@ impl Daemon {
             None => None,
         };
         let current = connection.config.oauth.as_ref();
+        let grant = current.map(|o| o.grant).unwrap_or_default();
+        let methods = metadata["token_endpoint_auth_methods_supported"].as_array();
+        let supports = |name: &str| methods.is_none_or(|methods| methods.iter().any(|m| m == name));
         Ok(OAuthConfig {
-            token_auth_method: if metadata["token_endpoint_auth_methods_supported"]
-                .as_array()
-                .is_none_or(|methods| methods.iter().any(|method| method == "none"))
-            {
+            grant,
+            token_auth_method: if grant == OAuthGrant::ClientCredentials {
+                if !supports("client_secret_basic") && supports("client_secret_post") {
+                    TokenAuthMethod::ClientSecretPost
+                } else {
+                    TokenAuthMethod::ClientSecretBasic
+                }
+            } else if supports("none") {
                 TokenAuthMethod::None
             } else {
                 TokenAuthMethod::ClientSecretBasic
@@ -367,6 +422,9 @@ impl Daemon {
         redirect_uri: &str,
     ) -> Result<()> {
         let mut oauth = self.discover_connection_oauth(id, redirect_uri).await?;
+        if oauth.grant == OAuthGrant::ClientCredentials {
+            bail!("Client credentials use the client ID and secret the provider issued");
+        }
         let registration = oauth.registration_endpoint.clone().context(
             "This server does not register clients automatically. Enter a client ID from the provider",
         )?;
@@ -430,6 +488,9 @@ impl Daemon {
             .config
             .oauth
             .context("Configure OAuth endpoints and a client ID first")?;
+        if oauth.grant == OAuthGrant::ClientCredentials {
+            bail!("This connection uses client credentials, so it needs no sign-in");
+        }
         if oauth.client_id.trim().is_empty()
             || oauth.redirect_uri.is_empty()
             || oauth.token_url.is_empty()

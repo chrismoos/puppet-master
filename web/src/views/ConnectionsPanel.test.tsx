@@ -358,6 +358,59 @@ it("keeps the stored credential unless a new one is typed, and sends the new one
   );
 });
 
+it("sets up client credentials with a required secret and no sign-in", async () => {
+  const oauth = {
+    token_auth_method: "none" as const,
+    authorization_url: "https://auth.example.test/authorize",
+    token_url: "https://auth.example.test/token",
+    client_id: "machine",
+    scopes: "orders",
+    redirect_uri: "https://pm.example.test/api/connections/oauth/callback",
+  };
+  const stored = draft([], {
+    credential_set: true,
+    credential_mode: "oauth",
+    config: { ...blankConnection(1), oauth },
+  });
+  const request = vi.spyOn(api, "connectionRequest").mockResolvedValue(stored);
+  act(() => root.render(editor(stored)));
+  act(() => tab("Credentials").click());
+  expect(button("Sign in with OAuth")).toBeDefined();
+  const grant = host.querySelector<HTMLSelectElement>('select[aria-label="Grant"]')!;
+  expect(grant.value).toBe("authorization_code");
+  act(() => {
+    grant.value = "client_credentials";
+    grant.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const method = host.querySelector<HTMLSelectElement>(
+    'select[aria-label="Token endpoint authentication"]',
+  )!;
+  expect(method.value).toBe("client_secret_basic");
+  expect([...method.options].map((option) => option.value)).not.toContain("none");
+  const labels = [...host.querySelectorAll(".cx-more .cx-field > span")].map(
+    (label) => label.textContent,
+  );
+  expect(labels).toContain("Token URL");
+  expect(labels).not.toContain("Authorization URL");
+  expect(labels).not.toContain("Redirect URI");
+  expect(button("Sign in with OAuth")).toBeUndefined();
+  expect(button("Register and sign in")).toBeUndefined();
+  expect(host.querySelector('input[aria-label="Client secret"]')).not.toBeNull();
+  await act(async () => button("Save draft").click());
+  expect(request).toHaveBeenLastCalledWith(
+    "/api/connections/1",
+    expect.objectContaining({
+      config: expect.objectContaining({
+        oauth: expect.objectContaining({
+          grant: "client_credentials",
+          token_auth_method: "client_secret_basic",
+        }),
+      }),
+    }),
+    "PUT",
+  );
+});
+
 it("lays the panel out with compact tabs, a link to the full page, and no request box for the agent", () => {
   act(() => root.render(editor(draft(discovered, { tested_revision: 1 }), "panel")));
   expect(tab("Credentials").textContent).toContain("Credentials");

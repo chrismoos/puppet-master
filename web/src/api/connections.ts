@@ -7,6 +7,8 @@ export interface ToolRule {
   policy?: Policy | null;
 }
 export interface OAuthConfig {
+  /** Client credentials fetch tokens with the client's own secret, with no user sign-in. */
+  grant?: "authorization_code" | "client_credentials";
   token_auth_method: "none" | "client_secret_post" | "client_secret_basic";
   authorization_url: string;
   token_url: string;

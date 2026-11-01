@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] OAuth connections can use the client credentials grant: enter the token URL, client ID and client secret, and Puppet Master fetches and renews tokens itself with no sign-in.
+
 - [Web] Show gateway errors during agent installation instead of a JSON parsing error.
 
 - [Web] Restore terminals with the same Ghostty engine used on their worker, preserving both screens and in-progress output across reconnects.

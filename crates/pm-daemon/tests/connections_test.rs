@@ -505,6 +505,113 @@ async fn oauth_pkce_callback_is_one_use_and_refresh_uses_configured_client_auth(
 }
 
 #[tokio::test]
+async fn client_credentials_fetch_a_token_without_sign_in_and_reuse_it_until_it_expires() {
+    use std::collections::HashMap;
+    const LONG_LIFETIME_SECONDS: i64 = 3600;
+    const EXPIRING_LIFETIME_SECONDS: i64 = 1;
+    let env = daemon_env();
+    let bearer = signed_in_bearer(&env.daemon);
+    let exchanges = Arc::new(std::sync::Mutex::new(Vec::<(
+        Option<String>,
+        HashMap<String, String>,
+    )>::new()));
+    let captured = exchanges.clone();
+    let router=Router::new().route("/token",post(move |headers:axum::http::HeaderMap,axum::Form(form):axum::Form<HashMap<String,String>>| {
+        let captured=captured.clone();
+        async move {
+            let basic=headers.get("authorization").map(|value|value.to_str().unwrap().to_owned());
+            let expiring=form.contains_key("client_secret");
+            let mut exchanges=captured.lock().unwrap();
+            exchanges.push((basic,form));
+            let token=format!("machine-access-{}",exchanges.len());
+            Json(json!({"token_type":"Bearer","access_token":token,"expires_in":if expiring {EXPIRING_LIFETIME_SECONDS} else {LONG_LIFETIME_SECONDS}}))
+        }
+    })).route("/",get(|headers:axum::http::HeaderMap|async move {
+        let authorized=headers.get("authorization").and_then(|value|value.to_str().ok()).is_some_and(|value|value.starts_with("Bearer machine-access-"));
+        if authorized {StatusCode::OK} else {StatusCode::UNAUTHORIZED}
+    }));
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let oauth = |method: &str| json!({"grant":"client_credentials","token_url":format!("{endpoint}/token"),"client_id":"machine","scopes":"orders","token_auth_method":method});
+    let (status, refused) = api(&env,&bearer,"POST","/api/connections",json!({"name":"Machine API","project_id":env.project_id,"kind":"openapi","endpoint":endpoint,"schema":schema(),"oauth":oauth("none")})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    let (status, created) = api(&env,&bearer,"POST","/api/connections",json!({"name":"Machine API","project_id":env.project_id,"kind":"openapi","endpoint":endpoint,"schema":schema(),"oauth":oauth("client_secret_basic")})).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["id"].as_u64().unwrap();
+    let (status, updated) = api(&env,&bearer,"PUT",&format!("/api/connections/{id}"),json!({"revision":created["revision"],"config":created["config"],"credential":{"mode":"oauth","access_token":"","client_secret":"placeholder-secret"}})).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (status, start) = api(
+        &env,
+        &bearer,
+        "POST",
+        &format!("/api/connections/{id}/oauth/start"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{start}");
+    let mut current = Value::Null;
+    for _ in 0..2 {
+        let (status, tested) = api(
+            &env,
+            &bearer,
+            "POST",
+            &format!("/api/connections/{id}/test"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{tested}");
+        assert!(!tested.to_string().contains("machine-access"));
+        assert!(!tested.to_string().contains("placeholder-secret"));
+        current = tested;
+    }
+    {
+        let exchanges = exchanges.lock().unwrap();
+        assert_eq!(exchanges.len(), 1, "a live token is reused");
+        let (basic, form) = &exchanges[0];
+        assert_eq!(
+            basic.as_deref(),
+            Some("Basic bWFjaGluZTpwbGFjZWhvbGRlci1zZWNyZXQ=")
+        );
+        assert_eq!(form["grant_type"], "client_credentials");
+        assert_eq!(form["scope"], "orders");
+        assert!(!form.contains_key("resource"));
+        assert!(!form.contains_key("client_secret"));
+    }
+    let mut config = current["config"].clone();
+    config["oauth"] = oauth("client_secret_post");
+    let (status, updated) = api(&env,&bearer,"PUT",&format!("/api/connections/{id}"),json!({"revision":current["revision"],"config":config,"credential":{"mode":"oauth","access_token":"","client_secret":"placeholder-secret"}})).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    for _ in 0..2 {
+        let (status, tested) = api(
+            &env,
+            &bearer,
+            "POST",
+            &format!("/api/connections/{id}/test"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{tested}");
+    }
+    let exchanges = exchanges.lock().unwrap();
+    assert_eq!(
+        exchanges.len(),
+        3,
+        "a token inside the expiry margin is replaced"
+    );
+    let (basic, form) = &exchanges[2];
+    assert_eq!(basic, &None);
+    assert_eq!(form["client_secret"], "placeholder-secret");
+    assert_eq!(form["client_id"], "machine");
+    drop(exchanges);
+    server.abort();
+}
+
+#[tokio::test]
 async fn an_agent_seeds_a_large_openapi_document_from_a_file_in_its_working_directory() {
     const LARGE_DESCRIPTION_BYTES: usize = 2 * 1024 * 1024 + 128 * 1024;
     let env = daemon_env();

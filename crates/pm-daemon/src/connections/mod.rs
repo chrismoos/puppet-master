@@ -205,9 +205,19 @@ pub enum TokenAuthMethod {
     ClientSecretBasic,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthGrant {
+    #[default]
+    AuthorizationCode,
+    /// The daemon requests tokens with the client's own credentials, with no user sign-in.
+    ClientCredentials,
+}
+
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct OAuthConfig {
+    pub grant: OAuthGrant,
     #[serde(default)]
     pub token_auth_method: TokenAuthMethod,
     pub authorization_url: String,
@@ -377,6 +387,13 @@ impl Config {
             bail!("REST connections require an OpenAPI document");
         }
         if let Some(oauth) = &self.oauth {
+            if oauth.grant == OAuthGrant::ClientCredentials
+                && oauth.token_auth_method == TokenAuthMethod::None
+            {
+                bail!(
+                    "Client credentials need a client secret sent in the Basic header or the form"
+                );
+            }
             for endpoint in [
                 &oauth.authorization_url,
                 &oauth.token_url,
