@@ -27,6 +27,8 @@ type MetricWindow = Window & {
 };
 
 const TERMINAL_READY_TIMEOUT_MS = 20_000;
+/** The worker keeps 5000 lines and trims whole pages, so a reload restores a little under that. */
+const RELOADED_HISTORY_FLOOR = 4_500;
 
 async function state(page: Page): Promise<ViewportState | null> {
   return page.evaluate(() => {
@@ -181,7 +183,7 @@ test("codex-style output preserves bottom following and scrolled markers across 
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${sessionId}$`));
   await readyState(page);
-  await expect.poll(() => state(page).then((viewport) => viewport?.baseY)).toBeGreaterThanOrEqual(4_900);
+  await expect.poll(() => state(page).then((viewport) => viewport?.baseY)).toBeGreaterThanOrEqual(RELOADED_HISTORY_FLOOR);
   await expectAtBottom(page);
 
   // Distance-from-bottom is shared by warm shows and reload replay. Verify the

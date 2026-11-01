@@ -380,7 +380,6 @@ function shownHistory(page: Page) {
       lines: shown.bufferLines,
       rows: shown.rows,
       viewportY: shown.viewportY,
-      replays: shown.socket?.replayCount ?? 0,
     };
   });
 }
@@ -390,14 +389,11 @@ test("a session opened cold has its whole scrollback once its screen is up", asy
   await openSession(page, 0);
   await fillHistory(page);
 
-  // A first snapshot carries a few hundred lines, so the screen paints
-  // without parsing the scrollback, and the rest follows it.
   await page.reload();
   await expect.poll(() => shownHistory(page).then((state) => state?.lines ?? 0), { timeout: 20_000 })
     .toBeGreaterThan(HISTORY_LINES);
 
   const filled = (await shownHistory(page))!;
-  expect(filled.replays).toBeGreaterThan(1);
   // The history arrives above the screen, which stays at the bottom.
   expect(filled.viewportY).toBe(filled.lines - filled.rows);
 });

@@ -67,6 +67,17 @@ describe("Ghostty terminal core", () => {
     expect(core.snapshot().rowData[0]?.text).toContain("primary state");
   });
 
+  it("keeps its own scrollback limit after restoring a worker's snapshot", async () => {
+    const workerLines = 5000;
+    const written = workerLines + 1000;
+    const bytes = new Uint8Array(await readFile(new URL("../../../../crates/pm-ghostty/testdata/native-state.snapshot", import.meta.url)));
+    const core = await createCore();
+    core.restoreSnapshot(bytes);
+    core.write("\x1b[?1049l");
+    core.write(Array.from({ length: written }, (_, line) => `line ${line}\r\n`).join(""));
+    expect(core.scrollbarState()!.total).toBeGreaterThan(written);
+  });
+
   it("rejects corrupt, truncated, and trailing snapshot data without replacing the current terminal", async () => {
     const bytes = new Uint8Array(await readFile(new URL("../../../../crates/pm-ghostty/testdata/native-state.snapshot", import.meta.url)));
     const corrupt = bytes.slice();

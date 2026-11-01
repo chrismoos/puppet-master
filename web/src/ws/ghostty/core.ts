@@ -34,6 +34,9 @@ import {
 const GHOSTTY_SUCCESS = 0;
 const GHOSTTY_OUT_OF_SPACE = -3;
 export const MAX_SCROLLBACK_BYTES = 32 * 1024 * 1024;
+/** No row costs less than a byte, so the byte limit always binds first. A
+ * line limit of zero keeps about one page rather than disabling it. */
+const MAX_SCROLLBACK_LINES = MAX_SCROLLBACK_BYTES;
 // wasm32 GhosttyTerminalSelectionFormatOptions layout at the pinned libghostty-vt revision.
 const SELECTION_FORMAT_OPTIONS_SIZE = 16;
 const PALETTE_BYTES = GHOSTTY_PALETTE_COLOR_COUNT * GHOSTTY_PALETTE_COLOR_BYTES;
@@ -224,6 +227,7 @@ export class GhosttyTerminalCore {
   private rows: GhosttyRow[] = [];
   private disposed = false;
   private theme: GhosttyTheme | null = null;
+  private maxScrollbackBytes = MAX_SCROLLBACK_BYTES;
   private keyboardLayoutMap: GhosttyKeyboardLayoutMap | undefined;
 
   private constructor(runtime: GhosttyRuntime) {
@@ -267,12 +271,8 @@ export class GhosttyTerminalCore {
       this.runtime.call("ghostty_terminal_new", GHOSTTY_C_API_NULL_CONFIG, this.terminalSlot, cols, rows),
     );
     this.terminal = this.runtime.readPointer(this.terminalSlot);
-    const scrollback = this.runtime.alloc(4);
-    this.runtime.view(scrollback, 4).setUint32(0, options.maxScrollbackBytes ?? MAX_SCROLLBACK_BYTES, true);
-    this.assertSuccess("ghostty_terminal_set", this.runtime.call(
-      "ghostty_terminal_set", this.terminal, GHOSTTY_TERMINAL_OPTION.scrollbackMaxBytes, scrollback,
-    ));
-    this.runtime.free(scrollback, 4);
+    this.maxScrollbackBytes = options.maxScrollbackBytes ?? MAX_SCROLLBACK_BYTES;
+    this.applyScrollbackLimits();
     this.applyDefaultCursorBlink();
     this.ptyWriter = onPtyData;
     this.ptyWriterId = this.runtime.attachPtyWriter(this.terminal, onPtyData);
@@ -425,6 +425,8 @@ export class GhosttyTerminalCore {
       this.runtime.call("ghostty_render_state_row_iterator_new", 0, this.rowIteratorSlot);
       this.runtime.call("ghostty_render_state_row_cells_new", 0, this.rowCellsSlot);
       this.rows = [];
+      // A restored terminal carries the worker's scrollback limits.
+      this.applyScrollbackLimits();
       this.ptyWriterId = this.ptyWriter ? this.runtime.attachPtyWriter(this.terminal, this.ptyWriter) : 0;
       if (this.theme) this.setTheme(this.theme);
     } finally {
@@ -530,6 +532,23 @@ export class GhosttyTerminalCore {
       offset: this.runtime.readField(this.scrollbar, "GhosttyTerminalScrollbar", "offset"),
       len: this.runtime.readField(this.scrollbar, "GhosttyTerminalScrollbar", "len"),
     };
+  }
+
+  private applyScrollbackLimits(): void {
+    const limit = this.runtime.alloc(4);
+    try {
+      for (const [option, value] of [
+        [GHOSTTY_TERMINAL_OPTION.scrollbackMaxBytes, this.maxScrollbackBytes],
+        [GHOSTTY_TERMINAL_OPTION.scrollbackMaxLines, MAX_SCROLLBACK_LINES],
+      ] as const) {
+        this.runtime.view(limit, 4).setUint32(0, value, true);
+        this.assertSuccess("ghostty_terminal_set(scrollback limit)", this.runtime.call(
+          "ghostty_terminal_set", this.terminal, option, limit,
+        ));
+      }
+    } finally {
+      this.runtime.free(limit, 4);
+    }
   }
 
   private modeEnabled(mode: number): boolean {

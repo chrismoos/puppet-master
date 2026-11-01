@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] An open terminal keeps growing its scrollback while output streams instead of stopping at the worker's 5000 lines after it connects or reconnects.
+
 - [Web] OAuth connections can use the client credentials grant: enter the token URL, client ID and client secret, and Puppet Master fetches and renews tokens itself with no sign-in.
 
 - [Web] Show gateway errors during agent installation instead of a JSON parsing error.
