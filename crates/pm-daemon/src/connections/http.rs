@@ -233,7 +233,14 @@ async fn test(
         let credential = daemon.fresh_connection_credential(id).await?;
         let outcome =
             match super::transport::execute(&current, &credential, &tool, &body.arguments).await? {
-                super::transport::Execution::Complete(result) => result,
+                super::transport::Execution::Complete(result) => {
+                    match super::results::keep("test", result) {
+                        super::results::Kept::Inline(result) => result,
+                        super::results::Kept::Large(large) => {
+                            large.with_file(Err("A test call keeps only the preview".into()))
+                        }
+                    }
+                }
                 super::transport::Execution::Unknown(lost) => {
                     anyhow::bail!("{lost}. The test call was not retried")
                 }

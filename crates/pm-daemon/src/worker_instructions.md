@@ -65,3 +65,6 @@ reports the call stalled, continue other work: a notice arrives when it settles.
 A privileged call executes only after native user approval. An unknown outcome
 means the response was lost: inspect upstream state before submitting another
 operation. Do not repeat a write merely because an approval or result is slow.
+A result over 32 KiB returns a summary with a preview and `file`, the full
+result's path on the host running your session. Read the parts you need from
+that file with your own tools rather than reading it whole.

@@ -11,8 +11,13 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 use super::{
-    validate_endpoint, Access, Config, Connection, Credential, Kind, Tool, MAX_RESULT_BYTES,
+    results::head, validate_endpoint, Access, Config, Connection, Credential, Kind, Tool,
+    MAX_RESULT_BYTES,
 };
+
+/// An MCP response may run past the result limit and still be kept as a
+/// prefix, so the transport accepts events up to this size.
+const MAX_MCP_EVENT_BYTES: usize = 2 * MAX_RESULT_BYTES;
 
 pub(super) enum Execution {
     Complete(Value),
@@ -159,7 +164,7 @@ async fn mcp(
     let mut transport_config =
         StreamableHttpClientTransportConfig::with_uri(config.endpoint.clone());
     transport_config.reinit_on_expired_session = false;
-    transport_config.max_sse_event_size = MAX_RESULT_BYTES;
+    transport_config.max_sse_event_size = MAX_MCP_EVENT_BYTES;
     transport_config.custom_headers = headers(credential)?
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -365,12 +370,16 @@ async fn execute_within(
                 json!({"isError":true,"content":[{"type":"text","text":"This tool requires downstream task or interactive input support. It was not automatically retried."}]})
             }
         };
-        if serde_json::to_vec(&value)?.len() > MAX_RESULT_BYTES {
-            return Ok(Execution::Complete(
-                json!({"isError":true,"content":[{"type":"text","text":"Downstream result exceeds the storage limit"}]}),
-            ));
+        let value = redact(value, credential)?;
+        let serialized = value.to_string();
+        if serialized.len() > MAX_RESULT_BYTES {
+            return Ok(Execution::Complete(json!({
+                "isError": value["isError"].as_bool().unwrap_or(false),
+                "truncated_at_limit": true,
+                "content": [{"type":"text","text": head(&serialized, MAX_RESULT_BYTES)}],
+            })));
         }
-        return Ok(Execution::Complete(redact(value, credential)?));
+        return Ok(Execution::Complete(value));
     }
     let operation = tool.operation.as_ref().context("Missing REST operation")?;
     let mut path = operation.path.clone();
@@ -455,24 +464,36 @@ async fn execute_within(
     };
     let status = response.status();
     let mut response = response;
+    // Reading a secret's length past the limit lets redaction see a secret
+    // the cut would otherwise split and leave partly in the stored prefix.
+    let read_limit = MAX_RESULT_BYTES + secrets(credential).first().map_or(0, String::len);
     let mut bytes = Vec::new();
+    let mut truncated = false;
     loop {
         let chunk = match response.chunk().await {
             Ok(Some(chunk)) => chunk,
             Ok(None) => break,
             Err(error) => return Ok(rest_lost(&error, timeout, credential)),
         };
-        if bytes.len() + chunk.len() > MAX_RESULT_BYTES {
-            return Ok(Execution::Complete(
-                json!({"isError":true,"status":status.as_u16(),"content":[{"type":"text","text":"API result exceeds the storage limit"}]}),
-            ));
+        let room = read_limit - bytes.len();
+        if chunk.len() > room {
+            bytes.extend_from_slice(&chunk[..room]);
+            truncated = true;
+            break;
         }
         bytes.extend_from_slice(&chunk);
     }
-    Ok(Execution::Complete(redact(
-        json!({"isError":!status.is_success(),"status":status.as_u16(),"content":[{"type":"text","text":String::from_utf8_lossy(&bytes)}]}),
+    let body = redact(
+        Value::String(String::from_utf8_lossy(&bytes).into_owned()),
         credential,
-    )?))
+    )?;
+    let body = body.as_str().unwrap_or_default();
+    let truncated = truncated || body.len() > MAX_RESULT_BYTES;
+    let mut value = json!({"isError":!status.is_success(),"status":status.as_u16(),"content":[{"type":"text","text":head(body, MAX_RESULT_BYTES)}]});
+    if truncated {
+        value["truncated_at_limit"] = json!(true);
+    }
+    Ok(Execution::Complete(value))
 }
 
 fn failed(error: &dyn std::error::Error, credential: &Credential) -> Execution {
@@ -498,7 +519,8 @@ fn rest_lost(error: &reqwest::Error, timeout: Duration, credential: &Credential)
     }
 }
 
-fn redact(value: Value, credential: &Credential) -> Result<Value> {
+/// The credential's secret strings, longest first.
+fn secrets(credential: &Credential) -> Vec<String> {
     let mut secrets = Vec::<String>::new();
     match credential {
         Credential::Bearer { token } => secrets.push(token.clone()),
@@ -523,6 +545,11 @@ fn redact(value: Value, credential: &Credential) -> Result<Value> {
     }
     secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
     secrets.retain(|secret| !secret.is_empty());
+    secrets
+}
+
+fn redact(value: Value, credential: &Credential) -> Result<Value> {
+    let secrets = secrets(credential);
     fn walk(value: &mut Value, secrets: &[String]) {
         match value {
             Value::String(text) => {
@@ -686,6 +713,80 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    /// Long enough to move a result at the size limit over loopback under load.
+    const TRANSFER_LIMIT: Duration = Duration::from_secs(30);
+
+    async fn run_with(connection: &Connection, credential: &Credential) -> Value {
+        match execute_within(connection, credential, "ask", &json!({}), TRANSFER_LIMIT)
+            .await
+            .unwrap()
+        {
+            Execution::Complete(value) => value,
+            Execution::Unknown(lost) => panic!("expected a result, got {lost}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rest_body_past_the_limit_keeps_its_prefix_and_its_status() {
+        let body = "a".repeat(MAX_RESULT_BYTES + 4096);
+        let sent = body.clone();
+        let router = axum::Router::new().route(
+            "/ask",
+            get(move || {
+                let sent = sent.clone();
+                async move { (StatusCode::CREATED, sent) }
+            }),
+        );
+        let value = run_with(&rest_connection(serve(router).await), &Credential::None).await;
+        assert_eq!(value["isError"], false);
+        assert_eq!(value["status"], 201);
+        assert_eq!(value["truncated_at_limit"], true);
+        assert_eq!(
+            value["content"][0]["text"].as_str().unwrap(),
+            &body[..MAX_RESULT_BYTES]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_across_the_cut_is_redacted_rather_than_left_in_part() {
+        let token = "secret-token";
+        let body = format!(
+            "{}{token}{}",
+            "a".repeat(MAX_RESULT_BYTES - 3),
+            "b".repeat(100)
+        );
+        let router = axum::Router::new().route(
+            "/ask",
+            get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        let credential = Credential::Bearer {
+            token: token.into(),
+        };
+        let value = run_with(&rest_connection(serve(router).await), &credential).await;
+        let text = value["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text.len(), MAX_RESULT_BYTES);
+        assert!(text.ends_with("aaa[re"), "{}", &text[text.len() - 12..]);
+    }
+
+    #[tokio::test]
+    async fn an_mcp_result_past_the_limit_keeps_its_prefix_and_its_outcome() {
+        let text = "x".repeat(MAX_RESULT_BYTES + 4096);
+        let connection = mcp_server(
+            Duration::ZERO,
+            json!({"result":{"content":[{"type":"text","text":text}],"isError":true}}),
+        )
+        .await;
+        let value = run_with(&connection, &Credential::None).await;
+        assert_eq!(value["isError"], true);
+        assert_eq!(value["truncated_at_limit"], true);
+        let kept = value["content"][0]["text"].as_str().unwrap();
+        assert_eq!(kept.len(), MAX_RESULT_BYTES);
+        assert!(kept.starts_with("{\"content\":[{"), "{}", &kept[..40]);
     }
 
     #[tokio::test]

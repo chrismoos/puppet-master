@@ -679,6 +679,108 @@ async fn an_allowed_call_returns_its_result_in_the_same_response() {
 }
 
 #[tokio::test]
+async fn a_large_result_returns_a_summary_and_its_full_redacted_body_in_a_file() {
+    use sha2::Digest;
+    use std::os::unix::fs::PermissionsExt;
+    let env = daemon_env();
+    let (token, _bearer, connection, _count, server) = orders_connection(&env).await;
+    let list = |request_id: &str, size: usize| json!({"connection_id":connection,"tool":"list_orders","arguments":{"query":{"q":format!("size:{size}")}},"request_id":request_id});
+    let small = tool(&env, &token, "call_connection_tool", list("small", 1000)).await;
+    assert_eq!(
+        small["result"]["content"][0]["text"],
+        large_orders(1000)
+            .to_string()
+            .replace("placeholder-credential", "[redacted]")
+    );
+    assert!(small["result"]["file"].is_null());
+
+    let read = tool(&env, &token, "call_connection_tool", list("large", 200_000)).await;
+    assert_eq!(read["status"], "succeeded", "{read}");
+    let summary = &read["result"];
+    let expected = large_orders(200_000)
+        .to_string()
+        .replace("placeholder-credential", "[redacted]");
+    assert_eq!(summary["truncated"], true);
+    assert_eq!(summary["isError"], false);
+    assert_eq!(summary["status"], 200);
+    assert_eq!(summary["bytes"], expected.len());
+    assert!(summary["content"].is_null());
+    assert!(expected.starts_with(summary["preview"].as_str().unwrap()));
+    let path = std::path::PathBuf::from(summary["file"].as_str().unwrap());
+    assert!(
+        path.to_string_lossy().contains("/session-drops/"),
+        "{path:?}"
+    );
+    assert!(path
+        .extension()
+        .is_some_and(|extension| extension == "json"));
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(written, expected);
+    assert_eq!(
+        summary["sha256"],
+        hex::encode(sha2::Sha256::digest(written.as_bytes()))
+    );
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+
+    let again = tool(
+        &env,
+        &token,
+        "get_connection_call",
+        json!({"call_id":read["id"]}),
+    )
+    .await;
+    assert_eq!(&again["result"], summary);
+    assert!(again["result"].to_string().len() <= 32 * 1024);
+
+    let huge = tool(
+        &env,
+        &token,
+        "call_connection_tool",
+        list("huge", 12 * 1024 * 1024),
+    )
+    .await;
+    let huge = settled(&env, &token, &huge["id"]).await;
+    assert_eq!(huge["status"], "succeeded", "{huge}");
+    assert_eq!(huge["result"]["truncated_at_limit"], true);
+    assert_eq!(huge["result"]["isError"], false);
+    assert_eq!(
+        huge["result"]["bytes"],
+        pm_daemon::drops::SESSION_DROP_FILE_MAX
+    );
+    let kept = std::fs::metadata(huge["result"]["file"].as_str().unwrap()).unwrap();
+    assert_eq!(kept.len() as usize, pm_daemon::drops::SESSION_DROP_FILE_MAX);
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_large_result_that_cannot_be_stored_still_settles_with_its_outcome() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = daemon_env();
+    let (token, _bearer, connection, _count, server) = orders_connection(&env).await;
+    let drops = env.project_root().join("scrollback").join("session-drops");
+    std::fs::set_permissions(&drops, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let read = tool(
+        &env,
+        &token,
+        "call_connection_tool",
+        json!({"connection_id":connection,"tool":"list_orders","arguments":{"query":{"q":"size:200000"}},"request_id":"large"}),
+    )
+    .await;
+    std::fs::set_permissions(&drops, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(read["status"], "succeeded", "{read}");
+    assert_eq!(read["result"]["truncated"], true);
+    assert!(read["result"]["file"].is_null());
+    let error = read["result"]["file_error"].as_str().unwrap();
+    assert!(error.contains("cannot store the file"), "{error}");
+    assert!(read["result"]["preview"]
+        .as_str()
+        .unwrap()
+        .starts_with("{\"echo\""));
+    server.abort();
+}
+
+#[tokio::test]
 async fn an_approval_given_during_the_wait_returns_the_result_in_the_same_response() {
     let env = daemon_env();
     let (token, bearer, connection, count, server) = orders_connection(&env).await;

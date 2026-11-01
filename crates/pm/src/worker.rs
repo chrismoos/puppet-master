@@ -2342,7 +2342,7 @@ fn write_session_drop(
         return WorkerMsg::SessionDropped {
             req_id,
             ok: false,
-            error: "the dropped file has no usable name".into(),
+            error: "the file has no usable name".into(),
             path: String::new(),
         };
     };
@@ -2369,7 +2369,7 @@ fn write_session_drop(
         Err(error) => WorkerMsg::SessionDropped {
             req_id,
             ok: false,
-            error: format!("cannot store the dropped file: {error}"),
+            error: format!("cannot store the file: {error}"),
             path: String::new(),
         },
     }

@@ -73,6 +73,12 @@ pub fn schema() -> Value {
     }})
 }
 
+/// An orders listing of at least `bytes` serialized bytes that quotes the credential once.
+pub fn large_orders(bytes: usize) -> Value {
+    let order = "o".repeat(1000);
+    json!({"echo":"placeholder-credential","orders":vec![order; bytes / 1000 + 1]})
+}
+
 pub async fn rest_upstream(counter: Arc<AtomicUsize>) -> (String, tokio::task::JoinHandle<()>) {
     let count = counter.clone();
     let router = Router::new()
@@ -101,6 +107,9 @@ pub async fn rest_upstream(counter: Arc<AtomicUsize>) -> (String, tokio::task::J
                             StatusCode::BAD_REQUEST,
                             Json(json!({"error":"Invalid query"})),
                         )
+                    } else if let Some(size) = query.get("q").and_then(|q| q.strip_prefix("size:"))
+                    {
+                        (StatusCode::OK, Json(large_orders(size.parse().unwrap())))
                     } else {
                         (StatusCode::OK, Json(json!({"orders":["first"]})))
                     }

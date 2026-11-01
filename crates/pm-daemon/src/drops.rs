@@ -176,9 +176,6 @@ impl Daemon {
                 "the dropped file exceeds the {SESSION_DROP_FILE_MAX}-byte limit"
             )));
         }
-        let filename = drop_filename(filename)
-            .ok_or_else(|| DaemonError::Rejected("the dropped file has no usable name".into()))?;
-        let session = self.storage().get_session(session_id)?;
         let terminal = match terminal_id {
             Some(id) => {
                 let terminal = self.storage().get_terminal(id)?;
@@ -191,12 +188,9 @@ impl Daemon {
             }
             None => self.storage().agent_terminal(session_id)?,
         };
-        let path = if session.worker_id == pm_protocol::domain::LOCAL_WORKER_ID {
-            self.store_local_drop(session_id, &filename, content)?
-        } else {
-            self.store_remote_drop(session.worker_id, session_id, filename, content)
-                .await?
-        };
+        let path = self
+            .store_session_file(session_id, filename, content)
+            .await?;
         match self
             .type_into_terminal(&terminal, &format!("{path} "))
             .await
@@ -214,6 +208,30 @@ impl Daemon {
         }
     }
 
+    /// Stores a file for the agent of `session_id` in that session's drop
+    /// directory on the host running it, and returns the absolute path.
+    pub(crate) async fn store_session_file(
+        &self,
+        session_id: u64,
+        filename: &str,
+        content: &[u8],
+    ) -> Result<String, DaemonError> {
+        if content.len() > SESSION_DROP_FILE_MAX {
+            return Err(DaemonError::Rejected(format!(
+                "the file exceeds the {SESSION_DROP_FILE_MAX}-byte limit"
+            )));
+        }
+        let filename = drop_filename(filename)
+            .ok_or_else(|| DaemonError::Rejected("the file has no usable name".into()))?;
+        let session = self.storage().get_session(session_id)?;
+        if session.worker_id == pm_protocol::domain::LOCAL_WORKER_ID {
+            self.store_local_drop(session_id, &filename, content)
+        } else {
+            self.store_remote_drop(session.worker_id, session_id, filename, content)
+                .await
+        }
+    }
+
     fn store_local_drop(
         &self,
         session_id: u64,
@@ -224,9 +242,7 @@ impl Daemon {
         sweep(root, SystemTime::now(), DROP_RETENTION);
         store_drop(root, session_id, filename, content)
             .map(|path| path.to_string_lossy().into_owned())
-            .map_err(|error| {
-                DaemonError::Rejected(format!("cannot store the dropped file: {error}"))
-            })
+            .map_err(|error| DaemonError::Rejected(format!("cannot store the file: {error}")))
     }
 
     async fn store_remote_drop(
@@ -294,6 +310,19 @@ mod tests {
         assert_eq!(std::fs::read(&first).unwrap(), b"one");
         assert_eq!(std::fs::read(&second).unwrap(), b"two");
         assert_eq!(second.file_name().unwrap(), "shot-2.png");
+    }
+
+    #[test]
+    fn a_planted_symlink_is_never_written_through() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        std::fs::write(&target, b"kept").unwrap();
+        let dir = session_dir(root.path(), 3);
+        crate::fsperm::create_private_dir(&dir).unwrap();
+        std::os::unix::fs::symlink(&target, dir.join("result.json")).unwrap();
+        let path = store_drop(root.path(), 3, "result.json", b"new").unwrap();
+        assert_eq!(path.file_name().unwrap(), "result-2.json");
+        assert_eq!(std::fs::read(&target).unwrap(), b"kept");
     }
 
     #[test]

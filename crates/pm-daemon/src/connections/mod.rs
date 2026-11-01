@@ -1,6 +1,7 @@
 mod http;
 mod oauth;
 mod openapi;
+mod results;
 mod scope;
 mod store;
 mod transport;
@@ -25,7 +26,8 @@ pub const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_CATALOG_TOOLS: usize = 2000;
 pub const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_HTTP_BODY_BYTES: usize = MAX_DOCUMENT_BYTES + 128 * 1024;
-pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
+/// The most of a result kept, which is also the most a session's host stores as a file.
+pub const MAX_RESULT_BYTES: usize = crate::drops::SESSION_DROP_FILE_MAX;
 const MAX_CONNECTION_NAME_BYTES: usize = 100;
 const MAX_REQUEST_ID_BYTES: usize = 200;
 const TOOL_PAGE_SIZE: u64 = 50;
@@ -689,16 +691,9 @@ impl Daemon {
             return Ok(());
         }
         let started = std::time::Instant::now();
+        let mut completed = None;
         match transport::execute(&c, &credential, &call.tool, &call.arguments).await {
-            Ok(transport::Execution::Complete(result)) => {
-                let failed = result["isError"].as_bool().unwrap_or(false);
-                self.storage.finish_connection_call(
-                    id,
-                    if failed { "failed" } else { "succeeded" },
-                    Some(result),
-                    None,
-                )?;
-            }
+            Ok(transport::Execution::Complete(result)) => completed = Some(result),
             Ok(transport::Execution::Unknown(lost)) => {
                 tracing::warn!(
                     call = %id,
@@ -736,8 +731,36 @@ impl Daemon {
             }
         }
         drop(_guard);
+        if let Some(result) = completed {
+            let failed = result["isError"].as_bool().unwrap_or(false);
+            let result = self.keep_connection_result(&call, result).await;
+            self.storage.finish_connection_call(
+                id,
+                if failed { "failed" } else { "succeeded" },
+                Some(result),
+                None,
+            )?;
+        }
         self.notify_connection_call(id).await;
         Ok(())
+    }
+
+    /// Returns what the call record keeps: a small result whole, or a large
+    /// one's summary after storing it in full on the host running the session.
+    async fn keep_connection_result(&self, call: &Call, result: Value) -> Value {
+        match results::keep(&call.id, result) {
+            results::Kept::Inline(result) => result,
+            results::Kept::Large(large) => {
+                let stored = self
+                    .store_session_file(call.session_id, &large.filename, large.content.as_bytes())
+                    .await
+                    .map_err(|error| error.to_string());
+                if let Err(error) = &stored {
+                    tracing::warn!(call = %call.id, %error, "large connection result has no file");
+                }
+                large.with_file(stored)
+            }
+        }
     }
 
     /// Holds until the call settles or the wait runs out. An unsettled call
@@ -838,8 +861,8 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         make("update_connection_draft","Revise an inactive connection draft without credentials. Supply the current revision and full setup metadata in config, without a schema: the draft keeps its OpenAPI document unless schema_path or schema_url replaces it. Cannot modify an active connection or apply policy. User edits win on revision conflicts.",json!({"connection_id":connection_id,"revision":{"type":"integer"},"config":{"type":"object"},"schema_path":{"type":"string","description":SCHEMA_PATH_HELP},"schema_url":{"type":"string","description":SCHEMA_URL_HELP}}),vec!["connection_id","revision","config"]),
         make("propose_connection_policy","Propose policy changes for native user review. Never applies the proposal. Classify tools deliberately. Downstream readOnlyHint and HTTP methods are suggestions, not authority. The policy is never passed inline: write a JSON file in your working directory and pass policy_path. The file names only what changes, so a tool it leaves out keeps its classification and you do not resend the whole catalog.",json!({"connection_id":connection_id,"revision":{"type":"integer"},"policy_path":{"type":"string","description":POLICY_PATH_HELP},"explanation":{"type":"string"}}),vec!["connection_id","revision","policy_path","explanation"]),
         make("propose_connection_update","Propose an update to a connection, active or not, for native user review. Never applies it and never carries credentials. Supply the current revision, an explanation, and a config holding only the fields to change: name, endpoint, oauth. A new OpenAPI document goes beside config as schema_path, a file in your working directory, or as schema_url, never inline. Policy defaults and tool classifications go beside config as policy_path, a JSON file naming only what changes, never inline. Omitted fields keep their current value, and a tool the policy file leaves out keeps its classification when its definition is unchanged. A schema_url is fetched by the controller with no credentials, so it must be publicly reachable without authentication, and a Puppet Master share, forward or dashboard URL cannot be used: save the document to a file and pass schema_path instead. The user sees the changed fields, the tools added, removed and changed, and the policy changes, and applies them together. The connection stays active unless the endpoint, kind, project or OAuth settings change, which deactivates it until the user tests and activates it.",json!({"connection_id":connection_id,"revision":{"type":"integer"},"config":{"type":"object"},"schema_path":{"type":"string","description":SCHEMA_PATH_HELP},"schema_url":{"type":"string","description":SCHEMA_URL_HELP},"policy_path":{"type":"string","description":POLICY_PATH_HELP},"explanation":{"type":"string"}}),vec!["connection_id","revision","explanation"]),
-        make("call_connection_tool","Request a downstream tool call and wait up to wait_ms for it to settle, including time spent awaiting approval. A settled call returns its result. An unsettled call returns its durable call ID with a waiting field: wait again with get_connection_call rather than repeating the operation. Reuse request_id to recover a request without duplicate execution.",json!({"connection_id":connection_id,"tool":{"type":"string"},"arguments":{"type":"object"},"request_id":{"type":"string"},"justification":{"type":"string"},"wait_ms":wait_ms.clone()}),vec!["connection_id","tool","arguments","request_id"]),
-        make("get_connection_call","Wait up to wait_ms for a call to settle, then return its approval/execution state and result. A call still unsettled carries a waiting field; once it reports stalled, a notice arrives in this session when the call settles. outcome_unknown means check upstream before retrying.",json!({"call_id":{"type":"string"},"wait_ms":wait_ms}),vec!["call_id"]),
+        make("call_connection_tool","Request a downstream tool call and wait up to wait_ms for it to settle, including time spent awaiting approval. A settled call returns its result. A result over 32 KiB returns a summary instead, with a preview and file, the full result's path on the host running this session: read the parts you need from it with your own tools rather than the whole file. An unsettled call returns its durable call ID with a waiting field: wait again with get_connection_call rather than repeating the operation. Reuse request_id to recover a request without duplicate execution.",json!({"connection_id":connection_id,"tool":{"type":"string"},"arguments":{"type":"object"},"request_id":{"type":"string"},"justification":{"type":"string"},"wait_ms":wait_ms.clone()}),vec!["connection_id","tool","arguments","request_id"]),
+        make("get_connection_call","Wait up to wait_ms for a call to settle, then return its approval/execution state and result, summarized with a file path as in call_connection_tool when large. A call still unsettled carries a waiting field; once it reports stalled, a notice arrives in this session when the call settles. outcome_unknown means check upstream before retrying.",json!({"call_id":{"type":"string"},"wait_ms":wait_ms}),vec!["call_id"]),
         make("list_connection_calls","Recover this session's recent calls. Supervisors can inspect calls within their bucket.",json!({}),vec![]),
     ]
 }
