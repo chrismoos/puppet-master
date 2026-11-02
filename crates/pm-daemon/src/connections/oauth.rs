@@ -13,18 +13,27 @@ use crate::{daemon::Daemon, storage::now_unix_ms};
 const OAUTH_STATE_TTL_MS: i64 = 10 * 60 * 1000;
 const TOKEN_EXPIRY_MARGIN_MS: i64 = 60_000;
 const SECOND_MS: i64 = 1000;
+/// Token types a bearer `Authorization` header cannot carry: DPoP and MAC
+/// need a per-request proof, and N_A marks a token that is not an access token.
+const UNSENDABLE_TOKEN_TYPES: [&str; 3] = ["DPoP", "MAC", "N_A"];
 
 fn token_credential(value: Value, old: Credential) -> Result<Credential> {
     let access_token = value["access_token"]
         .as_str()
         .context("OAuth response has no access token")?
         .to_owned();
-    if !value["token_type"]
-        .as_str()
-        .unwrap_or("Bearer")
-        .eq_ignore_ascii_case("bearer")
+    let token_type = value["token_type"].as_str().unwrap_or("Bearer");
+    if UNSENDABLE_TOKEN_TYPES
+        .iter()
+        .any(|unsendable| token_type.eq_ignore_ascii_case(unsendable))
     {
-        bail!("Unsupported OAuth token type");
+        bail!("The token endpoint issued a {token_type} token, which Puppet Master can only send as a bearer token");
+    }
+    if !token_type.eq_ignore_ascii_case("bearer") {
+        tracing::warn!(
+            token_type,
+            "OAuth token endpoint named a nonstandard token type, sending the token as a bearer token"
+        );
     }
     let (refresh_token, client_secret) = match old {
         Credential::OAuth {
@@ -592,6 +601,35 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_nonstandard_token_type_is_sent_as_a_bearer_token() {
+        for token_type in ["Bearer", "bearer", "", "JWT", "access_token"] {
+            let credential = token_credential(
+                json!({"access_token":"issued","token_type":token_type}),
+                Credential::None,
+            );
+            assert!(
+                matches!(credential, Ok(Credential::OAuth { ref access_token, .. }) if access_token == "issued"),
+                "{token_type}"
+            );
+        }
+        assert!(token_credential(json!({"access_token":"issued"}), Credential::None).is_ok());
+    }
+
+    #[test]
+    fn a_token_that_needs_a_proof_is_refused_by_name() {
+        for token_type in ["DPoP", "dpop", "MAC", "N_A"] {
+            let Err(error) = token_credential(
+                json!({"access_token":"issued","token_type":token_type}),
+                Credential::None,
+            ) else {
+                panic!("a {token_type} token was accepted");
+            };
+            let error = error.to_string();
+            assert!(error.contains(token_type), "{error}");
+        }
+    }
 
     #[test]
     fn plain_http_is_allowed_only_on_loopback() {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Daemon] OAuth connections accept a token whose endpoint names a nonstandard token type and send it as a bearer token, instead of failing with "Unsupported OAuth token type". DPoP, MAC and N_A tokens are still refused, now by name.
+
 - [Daemon] A connection call whose result is over 32 KiB returns a preview and the path of a file holding the full result on the session's host, instead of the whole result or a storage-limit error. A result over 10 MiB keeps its first 10 MiB and still reports whether the call succeeded.
 
 - [Web] An open terminal keeps growing its scrollback while output streams instead of stopping at the worker's 5000 lines after it connects or reconnects.
