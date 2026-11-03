@@ -174,6 +174,35 @@ it("opens a call over the list with its arguments, policy, timeline and decision
   expect(location.hash).toBe("#/settings/connections");
 });
 
+it("shows a call's large file arguments as an outline and preview rather than all of them", async () => {
+  const args = { body: { domains: Array.from({ length: 1000 }, (_, index) => `domain-${index}.example`) } };
+  const preview = JSON.stringify(args, null, 2).split("\n").slice(0, 40).join("\n");
+  vi.mocked(api.connectionRequest).mockImplementation(async (path: string) => {
+    if (path === `/api/connection-calls/${CALL_ID}`)
+      return {
+        ...pending,
+        arguments: args,
+        arguments_path: "batches/batch-001.json",
+        arguments_summary: {
+          bytes: 41_234,
+          sha256: "3f9a6c0000000000000000000000000000000000000000000000000000e21b",
+          lines: 1004,
+          preview,
+          outline: [{ field: "body.domains", shape: "array of 1000 strings" }],
+        },
+      } as never;
+    return full as never;
+  });
+  await show({ view: "call", callId: CALL_ID });
+  const dialog = host.querySelector('[role="dialog"]')!;
+  expect(dialog.querySelector(".call-args-source")!.textContent).toContain("batches/batch-001.json");
+  expect(dialog.querySelector(".call-args-source")!.textContent).toContain("41.2 KB");
+  expect(dialog.querySelector(".call-args-outline")!.textContent).toBe("body.domainsarray of 1000 strings");
+  expect(dialog.querySelectorAll("pre")[0].textContent).toBe(preview);
+  await act(async () => [...dialog.querySelectorAll("button")].find((b) => b.textContent === "Show all")!.click());
+  expect(dialog.querySelectorAll("pre")[0].textContent).toBe(JSON.stringify(args, null, 2));
+});
+
 it("shows a connection on a page of its own, with its tools, policy and calls", async () => {
   await show({ view: "detail", id: 1 });
   expect(host.querySelector(".cx-crumbs")!.textContent).toBe("Connections / DeepWiki");

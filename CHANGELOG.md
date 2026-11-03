@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [Daemon] Agents can pass connection call arguments as `arguments_path`, a JSON file in their working directory read once when the call is submitted, instead of inline `arguments`. Later edits to the file cannot change a submitted call, and a large argument set is not repeated back to the agent.
+
+- [Web] A call with large arguments, in Approvals and in Connections, shows where they came from, their size and SHA-256, an outline of their fields and their first lines, with Show all and a download of the exact JSON.
+
 - [Daemon] OAuth connections accept a token whose endpoint names a nonstandard token type and send it as a bearer token, instead of failing with "Unsupported OAuth token type". DPoP, MAC and N_A tokens are still refused, now by name.
 
 - [Daemon] A connection call whose result is over 32 KiB returns a preview and the path of a file holding the full result on the session's host, instead of the whole result or a storage-limit error. A result over 10 MiB keeps its first 10 MiB and still reports whether the call succeeded.

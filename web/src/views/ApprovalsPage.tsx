@@ -17,6 +17,7 @@ import {
 import { approvalRoutePath } from "@puppet-master/client-core/router";
 import { decideApproval, getApproval, listApprovals } from "../api/approvals";
 import { navigate } from "../router";
+import { CallArguments } from "./CallArguments";
 import "./ApprovalsPage.css";
 
 const REFRESH_MS = 5_000;
@@ -358,8 +359,12 @@ export function ApprovalModal({
               </dl>
               <section className="approval-arguments" aria-label="Exact arguments">
                 <h3>Exact arguments</h3>
-                <p className="muted">Approving executes these arguments once, exactly as shown.</p>
-                <pre>{formatArguments(detail.arguments)}</pre>
+                <p className="muted">
+                  {detail.arguments_path
+                    ? "Read from the agent's file when the call was submitted. Approving executes these arguments once, even if the file has changed since."
+                    : "Approving executes these arguments once, exactly as shown."}
+                </p>
+                <CallArguments call={detail} />
               </section>
               {approvalWarnings(detail).map((warning) => (
                 <p key={warning} className="approvals-warning" role="note">

@@ -12,6 +12,7 @@ vi.mock("../api/approvals", () => ({
   listApprovals: vi.fn(),
   getApproval: vi.fn(),
   decideApproval: vi.fn(),
+  downloadCallArguments: vi.fn(),
 }));
 vi.mock("../router", () => ({ navigate: vi.fn() }));
 
@@ -136,6 +137,41 @@ it("opens the routed approval in a modal with its exact arguments and approves i
   expect(api.decideApproval).toHaveBeenCalledTimes(1);
   expect(api.decideApproval).toHaveBeenCalledWith("abc", true);
   expect(dialog.querySelector(".approvals-outcome")?.textContent).toContain("Running once with the arguments shown");
+});
+
+it("shows large file arguments as their source, digest, outline and first lines, with all of them on request", async () => {
+  const pending = summary("big", 5);
+  const domains = Array.from({ length: 1000 }, (_, index) => `domain-${index}.example`);
+  const args = { body: { domains } };
+  const preview = JSON.stringify(args, null, 2).split("\n").slice(0, 40).join("\n");
+  vi.mocked(api.listApprovals).mockResolvedValue([pending]);
+  vi.mocked(api.getApproval).mockResolvedValue({
+    ...detail(pending, args),
+    arguments_path: "batches/batch-001.json",
+    arguments_summary: {
+      bytes: 41_234,
+      sha256: "3f9a6c0000000000000000000000000000000000000000000000000000e21b",
+      lines: 1004,
+      preview,
+      outline: [{ field: "body.domains", shape: "array of 1000 strings" }],
+    },
+  });
+  vi.mocked(api.downloadCallArguments).mockResolvedValue();
+  await render("big");
+  const section = host.querySelector(".approval-arguments")!;
+  expect(section.textContent).toContain("even if the file has changed since");
+  expect(section.querySelector(".call-args-source")?.textContent).toContain("batches/batch-001.json");
+  expect(section.textContent).toContain("41.2 KB");
+  expect(section.textContent).toContain("sha256 3f9a6c…e21b");
+  expect(section.querySelector(".call-args-outline dt")?.textContent).toBe("body.domains");
+  expect(section.querySelector(".call-args-outline dd")?.textContent).toBe("array of 1000 strings");
+  expect(section.querySelector("pre")?.textContent).toBe(preview);
+  expect(section.textContent).toContain("Showing the first 40 of 1,004 lines");
+  await act(async () => button("Show all").click());
+  expect(section.querySelector("pre")?.textContent).toBe(JSON.stringify(args, null, 2));
+  expect(section.querySelector(".is-clipped")).toBeNull();
+  await act(async () => button("Download JSON").click());
+  expect(api.downloadCallArguments).toHaveBeenCalledWith("big");
 });
 
 it("rejects without invoking, and says so when a decision lost the race", async () => {

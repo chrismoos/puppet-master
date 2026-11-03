@@ -781,6 +781,123 @@ async fn a_large_result_that_cannot_be_stored_still_settles_with_its_outcome() {
 }
 
 #[tokio::test]
+async fn arguments_from_a_file_are_frozen_at_submission_and_approved_as_those_exact_bytes() {
+    use sha2::Digest;
+    let env = daemon_env();
+    let (token, bearer, connection, count, server) = orders_connection(&env).await;
+    let domains = (0..2000)
+        .map(|i| format!("domain-{i}.example"))
+        .collect::<Vec<_>>();
+    let submitted = json!({"path":{"id":"first"},"body":{"name":"approved","domains":domains}});
+    let batch = env.project_root().join("batch.json");
+    std::fs::write(&batch, serde_json::to_string_pretty(&submitted).unwrap()).unwrap();
+    let digest = hex::encode(sha2::Sha256::digest(submitted.to_string().as_bytes()));
+    let request = json!({"connection_id":connection,"tool":"update_order","arguments_path":"batch.json","request_id":"batch-1","justification":"Recover batch 1","wait_ms":SHORTEST_WAIT_MS});
+
+    let pending = tool(&env, &token, "call_connection_tool", request.clone()).await;
+    assert_eq!(pending["status"], "pending", "{pending}");
+    assert_eq!(pending["arguments_path"], "batch.json");
+    assert_eq!(pending["arguments"]["truncated"], true);
+    assert_eq!(pending["arguments"]["sha256"], digest);
+    assert!(pending.to_string().len() < 32 * 1024);
+
+    std::fs::write(
+        &batch,
+        json!({"path":{"id":"first"},"body":{"name":"edited"}}).to_string(),
+    )
+    .unwrap();
+    let retried = tool(&env, &token, "call_connection_tool", request).await;
+    let message = retried["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(message.contains("different call"), "{retried}");
+
+    let id = pending["id"].as_str().unwrap();
+    let (status, detail) = api(
+        &env,
+        &bearer,
+        "GET",
+        &format!("/api/connection-approvals/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["arguments"], submitted);
+    assert_eq!(detail["arguments_path"], "batch.json");
+    let summary = &detail["arguments_summary"];
+    assert_eq!(summary["sha256"], digest);
+    assert!(summary["outline"]
+        .as_array()
+        .unwrap()
+        .contains(&json!({"field":"body.domains","shape":"array of 2000 strings"})));
+    assert!(summary["preview"]
+        .as_str()
+        .unwrap()
+        .starts_with("{\n  \"body\": {"));
+    let (status, downloaded) = api(
+        &env,
+        &bearer,
+        "GET",
+        &format!("/api/connection-calls/{id}/arguments"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(downloaded, submitted);
+
+    let path = format!("/api/connection-calls/{id}/decision");
+    let (status, _) = api(&env, &bearer, "POST", &path, json!({"approve":true})).await;
+    assert_eq!(status, StatusCode::OK);
+    let done = settled(&env, &token, &pending["id"]).await;
+    assert_eq!(done["status"], "succeeded", "{done}");
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    let echoed = std::fs::read_to_string(done["result"]["file"].as_str().unwrap()).unwrap();
+    assert_eq!(echoed, submitted["body"].to_string());
+    server.abort();
+}
+
+#[tokio::test]
+async fn arguments_path_is_refused_beside_inline_arguments_outside_the_directory_or_off_schema() {
+    let env = daemon_env();
+    let (token, _bearer, connection, count, server) = orders_connection(&env).await;
+    let outside = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        outside.path(),
+        json!({"path":{"id":"first"},"body":{"name":"x"}}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        env.project_root().join("nameless.json"),
+        json!({"path":{"id":"first"},"body":{}}).to_string(),
+    )
+    .unwrap();
+    for (extra, expected) in [
+        (
+            json!({"arguments_path":"nameless.json","arguments":{}}),
+            "not both",
+        ),
+        (
+            json!({"arguments_path":outside.path()}),
+            "outside the session working directory",
+        ),
+        (json!({"arguments_path":"missing.json"}), "arguments_path:"),
+        (
+            json!({"arguments_path":"nameless.json"}),
+            "Invalid tool arguments",
+        ),
+    ] {
+        let mut args = json!({"connection_id":connection,"tool":"update_order","request_id":"refused","justification":"Rename"});
+        for (key, value) in extra.as_object().unwrap() {
+            args[key] = value.clone();
+        }
+        let refused = tool(&env, &token, "call_connection_tool", args).await;
+        assert_eq!(refused["isError"], true, "{refused}");
+        let message = refused["content"][0]["text"].as_str().unwrap();
+        assert!(message.contains(expected), "{expected}: {message}");
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    server.abort();
+}
+
+#[tokio::test]
 async fn an_approval_given_during_the_wait_returns_the_result_in_the_same_response() {
     let env = daemon_env();
     let (token, bearer, connection, count, server) = orders_connection(&env).await;

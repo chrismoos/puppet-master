@@ -6,6 +6,7 @@ import {
   expiresIn,
   filterApprovals,
   formatArguments,
+  formatSize,
   newlyPending,
   pendingCount,
   relativeTime,
@@ -104,5 +105,13 @@ describe("approval alerts", () => {
     const third = newlyPending(second.seen, [at("b", 3, "succeeded"), at("a", 2)]);
     expect(third.fresh).toEqual([]);
     expect([...third.seen]).toEqual(["a"]);
+  });
+});
+
+describe("argument sizes", () => {
+  it("reads in decimal units", () => {
+    expect(formatSize(512)).toBe("512 B");
+    expect(formatSize(41_234)).toBe("41.2 KB");
+    expect(formatSize(3_400_000)).toBe("3.4 MB");
   });
 });

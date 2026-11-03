@@ -13,6 +13,7 @@ import {
 } from "../api/connections";
 import { copyTextToClipboard } from "../clipboard";
 import { navigate, replaceRoute } from "../router";
+import { CallArguments } from "./CallArguments";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useAppState } from "../state/hooks";
 import {
@@ -225,7 +226,7 @@ function CallModal({
             </div>
             <div>
               <h3>Exact arguments</h3>
-              <pre>{JSON.stringify(call.arguments, null, 2)}</pre>
+              <CallArguments call={call} />
             </div>
             <div>
               <h3>Result</h3>

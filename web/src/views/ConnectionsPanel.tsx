@@ -55,6 +55,7 @@ import {
   type TabState,
   type ToolFilter,
 } from "./connectionsModel";
+import { CallArguments } from "./CallArguments";
 import { Badge, Chips, PolicyBadge, useDecision, useNames } from "./connectionsParts";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Pager } from "./Pager";
@@ -1558,7 +1559,11 @@ function CallDetails({
   const value = error ? (
     <p role="alert">{error}</p>
   ) : full ? (
-    <pre>{JSON.stringify(full[field], null, 2)}</pre>
+    field === "arguments" ? (
+      <CallArguments call={full} />
+    ) : (
+      <pre>{JSON.stringify(full[field], null, 2)}</pre>
+    )
   ) : (
     <p role="status">Loading call details…</p>
   );

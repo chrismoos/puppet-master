@@ -96,6 +96,103 @@ fn bare_text(result: &Value) -> Option<&str> {
     }
 }
 
+/// How many lines of a large argument set an approval previews.
+const ARGUMENTS_PREVIEW_LINES: usize = 40;
+/// Most fields an outline of large arguments lists.
+const MAX_OUTLINE_FIELDS: usize = 50;
+/// Longest value an outline quotes before shortening it.
+const MAX_OUTLINE_VALUE_CHARS: usize = 80;
+
+/// The exact bytes a call's arguments are executed, hashed and downloaded as.
+pub(super) fn arguments_bytes(arguments: &Value) -> Vec<u8> {
+    arguments.to_string().into_bytes()
+}
+
+/// For arguments over the inline budget, their size and digest in place of the arguments.
+pub(super) fn arguments_digest(arguments: &Value) -> Option<Value> {
+    let bytes = arguments_bytes(arguments);
+    (bytes.len() > MAX_INLINE_RESULT_BYTES).then(|| {
+        json!({"truncated": true, "bytes": bytes.len(), "sha256": hex::encode(Sha256::digest(&bytes))})
+    })
+}
+
+/// For arguments over the inline budget, what an approval shows instead of all of them:
+/// the digest, an outline of their fields, and their first lines.
+pub(super) fn arguments_summary(arguments: &Value) -> Option<Value> {
+    let mut summary = arguments_digest(arguments)?;
+    let pretty = serde_json::to_string_pretty(arguments).unwrap_or_default();
+    let lines = pretty.lines().count();
+    let preview = pretty
+        .lines()
+        .take(ARGUMENTS_PREVIEW_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    summary["lines"] = json!(lines);
+    summary["preview"] = json!(head(&preview, PREVIEW_BYTES));
+    summary["outline"] = json!(outline(arguments));
+    Some(summary)
+}
+
+/// Top-level fields, and the fields of top-level objects, each with its value or its size.
+fn outline(arguments: &Value) -> Vec<Value> {
+    let mut fields = Vec::new();
+    let Some(object) = arguments.as_object() else {
+        return vec![json!({"field": "", "shape": shape(arguments)})];
+    };
+    for (key, value) in object {
+        match value.as_object() {
+            Some(children) if !children.is_empty() => {
+                for (child, value) in children {
+                    fields.push(json!({"field": format!("{key}.{child}"), "shape": shape(value)}));
+                }
+            }
+            _ => fields.push(json!({"field": key, "shape": shape(value)})),
+        }
+    }
+    fields.truncate(MAX_OUTLINE_FIELDS);
+    fields
+}
+
+fn shape(value: &Value) -> String {
+    match value {
+        Value::Array(items) => {
+            let kind = |item: &Value| match item {
+                Value::String(_) => "string",
+                Value::Number(_) => "number",
+                Value::Bool(_) => "boolean",
+                Value::Null => "null",
+                Value::Array(_) => "array",
+                Value::Object(_) => "object",
+            };
+            let first = items.first().map(kind);
+            let noun = match first {
+                Some(first) if items.iter().all(|item| kind(item) == first) => first,
+                Some(_) => "value",
+                None => return "empty array".into(),
+            };
+            let plural = if items.len() == 1 { "" } else { "s" };
+            format!("array of {} {noun}{plural}", items.len())
+        }
+        Value::Object(fields) => {
+            let plural = if fields.len() == 1 { "" } else { "s" };
+            format!("object, {} key{plural}", fields.len())
+        }
+        scalar => {
+            let text = scalar.to_string();
+            if text.chars().count() > MAX_OUTLINE_VALUE_CHARS {
+                format!(
+                    "{}…",
+                    text.chars()
+                        .take(MAX_OUTLINE_VALUE_CHARS)
+                        .collect::<String>()
+                )
+            } else {
+                text
+            }
+        }
+    }
+}
+
 /// The longest prefix of `text` within `limit` bytes that ends on a character boundary.
 pub(super) fn head(text: &str, limit: usize) -> &str {
     let mut end = text.len().min(limit);
@@ -185,6 +282,52 @@ mod tests {
             .unwrap()
             .to_owned();
         assert_eq!(preview, "a".repeat(PREVIEW_BYTES - 1));
+    }
+
+    fn batch(count: usize) -> Value {
+        let domains = (0..count)
+            .map(|i| format!("domain-{i}.example"))
+            .collect::<Vec<_>>();
+        json!({"path":{"campaign":"q4"},"body":{"priority":"high","domains":domains,"notify":{"email":"ops","on":"done"}}})
+    }
+
+    #[test]
+    fn small_arguments_need_no_summary() {
+        assert!(arguments_digest(&batch(10)).is_none());
+        assert!(arguments_summary(&batch(10)).is_none());
+    }
+
+    #[test]
+    fn large_arguments_are_outlined_previewed_and_hashed_as_their_exact_bytes() {
+        let arguments = batch(2000);
+        let summary = arguments_summary(&arguments).unwrap();
+        let bytes = arguments_bytes(&arguments);
+        assert_eq!(summary["bytes"], bytes.len());
+        assert_eq!(summary["sha256"], hex::encode(Sha256::digest(&bytes)));
+        assert_eq!(
+            summary["outline"],
+            json!([
+                {"field":"body.domains","shape":"array of 2000 strings"},
+                {"field":"body.notify","shape":"object, 2 keys"},
+                {"field":"body.priority","shape":"\"high\""},
+                {"field":"path.campaign","shape":"\"q4\""},
+            ])
+        );
+        let preview = summary["preview"].as_str().unwrap();
+        assert_eq!(preview.lines().count(), ARGUMENTS_PREVIEW_LINES);
+        assert!(serde_json::to_string_pretty(&arguments)
+            .unwrap()
+            .starts_with(preview));
+        assert!(summary["lines"].as_u64().unwrap() > 2000);
+        assert!(summary.to_string().len() <= MAX_INLINE_RESULT_BYTES);
+    }
+
+    #[test]
+    fn an_outline_names_mixed_arrays_and_shortens_long_values() {
+        assert_eq!(shape(&json!([1, "a"])), "array of 2 values");
+        assert_eq!(shape(&json!([])), "empty array");
+        assert_eq!(shape(&json!([{}])), "array of 1 object");
+        assert!(shape(&json!("x".repeat(500))).ends_with('…'));
     }
 
     #[test]

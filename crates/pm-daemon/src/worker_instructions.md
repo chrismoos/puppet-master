@@ -59,7 +59,9 @@ own call.
 `call_connection_tool` waits for the call to settle and returns its result, or
 returns a durable call ID with a `waiting` field when the wait ends first.
 Supply a stable `request_id` for each intended operation, plus a justification
-when approval is required. Wait again with `get_connection_call`, which holds
+when approval is required. Pass large arguments as `arguments_path`, a JSON
+file in your working directory read once at submission, instead of inline
+`arguments`. Wait again with `get_connection_call`, which holds
 the same way, and use `list_connection_calls` to recover calls. Once `waiting`
 reports the call stalled, continue other work: a notice arrives when it settles.
 A privileged call executes only after native user approval. An unknown outcome

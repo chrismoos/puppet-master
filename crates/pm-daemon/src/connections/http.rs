@@ -34,6 +34,7 @@ pub(crate) fn router() -> Router<Arc<Daemon>> {
         .route("/api/connection-calls", get(calls))
         .route("/api/connection-calls/{id}", get(call_details))
         .route("/api/connection-calls/{id}/decision", post(decide))
+        .route("/api/connection-calls/{id}/arguments", get(call_arguments))
         .route("/api/connection-approvals", get(approvals))
         .route("/api/connection-approvals/{id}", get(approval_details))
         .layer(DefaultBodyLimit::max(super::MAX_HTTP_BODY_BYTES))
@@ -418,7 +419,57 @@ async fn call_details(
     if authed_user(&daemon, &headers).is_none() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    response(daemon.storage.connection_call(&id))
+    response(
+        daemon
+            .storage
+            .connection_call(&id)
+            .and_then(|call| call_view(&call)),
+    )
+}
+
+/// A call with a summary of its arguments when they are too large to read whole.
+fn call_view(call: &super::Call) -> anyhow::Result<Value> {
+    let mut value = serde_json::to_value(call)?;
+    if let Some(summary) = super::results::arguments_summary(&call.arguments) {
+        value["arguments_summary"] = summary;
+    }
+    Ok(value)
+}
+
+/// The exact argument bytes a call executes with, as a JSON download.
+async fn call_arguments(
+    State(daemon): State<Arc<Daemon>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if authed_user(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Ok(call) = daemon.storage.connection_call(&id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"This call no longer exists"})),
+        )
+            .into_response();
+    };
+    let filename = format!(
+        "connection-call-{}-arguments.json",
+        &call.id[..call.id.len().min(12)]
+    );
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/json".to_owned(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        super::results::arguments_bytes(&call.arguments),
+    )
+        .into_response()
 }
 
 /// An endpoint as an approval shows it, without credentials, query or fragment.
@@ -517,15 +568,11 @@ async fn approval_details(
         )
             .into_response();
     }
-    response(
-        serde_json::to_value(&call)
-            .map_err(Into::into)
-            .map(|mut value| {
-                value["requires_approval"] = Value::Bool(true);
-                approval_context(&daemon, &mut value);
-                value
-            }),
-    )
+    response(call_view(&call).map(|mut value| {
+        value["requires_approval"] = Value::Bool(true);
+        approval_context(&daemon, &mut value);
+        value
+    }))
 }
 
 #[derive(Deserialize)]

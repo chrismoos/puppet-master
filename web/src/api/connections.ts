@@ -1,3 +1,4 @@
+import type { ArgumentsSummary } from "@puppet-master/client-core/approvals";
 import { authedFetch } from "./token";
 
 export type Access = "read" | "write" | "unknown";
@@ -91,6 +92,8 @@ export interface ConnectionCall {
   connection_revision?: number;
   tool: string;
   arguments: unknown;
+  arguments_path?: string;
+  arguments_summary?: ArgumentsSummary;
   justification: string;
   status: string;
   created_at: number;

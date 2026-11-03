@@ -29,10 +29,23 @@ export interface ApprovalSummary {
   tool_description?: string | null;
 }
 
+/** What the controller sends beside arguments too large to read whole. */
+export interface ArgumentsSummary {
+  /** Size of the exact JSON the call executes with, which the digest covers. */
+  bytes: number;
+  sha256: string;
+  lines: number;
+  preview: string;
+  outline: Array<{ field: string; shape: string }>;
+}
+
 /** One approval as `/api/connection-approvals/{id}` returns it. */
 export interface ApprovalDetail extends ApprovalSummary {
   request_id: string;
   arguments: unknown;
+  /** The agent's file the arguments were read from when the call was submitted. */
+  arguments_path?: string;
+  arguments_summary?: ArgumentsSummary;
   result: unknown | null;
 }
 
@@ -144,6 +157,13 @@ export function decisionOutcome(approve: boolean, status: string): { ok: boolean
     default:
       return { ok: false, message: `Not approved: this approval was already ${approvalStatus(status).label.toLowerCase()}.` };
   }
+}
+
+/** A byte count in decimal units, as a file browser shows it. */
+export function formatSize(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`;
+  if (bytes < 1_000_000) return `${(bytes / 1000).toFixed(1)} KB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
 /** The arguments exactly as they will be sent, for review. */

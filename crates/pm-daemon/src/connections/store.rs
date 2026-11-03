@@ -637,6 +637,7 @@ mod tests {
             connection_revision: connection.revision,
             tool: "update".into(),
             arguments: json!({"name":"recorded"}),
+            arguments_path: None,
             justification: "test update".into(),
             status: status.into(),
             created_at: now_unix_ms(),

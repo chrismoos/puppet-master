@@ -1,0 +1,90 @@
+.call-args-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: baseline;
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.call-args-source code {
+  color: var(--bright);
+  overflow-wrap: anywhere;
+}
+.call-args-hash {
+  color: var(--muted);
+  font-family: var(--font-code);
+  font-size: 12px;
+}
+.call-args-hash button {
+  border: 0;
+  background: none;
+  padding: 0 0 0 6px;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.call-args-outline {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+.call-args-field {
+  display: contents;
+}
+.call-args-outline dt {
+  color: var(--bright);
+  font-family: var(--font-code);
+  font-size: 12.5px;
+}
+.call-args-outline dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.call-args-preview {
+  position: relative;
+}
+.call-args-preview.is-clipped pre {
+  max-height: 220px;
+  overflow: hidden;
+}
+.call-args-preview.is-clipped::after {
+  content: "";
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  left: 1px;
+  height: 56px;
+  border-radius: 0 0 7px 7px;
+  background: linear-gradient(transparent, var(--call-args-fade, var(--bg)));
+  pointer-events: none;
+}
+.call-args-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.call-args-actions .call-args-dim {
+  margin-left: auto;
+  font-size: 12.5px;
+}
+
+.call-args-dim {
+  color: var(--muted);
+}
+.call-args-error {
+  margin: 8px 0 0;
+  color: var(--danger-text);
+}
+/* Connections screens draw code blocks on a raised panel rather than the page. */
+.cx .call-args-preview {
+  --call-args-fade: var(--panel-3);
+}
