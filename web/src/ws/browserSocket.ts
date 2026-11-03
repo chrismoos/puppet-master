@@ -1,4 +1,7 @@
-import { TERMINAL_CLOSE_INCOMPATIBLE } from "@puppet-master/client-core/ws/terminalFrame";
+import {
+  TERMINAL_CLOSE_INCOMPATIBLE,
+  TERMINAL_CLOSE_PAGE_OUTDATED,
+} from "@puppet-master/client-core/ws/terminalFrame";
 import ghosttyRevision from "./ghostty/vendor/VERSION?raw";
 import { WS_CLOSE_UNAUTHENTICATED } from "@puppet-master/client-core/ws/client";
 import type { SocketConnector, SocketLike } from "@puppet-master/client-core/platform";
@@ -16,7 +19,14 @@ import { mintSocketTicket, withTicket } from "./socketTicket";
  * jar cannot open an agent's terminal with a cookie it did not have to be able
  * to read.
  */
-class TerminalCompatibilityError extends Error {}
+class TerminalCompatibilityError extends Error {
+  constructor(message: string, readonly pageOutdated: boolean) {
+    super(message);
+  }
+}
+
+/** Set by the controller on a refusal that only reloading the page resolves. */
+const INCOMPATIBLE_HEADER = "x-pm-terminal-incompatible";
 
 export const browserSocketConnector: SocketConnector = (path, subprotocol) =>
   deferredSocket(
@@ -30,7 +40,9 @@ export const browserSocketConnector: SocketConnector = (path, subprotocol) =>
         const response = await authedFetch(`/api/terminals/${terminal[1]}/snapshot-compatibility?ghostty=${encodeURIComponent(compatibility)}`);
         if (!response.ok) {
           const message = await response.text();
-          if (response.status === 409) throw new TerminalCompatibilityError(message);
+          if (response.status === 409) {
+            throw new TerminalCompatibilityError(message, response.headers.get(INCOMPATIBLE_HEADER) === "page");
+          }
           throw new Error(message);
         }
       }
@@ -44,5 +56,7 @@ export const browserSocketConnector: SocketConnector = (path, subprotocol) =>
     // instead of asking the user to sign in.
     (err) =>
       err instanceof UnauthenticatedError ? WS_CLOSE_UNAUTHENTICATED
-        : err instanceof TerminalCompatibilityError ? TERMINAL_CLOSE_INCOMPATIBLE : WS_CLOSE_LOCAL_FAILURE,
+        : err instanceof TerminalCompatibilityError
+          ? err.pageOutdated ? TERMINAL_CLOSE_PAGE_OUTDATED : TERMINAL_CLOSE_INCOMPATIBLE
+          : WS_CLOSE_LOCAL_FAILURE,
   );

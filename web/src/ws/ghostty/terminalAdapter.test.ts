@@ -27,7 +27,16 @@ function surfaceDouble() {
     setTheme: (value: GhosttyTheme) => events.push(`theme:${value.background.r}`),
     setVisible: (visible: boolean) => events.push(`visible:${visible}`),
     focus: () => events.push("focus"),
-    resize: (cols: number, rows: number) => events.push(`resize:${cols}x${rows}`),
+    resize: (cols: number, rows: number) => {
+      surface.cols = cols;
+      surface.rows = rows;
+      events.push(`resize:${cols}x${rows}`);
+    },
+    previewResize: (cols: number, rows: number) => {
+      surface.cols = cols;
+      surface.rows = rows;
+      events.push(`preview:${cols}x${rows}`);
+    },
     write: (data: string | Uint8Array) => events.push(`write:${typeof data === "string" ? data : data.length}`),
     reset: () => events.push("reset"),
     restoreSnapshot: (_data: Uint8Array, callback?: () => void) => callback?.(),
@@ -211,5 +220,36 @@ describe("GhosttyTerminalAdapter", () => {
     expect(onResize).not.toHaveBeenCalled();
     expect(adapter.cols).toBe(80);
     expect(stub.events).toEqual(["dispose"]);
+  });
+  it("draws a preview grid no narrower than the committed screen while reporting the committed size", async () => {
+    const stub = surfaceDouble();
+    vi.mocked(GhosttyTerminalSurface.create).mockResolvedValueOnce(stub.surface);
+    const adapter = new GhosttyTerminalAdapter(mount(), theme, () => {}, () => {}, () => {}, () => {}, () => true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    adapter.previewResize(100, 30);
+    adapter.previewResize(110, 32);
+    expect(stub.surface.cols).toBe(110);
+    expect({ cols: adapter.cols, rows: adapter.rows }).toEqual({ cols: 80, rows: 24 });
+
+    adapter.previewResize(110, 32);
+    expect(stub.events.filter((event) => event.startsWith("preview"))).toEqual(["preview:100x30", "preview:110x32"]);
+
+    adapter.resize(110, 32);
+    expect({ cols: adapter.cols, rows: adapter.rows }).toEqual({ cols: 110, rows: 32 });
+
+    adapter.previewResize(90, 20);
+    adapter.restoreSnapshot(new Uint8Array([1]));
+    stub.surface.cols = 95;
+    stub.surface.rows = 25;
+    expect({ cols: adapter.cols, rows: adapter.rows }).toEqual({ cols: 95, rows: 25 });
+
+    adapter.previewResize(70, 20);
+    expect({ cols: stub.surface.cols, rows: stub.surface.rows }).toEqual({ cols: 95, rows: 20 });
+    adapter.previewResize(95, 25);
+    expect({ cols: adapter.cols, rows: adapter.rows }).toEqual({ cols: 95, rows: 25 });
+    stub.surface.cols = 60;
+    expect(adapter.cols).toBe(60);
   });
 });

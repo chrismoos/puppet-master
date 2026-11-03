@@ -16,6 +16,7 @@ import {
   TERMINAL_TAG_RESYNC,
   TERMINAL_TAG_HISTORY,
   TERMINAL_CLOSE_INCOMPATIBLE,
+  TERMINAL_CLOSE_PAGE_OUTDATED,
 } from "./terminalFrame";
 
 class FakeWebSocket {
@@ -75,12 +76,27 @@ describe("TerminalSocket", () => {
     vi.restoreAllMocks();
   });
 
+  it("tells a page whose terminal engine is out of date from a worker that is", () => {
+    const statuses: TerminalStreamStatus[] = [];
+    const socket = new TerminalSocket(connect, 7n, 3n, () => {}, () => {});
+    socket.subscribe((status) => statuses.push(status));
+    FakeWebSocket.instances[0]!.onclose?.({ code: TERMINAL_CLOSE_PAGE_OUTDATED, reason: "Reload this page" });
+    expect(statuses.at(-1)).toEqual({
+      phase: "reconnecting", canRetry: true, lastError: "Reload this page", problem: "page-outdated",
+    });
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    socket.close();
+  });
+
   it("shows compatibility refusal immediately and waits for an explicit retry", () => {
     const statuses: TerminalStreamStatus[] = [];
     const socket = new TerminalSocket(connect, 7n, 3n, () => {}, () => {});
     socket.subscribe((status) => statuses.push(status));
     FakeWebSocket.instances[0]!.onclose?.({ code: TERMINAL_CLOSE_INCOMPATIBLE, reason: "Reload to update Ghostty" });
-    expect(statuses.at(-1)).toEqual({ phase: "reconnecting", canRetry: true, lastError: "Reload to update Ghostty" });
+    expect(statuses.at(-1)).toEqual({
+      phase: "reconnecting", canRetry: true, lastError: "Reload to update Ghostty", problem: "incompatible",
+    });
     vi.advanceTimersByTime(60_000);
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(statuses.at(-1)?.phase).toBe("reconnecting");
@@ -396,6 +412,7 @@ describe("TerminalSocket", () => {
       phase: "reconnecting",
       canRetry: true,
       lastError: "relay unavailable",
+      problem: "connection",
     });
     expect(FakeWebSocket.instances.length).toBeGreaterThan(1);
     socket.close();
@@ -422,6 +439,7 @@ describe("TerminalSocket", () => {
       phase: "reconnecting",
       canRetry: false,
       lastError: "worker remote is offline",
+      problem: "worker",
     });
     expect(FakeWebSocket.instances).toHaveLength(1);
     vi.advanceTimersByTime(30_000);

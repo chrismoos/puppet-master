@@ -17,6 +17,7 @@ import {
   TERMINAL_FLAG_REPLAY_START,
   TERMINAL_SUBPROTOCOL,
   TERMINAL_CLOSE_INCOMPATIBLE,
+  TERMINAL_CLOSE_PAGE_OUTDATED,
 } from "./terminalFrame";
 
 const RECONNECT_MIN_DELAY_MS = 250;
@@ -28,9 +29,13 @@ const STATUS_DELAY_MS = 750;
 const MANUAL_RETRY_DELAY_MS = 10_000;
 const REPLAY_TIMEOUT_MS = 10_000;
 
+/** Why a terminal is not live: its connection, its worker, or a terminal engine
+ * mismatch that only updating the worker or reloading the page resolves. */
+export type TerminalStreamProblem = "connection" | "worker" | "incompatible" | "page-outdated";
+
 export type TerminalStreamStatus =
   | { phase: "online" }
-  | { phase: "reconnecting"; canRetry: boolean; lastError?: string };
+  | { phase: "reconnecting"; canRetry: boolean; lastError?: string; problem?: TerminalStreamProblem };
 
 /** Live counters for the terminal debug bar. */
 export interface TerminalSocketStats {
@@ -91,7 +96,7 @@ export class TerminalSocket {
   private replayTimer: ReturnType<typeof setTimeout> | null = null;
   private failureStartedAt: number | null = null;
   private lastError = "";
-  private compatibilityRefused = false;
+  private compatibilityRefusal: "incompatible" | "page-outdated" | null = null;
   private pendingResize: (TerminalSize & { request: bigint }) | null = null;
   private pendingClaim = 0n;
   private ownershipRevision = -1n;
@@ -258,7 +263,7 @@ export class TerminalSocket {
   subscribe(listener: StatusListener): () => void {
     this.listeners.add(listener);
     if (this.replayComplete) listener({ phase: "online" });
-    else if (!this.available || this.compatibilityRefused) listener(this.reconnectingStatus());
+    else if (!this.available || this.compatibilityRefusal) listener(this.reconnectingStatus());
     else if (this.failureStartedAt !== null && Date.now() - this.failureStartedAt >= STATUS_DELAY_MS) {
       listener(this.reconnectingStatus());
     }
@@ -465,8 +470,8 @@ export class TerminalSocket {
       }
       this.lastError = event.reason || this.lastError || `connection closed (${event.code || 1006})`;
       this.beginFailure();
-      if (event.code === TERMINAL_CLOSE_INCOMPATIBLE) {
-        this.compatibilityRefused = true;
+      if (event.code === TERMINAL_CLOSE_INCOMPATIBLE || event.code === TERMINAL_CLOSE_PAGE_OUTDATED) {
+        this.compatibilityRefusal = event.code === TERMINAL_CLOSE_PAGE_OUTDATED ? "page-outdated" : "incompatible";
         this.emit(this.reconnectingStatus());
       } else if (this.available) this.scheduleReconnect();
     };
@@ -478,7 +483,7 @@ export class TerminalSocket {
     this.reconnectDelayMs = RECONNECT_MIN_DELAY_MS;
     this.failureStartedAt = null;
     this.lastError = "";
-    this.compatibilityRefused = false;
+    this.compatibilityRefusal = null;
     this.clearStatusTimers();
     this.clearReplayTimer();
     this.flushPendingResizeAfterMatchingPaint(socket);
@@ -515,14 +520,25 @@ export class TerminalSocket {
         phase: "reconnecting",
         canRetry: false,
         lastError: this.lastError || "terminal worker unavailable",
+        problem: "worker",
       };
     }
-    const canRetry = this.compatibilityRefused || (this.failureStartedAt !== null
-      && Date.now() - this.failureStartedAt >= MANUAL_RETRY_DELAY_MS);
+    if (this.compatibilityRefusal) {
+      return {
+        phase: "reconnecting",
+        canRetry: true,
+        lastError: this.lastError || "terminal engine mismatch",
+        problem: this.compatibilityRefusal,
+      };
+    }
+    const canRetry = this.failureStartedAt !== null
+      && Date.now() - this.failureStartedAt >= MANUAL_RETRY_DELAY_MS;
+    if (!canRetry) return { phase: "reconnecting", canRetry };
     return {
       phase: "reconnecting",
       canRetry,
-      lastError: canRetry ? this.lastError || "terminal connection unavailable" : undefined,
+      lastError: this.lastError || "terminal connection unavailable",
+      problem: "connection",
     };
   }
 

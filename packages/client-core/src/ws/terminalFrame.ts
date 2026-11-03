@@ -168,3 +168,5 @@ export function encodeTerminalOwnership(state: TerminalOwnershipFrame): ArrayBuf
 }
 
 export const TERMINAL_CLOSE_INCOMPATIBLE = 4412;
+/** Local close for a page whose terminal engine is older than the controller's. */
+export const TERMINAL_CLOSE_PAGE_OUTDATED = 4413;

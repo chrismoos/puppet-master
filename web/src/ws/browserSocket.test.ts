@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ghosttyRevision from "./ghostty/vendor/VERSION?raw";
 import { browserSocketConnector } from "./browserSocket";
+import {
+  TERMINAL_CLOSE_INCOMPATIBLE,
+  TERMINAL_CLOSE_PAGE_OUTDATED,
+} from "@puppet-master/client-core/ws/terminalFrame";
 import { authedFetch } from "../api/token";
 import { mintSocketTicket } from "./socketTicket";
 
@@ -41,6 +45,28 @@ describe("browser terminal snapshot negotiation", () => {
     await vi.waitFor(() => expect(closed).toHaveBeenCalledWith(expect.objectContaining({ reason: "Reload to update the terminal engine" })));
     expect(opened).not.toHaveBeenCalled();
     expect(mintSocketTicket).not.toHaveBeenCalled();
+  });
+
+  it("closes with the page-outdated code when the controller says a reload fixes it", async () => {
+    environment();
+    vi.mocked(authedFetch).mockResolvedValue(new Response("Reload this page", {
+      status: 409, headers: { "x-pm-terminal-incompatible": "page" },
+    }));
+    const socket = browserSocketConnector("/ws/terminal/7?generation=3");
+    const closed = vi.fn();
+    socket.onclose = closed;
+    await vi.waitFor(() => expect(closed).toHaveBeenCalledWith(expect.objectContaining({ code: TERMINAL_CLOSE_PAGE_OUTDATED })));
+  });
+
+  it("closes with the incompatible code when the worker is out of date", async () => {
+    environment();
+    vi.mocked(authedFetch).mockResolvedValue(new Response("Update this worker", {
+      status: 409, headers: { "x-pm-terminal-incompatible": "worker" },
+    }));
+    const socket = browserSocketConnector("/ws/terminal/7?generation=3");
+    const closed = vi.fn();
+    socket.onclose = closed;
+    await vi.waitFor(() => expect(closed).toHaveBeenCalledWith(expect.objectContaining({ code: TERMINAL_CLOSE_INCOMPATIBLE })));
   });
 
   it("leaves control sockets independent of the terminal engine", async () => {

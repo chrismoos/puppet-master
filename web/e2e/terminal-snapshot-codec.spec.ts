@@ -41,12 +41,33 @@ test("browser restores native binary snapshots on attach and reload", async ({ p
 
 test("browser explains an incompatible engine before opening a terminal socket", async ({ page }) => {
   await page.route("**/api/terminals/*/snapshot-compatibility?*", (route) => route.fulfill({
-    status: 409, body: "Terminal engine changed. Reload this page to update Ghostty.",
+    status: 409,
+    headers: { "x-pm-terminal-incompatible": "page" },
+    body: "Terminal engine changed. Reload this page to update Ghostty.",
   }));
   let terminalSockets = 0;
   page.on("websocket", (socket) => { if (socket.url().includes("/ws/terminal/")) terminalSockets += 1; });
   await logIn(page);
   await page.locator(".sb-session").first().click();
-  await expect(page.locator(".terminal-stream-status")).toContainText("Reload this page");
+  const status = page.locator('.term-layer[style*="visibility: visible"] .terminal-stream-status');
+  await expect(status).toHaveClass(/is-blocked/);
+  await expect(status).toHaveAttribute("role", "alert");
+  await expect(status).toContainText("Reload to open this terminal");
+  await expect(status.getByRole("button", { name: "Reload page" })).toBeVisible();
   expect(terminalSockets).toBe(0);
+});
+
+test("browser sends an out-of-date worker's terminal to the worker", async ({ page }) => {
+  await page.route("**/api/terminals/*/snapshot-compatibility?*", (route) => route.fulfill({
+    status: 409,
+    headers: { "x-pm-terminal-incompatible": "worker" },
+    body: "terminal requires a worker with matching Ghostty support. Update this worker.",
+  }));
+  await logIn(page);
+  await page.locator(".sb-session").first().click();
+  const status = page.locator('.term-layer[style*="visibility: visible"] .terminal-stream-status');
+  await expect(status).toHaveClass(/is-blocked/);
+  await expect(status).toContainText("to open this terminal");
+  await status.getByRole("button", { name: "View worker" }).click();
+  await expect(page).toHaveURL(/#\/settings\/workers$/);
 });

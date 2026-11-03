@@ -20,6 +20,14 @@ import { registerForegroundCommandHandler, wireTerminalClipboard } from "./termi
 import { wireTransientTerminalScrollbar } from "./terminalScrollbar";
 import { documentVisible, watchDocumentVisibility } from "./documentVisibility";
 import { createTerminalSizePrompt } from "./terminalSizePrompt";
+import { navigate, settingsRoutePath } from "../router";
+import {
+  renderTerminalStatus,
+  terminalRendererFailureView,
+  terminalStatusView,
+  terminalStatusWorker,
+  type TerminalStatusActionKind,
+} from "./terminalStatusView";
 import type { TerminalSizePrompt } from "@puppet-master/client-core/ws/terminalSizePrompt";
 import {
   captureTerminalViewport,
@@ -105,6 +113,8 @@ const ACK_BATCH_MS = 8;
  * a screen that leaves the viewport, and a hidden layer otherwise keeps
  * drawing every frame its session prints. */
 const PARKED_LAYER_CLASS = "is-parked";
+/** Dims a screen that is no longer live while its connection recovers. */
+const STALE_LAYER_CLASS = "is-stale";
 
 export class TerminalStage {
   private root: HTMLDivElement;
@@ -127,7 +137,10 @@ export class TerminalStage {
     // Browser tests and live debugging inspect the public terminal snapshot.
     (window as unknown as { __pmStage?: TerminalStage }).__pmStage = this;
     activeStage = this;
-    this.observer = new ResizeObserver(() => this.scheduleRefitVisible());
+    this.observer = new ResizeObserver(() => {
+      this.previewVisibleFit();
+      this.scheduleRefitVisible();
+    });
     this.theme = themeController.currentGhosttyTheme();
     // The controller and stage have the same ConnectedApp lifetime. Keep the
     // registration through React StrictMode's setup/cleanup rehearsal, which
@@ -374,9 +387,12 @@ export class TerminalStage {
       (error) => {
         layer.handle?.close();
         curtainEl.hidden = true;
-        statusEl.hidden = false;
-        statusEl.className = "terminal-stream-status is-error";
-        statusEl.textContent = error instanceof Error ? error.message : "Terminal renderer failed";
+        el.classList.remove(STALE_LAYER_CLASS);
+        renderTerminalStatus(
+          statusEl,
+          terminalRendererFailureView(error instanceof Error ? error.message : "Terminal renderer failed"),
+          (action) => this.statusAction(layer, action),
+        );
       },
       () => {
         this.tryBindLayerSocket(layer);
@@ -532,6 +548,7 @@ export class TerminalStage {
     };
     if (frame.replay && layer.pendingFit) {
       const fit = layer.pendingFit;
+      const following = layer.pendingFollow;
       layer.pendingFit = null;
       layer.pendingFollow = false;
       // Synchronized output holds the renderer across the resize and the
@@ -539,6 +556,7 @@ export class TerminalStage {
       layer.term.write(SYNC_OUTPUT_START, () => {
         layer.term.resize(fit.cols, fit.rows);
         paint();
+        if (!following && this.visibleId === layer.key) this.previewMeasuredFit(layer);
       });
       return;
     }
@@ -593,9 +611,9 @@ export class TerminalStage {
   }
 
   /** A painted terminal changing size asks the PTY and relay for the new size
-   * and keeps showing the old screen until the snapshot arrives. Reflowing
-   * instead pushes rows into scrollback that a program which
-   * repaints on resize then prints again. */
+   * and shows a local reflow until the snapshot at that size replaces it. The
+   * snapshot stays authoritative because a kept reflow pushes rows into
+   * scrollback that a program which repaints on resize then prints again. */
   private deferResize(layer: Layer): boolean {
     const handle = layer.handle;
     if (!handle || !layer.replayPainted || layer.initialReplayPending) return false;
@@ -605,6 +623,7 @@ export class TerminalStage {
     const measured = measureFit(layer.term);
     if (!measured || !isRealPaneFit(layer.el.clientWidth, measured.cols)) return false;
     const term = layer.term;
+    term.previewResize(measured.cols, measured.rows);
     if (measured.cols === term.cols && measured.rows === term.rows) {
       if (!layer.pendingFit) return false;
       // Back to the size already on screen before the snapshot came.
@@ -639,6 +658,22 @@ export class TerminalStage {
     handle.resize(measured.cols, measured.rows);
     handle.refreshSnapshot();
     return true;
+  }
+
+  /** Runs inside the resize observer so the reflow lands in the frame that changed size. */
+  private previewVisibleFit(): void {
+    const layer = this.visibleId ? this.layers.get(this.visibleId) : undefined;
+    if (!layer?.handle || !layer.replayPainted || layer.initialReplayPending || layer.pendingFollow) return;
+    measureFit(layer.term);
+    this.previewMeasuredFit(layer);
+  }
+
+  /** A snapshot answering an earlier size of a pane still being dragged is
+   * reflowed to the current one before it is painted. */
+  private previewMeasuredFit(layer: Layer): void {
+    if (layer.sizePrompt.blocked()) return;
+    const measured = layer.term.cellSize;
+    if (measured) layer.term.previewResize(measured.cols, measured.rows);
   }
 
   private refitVisible(): void {
@@ -765,30 +800,23 @@ export class TerminalStage {
       this.flushHeldSnapshot(current);
     });
     const statusDispose = handle.onStatus((status) => {
-      layer.statusEl.replaceChildren();
-      layer.statusEl.hidden = status.phase === "online";
-      if (status.phase === "online") return;
       // A slow first snapshot reports itself without an error, and the layer
       // waiting for it is already on screen. Only a real failure replaces a
       // screen kept up for a layer that has painted before.
       const currentLayer = this.layers.get(layer.key);
-      if (currentLayer && status.lastError) this.revealPendingLayer(currentLayer, true);
-      const connecting = !status.lastError && !currentLayer?.replayPainted;
-      if (connecting && !layer.curtainEl.hidden) {
-        layer.statusEl.hidden = true;
-        return;
-      }
-      layer.statusEl.classList.toggle("is-connecting", connecting);
-      const label = document.createElement("span");
-      label.textContent = status.lastError ?? (connecting ? "connecting…" : "reconnecting…");
-      layer.statusEl.appendChild(label);
-      if (status.canRetry) {
-        const retry = document.createElement("button");
-        retry.type = "button";
-        retry.textContent = "retry";
-        retry.addEventListener("click", () => handle.retry());
-        layer.statusEl.appendChild(retry);
-      }
+      if (status.phase !== "online" && currentLayer && status.lastError) this.revealPendingLayer(currentLayer, true);
+      const connecting = status.phase !== "online" && !status.lastError && !currentLayer?.replayPainted;
+      const view = connecting && !layer.curtainEl.hidden
+        ? null
+        : terminalStatusView(status, {
+          connecting,
+          worker: terminalStatusWorker(this.client.getState(), layer.addressedTerminal
+            ? { terminalId: layer.sessionId }
+            : { sessionId: layer.sessionId }),
+        });
+      layer.el.classList.toggle(STALE_LAYER_CLASS, view?.level === "recovering" && layer.replayPainted);
+      renderTerminalStatus(layer.statusEl, view, (action) => this.statusAction(layer, action));
+      layer.statusEl.classList.toggle("is-connecting", connecting && view !== null);
     });
     layer.disposers.push(statusDispose, ownershipDispose, ptySizeDispose, () => viewer.dispose());
     if (documentVisible(document) && this.visibleId === layer.key) viewer.opened();
@@ -799,6 +827,12 @@ export class TerminalStage {
     for (const entry of held) handle.input(entry.data, entry.submitted);
     this.flushHeldSnapshot(layer);
     return true;
+  }
+
+  private statusAction(layer: Layer, action: TerminalStatusActionKind): void {
+    if (action === "retry") layer.handle?.retry();
+    else if (action === "reload") location.reload();
+    else navigate(settingsRoutePath("workers"));
   }
 
   private flushHeldSnapshot(layer: Layer): void {

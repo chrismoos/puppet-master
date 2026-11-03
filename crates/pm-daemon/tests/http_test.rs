@@ -6752,3 +6752,33 @@ async fn an_in_band_resync_answers_with_a_snapshot_taken_after_the_repaint() {
         .unwrap();
     terminal_wait_for_text(&mut browser, b" and live again").await;
 }
+
+/// A page loaded before the controller's terminal engine changed is told that
+/// a reload fixes it, rather than being sent to update a worker.
+#[tokio::test]
+async fn a_page_with_an_older_terminal_engine_is_told_to_reload() {
+    let (daemon, _tmp) = test_daemon();
+    let token = daemon.auth_setup("testuser", "hunter2hunter2").unwrap();
+    let auth = dashboard_auth(&daemon, &token);
+    let response = pm_daemon::http::router(daemon)
+        .oneshot(
+            Request::get(
+                "/api/terminals/1/snapshot-compatibility?ghostty=ghostty-vt%3Aolder%3Apm-v1",
+            )
+            .header(header::AUTHORIZATION, auth)
+            .header(header::HOST, TEST_HOST)
+            .header(header::ORIGIN, TEST_ORIGIN)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-pm-terminal-incompatible")
+            .unwrap(),
+        "page"
+    );
+}

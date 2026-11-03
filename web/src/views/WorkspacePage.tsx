@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { updateWorkspace, type SavedWorkspace } from "../api/workspaces";
 import { TerminalKind, TerminalRunState, type Terminal } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
-import { navigate } from "../router";
+import { navigate, settingsRoutePath } from "../router";
 import { useAppState, useClient } from "../state/hooks";
 import { AGENT_TERMINAL_DRAG_TYPE, agentTerminalForSession, assignTerminal, closePane, dropTerminal, movePane, paneDropPositionForRatios, paneDropRegionRect, paneIds, parseWorkspaceLayout, removeTerminalFromLayout, SESSION_DRAG_TYPE, setSplitRatio, splitPane, workspaceTerminalEntries, workspaceTerminalLabel, WORKSPACE_PANE_DRAG_TYPE, type PaneDropPosition, type WorkspaceLayout, type WorkspacePane, type WorkspaceSplit, type WorkspaceTerminalEntry } from "@puppet-master/client-core/state/workspace";
 import type { TerminalStage } from "../ws/terminal";
@@ -10,6 +10,8 @@ import type { GhosttyRendererIssue } from "../ws/ghostty/terminalAdapter";
 import type { TerminalStreamStatus } from "@puppet-master/client-core/ws/terminalSocket";
 import { useTerminalThemeController } from "../theme/context";
 import { SessionDropOverlay, useSessionDrop } from "./SessionDropZone";
+import { TerminalStatus } from "./TerminalStatus";
+import { terminalStatusView, terminalStatusWorker } from "../ws/terminalStatusView";
 
 const SAVE_DELAY_MS = 350;
 const MAX_TRACKED_SAVED_LAYOUTS = 8;
@@ -80,14 +82,25 @@ function TerminalViewport({ terminal, focused, active, onIssue, onCommand }: { t
   useEffect(() => {
     if (focused && active) viewRef.current?.focus();
   }, [active, focused]);
+  const state = useAppState();
+  const statusView = streamStatus
+    ? terminalStatusView(streamStatus, {
+      connecting: false,
+      worker: terminalStatusWorker(state, { terminalId: terminal.id }),
+    })
+    : null;
   return (
-    <div className="workspace-terminal-wrap">
+    <div className={`workspace-terminal-wrap${statusView?.level === "recovering" ? " is-stale" : ""}`}>
       <div className="workspace-terminal-host" ref={hostRef} />
-      {streamStatus?.phase === "reconnecting" && (
-        <div className="terminal-stream-status" role="status">
-          <span>{streamStatus.lastError ?? "reconnecting…"}</span>
-          {streamStatus.canRetry && <button type="button" onClick={() => viewRef.current?.retry()}>retry</button>}
-        </div>
+      {statusView && (
+        <TerminalStatus
+          view={statusView}
+          onAction={(action) => {
+            if (action === "retry") viewRef.current?.retry();
+            else if (action === "reload") location.reload();
+            else navigate(settingsRoutePath("workers"));
+          }}
+        />
       )}
     </div>
   );

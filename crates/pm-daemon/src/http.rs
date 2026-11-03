@@ -3156,6 +3156,12 @@ struct TerminalStreamQuery {
     history: Option<u16>,
 }
 
+/// Tells the browser which side of a refused terminal is out of date, so it can
+/// offer a reload rather than a worker update.
+const TERMINAL_INCOMPATIBLE_HEADER: &str = "x-pm-terminal-incompatible";
+const TERMINAL_INCOMPATIBLE_PAGE: &str = "page";
+const TERMINAL_INCOMPATIBLE_WORKER: &str = "worker";
+
 #[derive(serde::Deserialize)]
 struct SnapshotCompatibilityQuery {
     ghostty: Option<String>,
@@ -3179,10 +3185,20 @@ async fn terminal_snapshot_compatibility(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if let Err(error) = require_snapshot_identity(query.ghostty.as_deref()) {
-        return (StatusCode::CONFLICT, error).into_response();
+        return (
+            StatusCode::CONFLICT,
+            [(TERMINAL_INCOMPATIBLE_HEADER, TERMINAL_INCOMPATIBLE_PAGE)],
+            error,
+        )
+            .into_response();
     }
     if let Err(error) = daemon.require_terminal_snapshot_compatibility(terminal_id) {
-        return (StatusCode::CONFLICT, error.to_string()).into_response();
+        return (
+            StatusCode::CONFLICT,
+            [(TERMINAL_INCOMPATIBLE_HEADER, TERMINAL_INCOMPATIBLE_WORKER)],
+            error.to_string(),
+        )
+            .into_response();
     }
     Json(
         serde_json::json!({ "snapshotCompatibility": pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY }),
@@ -3234,10 +3250,20 @@ async fn terminal_ws_upgrade(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     if let Err(error) = require_snapshot_identity(query.ghostty.as_deref()) {
-        return (StatusCode::CONFLICT, error).into_response();
+        return (
+            StatusCode::CONFLICT,
+            [(TERMINAL_INCOMPATIBLE_HEADER, TERMINAL_INCOMPATIBLE_PAGE)],
+            error,
+        )
+            .into_response();
     }
     if let Err(error) = daemon.require_terminal_snapshot_compatibility(terminal_id) {
-        return (StatusCode::CONFLICT, error.to_string()).into_response();
+        return (
+            StatusCode::CONFLICT,
+            [(TERMINAL_INCOMPATIBLE_HEADER, TERMINAL_INCOMPATIBLE_WORKER)],
+            error.to_string(),
+        )
+            .into_response();
     }
     let supports_protocol = headers
         .get(header::SEC_WEBSOCKET_PROTOCOL)

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [Web] A terminal that is not live says why in proportion to what it needs from you: a pill while it reconnects, a banner with Retry now or View worker while its connection or worker is down, and a card naming the fix (update the worker or reload the page) when its terminal engine doesn't match.
+
+- [Web] A session terminal follows the window on every frame of a resize drag instead of holding its old grid until the session answers at the new size, and its text no longer bounces while the window height changes.
+
 - [Daemon] Agents can pass connection call arguments as `arguments_path`, a JSON file in their working directory read once when the call is submitted, instead of inline `arguments`. Later edits to the file cannot change a submitted call, and a large argument set is not repeated back to the agent.
 
 - [Web] A call with large arguments, in Approvals and in Connections, shows where they came from, their size and SHA-256, an outline of their fields and their first lines, with Show all and a download of the exact JSON.

@@ -5,6 +5,7 @@ import {
   GhosttyTerminalSurface,
   advanceTerminalSelectionClickSequence,
   handleTerminalHistoryKey,
+  heldContentOriginY,
   isModifiedTerminalLinkClick,
   resetTerminalSelectionClickSequenceAfterDrag,
   shouldActivateTerminalLink,
@@ -305,5 +306,24 @@ describe("GhosttyTerminalSurface lifecycle", () => {
     expect(onResize).not.toHaveBeenCalled();
     expect(core.dispose).toHaveBeenCalledOnce();
     expect(terminal.remove).toHaveBeenCalledOnce();
+  });
+});
+
+describe("heldContentOriginY", () => {
+  const padding = 4;
+  const cell = 17;
+
+  it("keeps content in place while the pane grows or shrinks within its slack", () => {
+    expect(heldContentOriginY(14, 700, padding, 40, cell)).toBe(14);
+    expect(heldContentOriginY(14, 698, padding, 40, cell)).toBe(14);
+  });
+
+  it("moves content up only as far as it must to keep the last row inside", () => {
+    expect(heldContentOriginY(14, 690, padding, 40, cell)).toBe(6);
+  });
+
+  it("never moves content above the padding", () => {
+    expect(heldContentOriginY(14, 600, padding, 40, cell)).toBe(padding);
+    expect(heldContentOriginY(1, 900, padding, 40, cell)).toBe(padding);
   });
 });

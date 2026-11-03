@@ -40,6 +40,8 @@ const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 const CURSOR_BLINK_INTERVAL_MS = 500;
 /** End an unterminated synchronized update instead of freezing the last frame. */
 const SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS = 500;
+/** How long a pane's size must hold before it counts as settled. */
+const RESIZE_SETTLE_MS = 150;
 const TERMINAL_FONT_LOAD_TEXT = "iMW0@# .";
 const TERMINAL_FONT_LOAD_VARIANTS = [
   "normal 400",
@@ -140,6 +142,18 @@ export function terminalContentOriginY(
   if (!anchorBottom) return padding;
   const slack = mountHeight - padding * 2 - rows * cellHeight;
   return padding + Math.max(0, slack);
+}
+
+/** Keeps content where it is while a pane is resized, moving it only as far as needed to stay inside. */
+export function heldContentOriginY(
+  originY: number,
+  mountHeight: number,
+  padding: number,
+  rows: number,
+  cellHeight: number,
+): number {
+  const lowest = Math.max(padding, mountHeight - padding - rows * cellHeight);
+  return Math.min(Math.max(originY, padding), lowest);
 }
 
 export interface TerminalScrollbarGeometry {
@@ -643,6 +657,7 @@ export class GhosttyTerminalSurface {
   private scrollbarPointerOffset = 0;
   private disposed = false;
   private resizeNotifyTimer: number | null = null;
+  private originHoldTimer: number | null = null;
   private originY = CONTENT_PADDING;
   private mountHeight = 0;
   private selectionEnd: { x: number; y: number } | null = null;
@@ -950,6 +965,13 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   }
 
+  /** Reflows and paints before the next browser paint, so a dragged pane never shows the old grid. */
+  previewResize(cols: number, rows: number): void {
+    if (this.disposed) return;
+    this.resize(cols, rows);
+    if (this.hasSize) this.renderFrame();
+  }
+
   reset(): void {
     if (this.disposed) return;
     this.resetAndWrite(new Uint8Array());
@@ -1116,6 +1138,7 @@ export class GhosttyTerminalSurface {
       this.pendingCanvasConfiguration = null;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
+    if (this.canvasConfigured && height !== this.mountHeight) this.holdOrigin();
     this.mountHeight = height;
     // onResize is the only PTY resize channel, so the first successful fit must
     // notify even when the measured grid equals the 1x1 construction sentinel.
@@ -1133,6 +1156,16 @@ export class GhosttyTerminalSurface {
     return true;
   }
 
+  /** Bottom-anchored content would otherwise move with every pixel of a height drag. */
+  private holdOrigin(): void {
+    if (this.originHoldTimer !== null) window.clearTimeout(this.originHoldTimer);
+    this.originHoldTimer = window.setTimeout(() => {
+      this.originHoldTimer = null;
+      this.forceFullRender = true;
+      this.requestRender();
+    }, RESIZE_SETTLE_MS);
+  }
+
   /**
    * The local grid reflows immediately, but the PTY only hears about settled
    * dimensions: notifying on every drag step makes the shell reprint its
@@ -1144,7 +1177,7 @@ export class GhosttyTerminalSurface {
     this.resizeNotifyTimer = window.setTimeout(() => {
       this.resizeNotifyTimer = null;
       if (!this.disposed) this.options.onResize(this.measuredCols, this.measuredRows);
-    }, 150);
+    }, RESIZE_SETTLE_MS);
   }
 
   // Flush on release so immediate typing reaches a shell with the settled width.
@@ -1276,6 +1309,10 @@ export class GhosttyTerminalSurface {
     if (this.resizeNotifyTimer !== null) {
       window.clearTimeout(this.resizeNotifyTimer);
       this.resizeNotifyTimer = null;
+    }
+    if (this.originHoldTimer !== null) {
+      window.clearTimeout(this.originHoldTimer);
+      this.originHoldTimer = null;
     }
     this.cancelRender();
     if (this.compositionSuppressionTimer !== null) {
@@ -2224,13 +2261,9 @@ export class GhosttyTerminalSurface {
     // Move the origin only on full repaint; dirty-row updates cannot mix origins.
     const scrollState = this.readScrollbarState();
     const anchorBottom = scrollState !== null && scrollState.total > scrollState.len;
-    const nextOriginY = terminalContentOriginY(
-      this.mountHeight,
-      CONTENT_PADDING,
-      this.rows,
-      this.metrics.height,
-      anchorBottom,
-    );
+    const nextOriginY = this.originHoldTimer !== null
+      ? heldContentOriginY(this.originY, this.mountHeight, CONTENT_PADDING, this.rows, this.metrics.height)
+      : terminalContentOriginY(this.mountHeight, CONTENT_PADDING, this.rows, this.metrics.height, anchorBottom);
     if (nextOriginY !== this.originY) {
       this.originY = nextOriginY;
       this.terminal.style.setProperty("--ghostty-content-origin-y", `${this.originY}px`);

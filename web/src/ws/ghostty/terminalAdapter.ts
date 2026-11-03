@@ -48,6 +48,7 @@ export class GhosttyTerminalAdapter {
   private readonly renderListeners = new Set<() => void>();
   private readonly scanner = new OscObserver((payload) => this.receiveOsc(payload));
   private currentCols = 80;
+  private committedSize: { cols: number; rows: number } | null = null;
   private currentRows = 24;
   private visible = true;
   private replaying = false;
@@ -121,8 +122,9 @@ export class GhosttyTerminalAdapter {
     });
   }
 
-  get cols(): number { return this.surface?.cols ?? this.currentCols; }
-  get rows(): number { return this.surface?.rows ?? this.currentRows; }
+  /** The size the screen was last resized or restored to, which a preview does not change. */
+  get cols(): number { return this.committedSize?.cols ?? this.surface?.cols ?? this.currentCols; }
+  get rows(): number { return this.committedSize?.rows ?? this.surface?.rows ?? this.currentRows; }
   get cellSize(): { cols: number; rows: number } | null { return this.surface?.measuredGrid() ?? null; }
   get cellMetrics(): Pick<GhosttyCellMetrics, "width" | "height"> | null {
     return this.surface?.measuredCellSize() ?? null;
@@ -164,6 +166,7 @@ export class GhosttyTerminalAdapter {
 
   resetAndWrite(data: string | Uint8Array, callback?: () => void): void {
     this.enqueue((surface) => {
+      this.committedSize = null;
       this.scanner.reset();
       this.scanner.write(data);
       surface.resetAndWrite(data, callback);
@@ -172,6 +175,7 @@ export class GhosttyTerminalAdapter {
 
   restoreSnapshot(data: Uint8Array, callback?: () => void): void {
     this.enqueue((surface) => {
+      this.committedSize = null;
       this.scanner.reset();
       try {
         surface.restoreSnapshot(data, callback);
@@ -185,6 +189,7 @@ export class GhosttyTerminalAdapter {
 
   reset(): void {
     this.enqueue((surface) => {
+      this.committedSize = null;
       this.scanner.reset();
       surface.reset();
     });
@@ -196,7 +201,22 @@ export class GhosttyTerminalAdapter {
   resize(cols: number, rows: number): void {
     this.currentCols = cols;
     this.currentRows = rows;
-    this.enqueue((surface) => surface.resize(cols, rows));
+    this.enqueue((surface) => {
+      this.committedSize = null;
+      surface.resize(cols, rows);
+    });
+  }
+
+  /** Reflows the drawn grid locally until the next resize or restore replaces it. The
+   * preview never narrows below the committed width, because a narrowing reflow wraps
+   * every full-width row, such as an input box border, onto a second row. */
+  previewResize(cols: number, rows: number): void {
+    const surface = this.surface;
+    if (!surface || this.disposed) return;
+    const committed = this.committedSize ?? { cols: surface.cols, rows: surface.rows };
+    const drawnCols = Math.max(cols, committed.cols);
+    this.committedSize = drawnCols === committed.cols && rows === committed.rows ? null : committed;
+    if (surface.cols !== drawnCols || surface.rows !== rows) surface.previewResize(drawnCols, rows);
   }
 
   fit(): boolean {
