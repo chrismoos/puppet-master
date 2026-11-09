@@ -51,13 +51,16 @@ distributed, so it is not listed here.
 Apache License 2.0
 --------------------------------------------------------------------------------
 
-Eleven crates compiled into the binaries are offered under the Apache-2.0 alone
-rather than as a choice including MIT:
+Thirteen crates compiled into the binaries are offered under the Apache-2.0
+alone rather than as a choice including MIT:
 
-  alacritty_terminal 0.26.0   miette 7.6.0          prost-derive 0.13.5
-  gix-imara-diff 0.2.5        miette-derive 7.6.0   prost-types 0.13.5
-  similar 2.7.0               prost 0.13.5          sync_wrapper 1.0.2
-  unicode-bom 2.0.3           prost-build 0.13.5
+  gix-imara-diff 0.2.5        prost-derive 0.13.5   similar 2.7.0
+  miette 7.6.0                prost-types 0.13.5    sync_wrapper 1.0.2
+  miette-derive 7.6.0         ring 0.17.14          unicode-bom 2.0.3
+  prost 0.13.5                rmcp 3.5.0            unicode-general-category 1.1.0
+  prost-build 0.13.5
+
+ring also contains ISC-licensed code, which the license list below covers.
 
 None of them ships a NOTICE file of its own, so there is no upstream notice
 text to reproduce here. None is modified. The full license text is in

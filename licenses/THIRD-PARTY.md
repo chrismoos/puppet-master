@@ -5,7 +5,7 @@ Do not edit by hand: run `make licenses` after changing a dependency.
 
 Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 
-## Rust crates compiled into the binaries (548)
+## Rust crates compiled into the binaries (537)
 
 | Package | Version | License |
 | --- | --- | --- |
@@ -14,7 +14,6 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | aes-gcm | 0.10.3 | Apache-2.0 OR MIT |
 | ahash | 0.8.12 | MIT OR Apache-2.0 |
 | aho-corasick | 1.1.4 | Unlicense OR MIT |
-| alacritty_terminal | 0.26.0 | Apache-2.0 |
 | allocator-api2 | 0.2.21 | MIT OR Apache-2.0 |
 | android_system_properties | 0.1.6 | MIT OR Apache-2.0 |
 | anstream | 1.0.0 | MIT OR Apache-2.0 |
@@ -70,7 +69,6 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | colorchoice | 1.0.5 | MIT OR Apache-2.0 |
 | combine | 4.6.8 | MIT |
 | compact_str | 0.8.2 | MIT |
-| concurrent-queue | 2.5.0 | Apache-2.0 OR MIT |
 | const-oid | 0.10.2 | Apache-2.0 OR MIT |
 | const-oid | 0.9.6 | Apache-2.0 OR MIT |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 |
@@ -88,7 +86,6 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 |
 | crypto-common | 0.2.2 | MIT OR Apache-2.0 |
 | ctr | 0.9.2 | MIT OR Apache-2.0 |
-| cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
 | curve25519-dalek | 4.1.3 | BSD-3-Clause |
 | curve25519-dalek-derive | 0.1.1 | MIT/Apache-2.0 |
 | darling | 0.23.0 | MIT |
@@ -208,11 +205,9 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | hashlink | 0.9.1 | MIT OR Apache-2.0 |
 | heapless | 0.8.0 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
-| hermit-abi | 0.5.2 | MIT OR Apache-2.0 |
 | hex | 0.4.3 | MIT OR Apache-2.0 |
 | hkdf | 0.12.4 | MIT OR Apache-2.0 |
 | hmac | 0.12.1 | MIT OR Apache-2.0 |
-| home | 0.5.12 | MIT OR Apache-2.0 |
 | hpke | 0.12.0 | MIT/Apache-2.0 |
 | http | 1.4.2 | MIT OR Apache-2.0 |
 | http-body | 1.1.0 | MIT |
@@ -284,7 +279,6 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | mime_guess | 2.0.5 | MIT |
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 |
 | mio | 1.2.2 | MIT |
-| miow | 0.6.1 | MIT OR Apache-2.0 |
 | multimap | 0.10.1 | MIT OR Apache-2.0 |
 | nix | 0.25.1 | MIT |
 | nom | 7.1.3 | MIT |
@@ -316,9 +310,7 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | petgraph | 0.7.1 | MIT OR Apache-2.0 |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
 | pin-utils | 0.1.0 | MIT OR Apache-2.0 |
-| piper | 0.2.5 | MIT OR Apache-2.0 |
 | pkg-config | 0.3.33 | MIT OR Apache-2.0 |
-| polling | 3.11.0 | Apache-2.0 OR MIT |
 | poly1305 | 0.8.0 | Apache-2.0 OR MIT |
 | polyval | 0.6.2 | Apache-2.0 OR MIT |
 | portable-atomic | 1.15.0 | Apache-2.0 OR MIT |
@@ -376,7 +368,6 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | rusticata-macros | 4.1.0 | MIT/Apache-2.0 |
 | rustix | 0.38.44 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
-| rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.45 | Apache-2.0 OR ISC OR MIT |
 | rustls-native-certs | 0.8.4 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.0 | MIT OR Apache-2.0 |
@@ -412,7 +403,6 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | shell-words | 1.1.1 | MIT/Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | signal-hook | 0.3.18 | Apache-2.0/MIT |
-| signal-hook | 0.4.4 | MIT OR Apache-2.0 |
 | signal-hook-mio | 0.2.5 | MIT OR Apache-2.0 |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
 | simd_cesu8 | 1.2.0 | Apache-2.0 OR MIT |
@@ -491,7 +481,6 @@ Obligations that follow from this list are summarized in [NOTICE](../NOTICE).
 | vcpkg | 0.2.15 | MIT/Apache-2.0 |
 | version_check | 0.9.5 | MIT/Apache-2.0 |
 | vsimd | 0.8.0 | MIT |
-| vte | 0.15.0 | Apache-2.0 OR MIT |
 | walkdir | 2.5.0 | Unlicense/MIT |
 | want | 0.3.1 | MIT |
 | wasi | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
