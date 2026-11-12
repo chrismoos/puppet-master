@@ -2928,13 +2928,12 @@ svg.sb-rail-glyph {
   line-height: 1.4;
   white-space: normal;
   pointer-events: none;
-  opacity: 0;
-  transform: translateY(2px);
+  /* A closed tooltip still widens the row's scroll area unless it is out of layout. */
+  display: none;
 }
 
 .sb-session-role.is-open .sb-session-role-tooltip {
-  opacity: 1;
-  transform: translateY(0);
+  display: block;
 }
 
 .sb-session-role-trigger:focus-visible {

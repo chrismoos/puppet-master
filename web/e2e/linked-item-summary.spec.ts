@@ -37,7 +37,7 @@ test("actual session rows show, resize, and internally route linked items", asyn
 
   const workspace = page.locator(".workspace");
   const widths: number[] = [];
-  for (const sidebarWidth of [220, 620]) {
+  for (const sidebarWidth of [220, 680]) {
     await workspace.evaluate((element, width) => {
       (element as HTMLElement).style.setProperty("--sidebar-w", `${width}px`);
     }, sidebarWidth);

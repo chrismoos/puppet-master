@@ -248,48 +248,48 @@ test("role explanation belongs only to direct icon hover, focus, and touch", asy
     await row.click({ position: { x: box.width - 6, y: 4 } });
     await expect(row).toHaveAttribute("aria-current", "page");
     await expect(page.locator('.term-layer[style*="visibility: visible"] .ghostty-input')).toBeFocused();
-    await expect(tooltip).toHaveCSS("opacity", "0");
+    await expect(tooltip).toBeHidden();
 
     await row.locator(".sb-session-title").click();
-    await expect(tooltip).toHaveCSS("opacity", "0");
+    await expect(tooltip).toBeHidden();
     await row.locator(".sb-session-elapsed").click();
-    await expect(tooltip).toHaveCSS("opacity", "0");
+    await expect(tooltip).toBeHidden();
 
     await role.hover();
-    await expect(tooltip).toHaveCSS("opacity", "1");
+    await expect(tooltip).toBeVisible();
     await page.mouse.move(900, 700);
-    await expect(tooltip).toHaveCSS("opacity", "0");
+    await expect(tooltip).toBeHidden();
 
     await row.focus();
-    await expect(tooltip).toHaveCSS("opacity", "0");
+    await expect(tooltip).toBeHidden();
     await page.keyboard.press("Tab");
     await expect(role).toBeFocused();
-    await expect(tooltip).toHaveCSS("opacity", "1");
+    await expect(tooltip).toBeVisible();
     await expect(role).toHaveAttribute("aria-describedby", await tooltip.getAttribute("id"));
     await role.press("Escape");
-    await expect(tooltip).toHaveCSS("opacity", "0");
+    await expect(tooltip).toBeHidden();
     await expect(role).not.toBeFocused();
   }
 
   const workerTooltip = workerRole.locator("..").locator(".sb-session-role-tooltip");
   await workerRole.focus();
-  await expect(workerTooltip).toHaveCSS("opacity", "1");
+  await expect(workerTooltip).toBeVisible();
   await page.locator(".sb-scroll").dispatchEvent("scroll");
-  await expect(workerTooltip).toHaveCSS("opacity", "0");
+  await expect(workerTooltip).toBeHidden();
 
   await workerRole.dispatchEvent("pointerdown", { pointerType: "touch" });
   await workerRole.dispatchEvent("pointerup", { pointerType: "touch" });
   await workerRole.dispatchEvent("click");
-  await expect(workerTooltip).toHaveCSS("opacity", "1");
+  await expect(workerTooltip).toBeVisible();
   await page.locator("body").dispatchEvent("pointerdown", { pointerType: "touch" });
-  await expect(workerTooltip).toHaveCSS("opacity", "0");
+  await expect(workerTooltip).toBeHidden();
 
   await workerRole.evaluate((element) => (element as HTMLElement).blur());
   await workerRole.focus();
-  await expect(workerTooltip).toHaveCSS("opacity", "1");
+  await expect(workerTooltip).toBeVisible();
   await page.evaluate(() => { window.location.hash = "#/settings/projects"; });
   await expect.poll(() => page.locator(".sb-session-role-tooltip").evaluateAll((tooltips) =>
-    tooltips.every((tooltip) => getComputedStyle(tooltip).opacity === "0"),
+    tooltips.every((tooltip) => !tooltip.checkVisibility()),
   )).toBe(true);
 });
 
