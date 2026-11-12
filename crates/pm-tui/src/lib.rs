@@ -34,6 +34,7 @@ pub(crate) mod testutil {
             default_worker_id: 0,
             allowed_worker_ids: vec![0],
             is_default: id == 1,
+            icon: Default::default(),
         }
     }
 

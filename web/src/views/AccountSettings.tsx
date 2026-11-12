@@ -10,8 +10,10 @@ import {
   resetTerminalTheme,
   applyUiTheme,
   resetUiTheme,
+  applySidebarStyle,
 } from "../api/userSettings";
 import { changePassword } from "../api/auth";
+import { parseSidebarStyle, USER_SIDEBAR_STYLE_KEY, type SidebarStyle } from "../sidebarStyle";
 import { useAppState } from "../state/hooks";
 import { useTerminalThemeController } from "../theme/context";
 import {
@@ -55,9 +57,17 @@ const APPEARANCE_MODES: ReadonlyArray<{ value: Appearance | null; label: string 
   { value: "dark", label: "Dark" },
 ];
 
+const SIDEBAR_STYLE_OPTIONS: ReadonlyArray<{ value: SidebarStyle; label: string }> = [
+  { value: "dropdown", label: "Dropdown" },
+  { value: "rail", label: "Rail" },
+];
+
 export function AppearanceSettings() {
   const state = useAppState();
   const appearance = parseAppearance(state.userSettings.get(USER_APPEARANCE_KEY));
+  const sidebarStyle = parseSidebarStyle(state.userSettings.get(USER_SIDEBAR_STYLE_KEY));
+  const [sidebarBusy, setSidebarBusy] = useState(false);
+  const [sidebarError, setSidebarError] = useState<string | null>(null);
   const currentUiTheme = parseUiTheme(state.userSettings.get(USER_UI_THEME_KEY));
   const [modeBusy, setModeBusy] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -76,6 +86,19 @@ export function AppearanceSettings() {
       setModeError(errorMessage(reason));
     } finally {
       setModeBusy(false);
+    }
+  };
+
+  const selectSidebarStyle = async (style: SidebarStyle) => {
+    if (sidebarBusy || style === sidebarStyle) return;
+    setSidebarBusy(true);
+    setSidebarError(null);
+    try {
+      await applySidebarStyle(style);
+    } catch (reason) {
+      setSidebarError(errorMessage(reason));
+    } finally {
+      setSidebarBusy(false);
     }
   };
 
@@ -130,6 +153,32 @@ export function AppearanceSettings() {
           </div>
         </div>
         {modeError && <div className="form-error" role="alert">{modeError}</div>}
+      </div>
+      <div className="ui-sect">
+        <div className="ui-list">
+          <div className="ui-row">
+            <div className="main">
+              <div className="title" id="sidebar-style-title">Sidebar buckets</div>
+              <div className="desc">Switch buckets from a dropdown above the sessions, or from a rail of bucket buttons beside them.</div>
+            </div>
+            <div className="ctl">
+              <div className="ui-seg" role="group" aria-labelledby="sidebar-style-title">
+                {SIDEBAR_STYLE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={sidebarStyle === option.value}
+                    disabled={sidebarBusy}
+                    onClick={() => void selectSidebarStyle(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+        {sidebarError && <div className="form-error" role="alert">{sidebarError}</div>}
       </div>
       <div className="ui-sect">
         <div className="ui-sect-head">

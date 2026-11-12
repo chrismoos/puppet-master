@@ -60,11 +60,12 @@ test("bounded history pages, grouped metadata search, and deep retention", async
   await page.getByLabel("show ended").check();
   await expect(rows).toHaveCount(52);
   expect(await page.evaluate(() => Math.max(...(window as Window & { __controlFrames: number[] }).__controlFrames))).toBeLessThan(7_000_000);
-  // Showing ended sessions pages them into the list without a count beside
-  // the search box: the count there is for search results only.
-  await expect(page.locator(".sb-search [role=status]")).toHaveText("");
+  await expect(page.locator(".sb-results-bar")).toHaveCount(0);
 
-  await page.getByRole("searchbox", { name: "Search sessions" }).fill("old searchable needle");
+  await page.locator(".sb-switcher-trigger").click();
+  await page.getByRole("combobox", { name: "Find a bucket or session" }).fill("old searchable needle");
+  await page.getByRole("option", { name: "Show all 1 result" }).click();
+  await expect(page.locator(".sb-results-bar")).toContainText("1 result for “old searchable needle”");
   await expect(rows).toHaveCount(1);
   await expect(page.locator(".sb-bucket-head", { hasText: "browser-e2e" })).toBeVisible();
   await expect(page.locator(".sb-session-title").first()).toBeVisible();
@@ -78,7 +79,7 @@ test("bounded history pages, grouped metadata search, and deep retention", async
   await expect(page).toHaveURL(oldRoute);
   await expect(page.locator(".sb-session.is-selected")).toContainText("old searchable needle");
 
-  await page.getByRole("searchbox", { name: "Search sessions" }).fill("");
+  await expect(page.locator(".sb-results-bar")).toHaveCount(0);
   await expect(rows).toHaveCount(53);
   await sessionRow(page, "browser-e2e").click();
   await expect(rows).toHaveCount(52);

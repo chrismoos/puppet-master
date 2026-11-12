@@ -404,6 +404,10 @@ fn dashboard_router(daemon: Arc<Daemon>) -> Router {
             put(update_user_ui_theme).delete(reset_user_ui_theme),
         )
         .route(
+            "/api/user/settings/sidebar-style",
+            put(update_user_sidebar_style).delete(reset_user_sidebar_style),
+        )
+        .route(
             "/api/user/settings/push-web-idle-minutes",
             put(update_push_web_idle_minutes),
         )
@@ -1656,6 +1660,7 @@ async fn list_user_settings(State(daemon): State<Arc<Daemon>>, headers: HeaderMa
         "terminalTheme": stored(crate::terminal_theme::USER_TERMINAL_THEME_KEY),
         "appearance": stored(crate::appearance::USER_APPEARANCE_KEY),
         "uiTheme": stored(crate::ui_theme::USER_UI_THEME_KEY),
+        "sidebarStyle": stored(crate::sidebar_style::USER_SIDEBAR_STYLE_KEY),
         "pushWebIdleMinutes": stored(crate::push::SETTING_PUSH_WEB_IDLE_MINUTES),
     }))
     .into_response()
@@ -1802,6 +1807,52 @@ async fn reset_user_ui_theme(State(daemon): State<Arc<Daemon>>, headers: HeaderM
         return StatusCode::UNAUTHORIZED.into_response();
     };
     match daemon.set_user_ui_theme(user_id, None) {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn update_user_sidebar_style(
+    State(daemon): State<Arc<Daemon>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Some((user_id, _)) = authed_identity(&daemon, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if body.len() > crate::sidebar_style::SIDEBAR_STYLE_MAX_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({ "error": "sidebar style value is too large" })),
+        )
+            .into_response();
+    }
+    match daemon.set_user_sidebar_style(user_id, Some(&body)) {
+        Ok(Some(normalized)) => match serde_json::from_str::<serde_json::Value>(&normalized) {
+            Ok(style) => Json(serde_json::json!({ "sidebarStyle": style })).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        },
+        Ok(None) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn reset_user_sidebar_style(
+    State(daemon): State<Arc<Daemon>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some((user_id, _)) = authed_identity(&daemon, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match daemon.set_user_sidebar_style(user_id, None) {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => (
             StatusCode::BAD_REQUEST,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [Web] The sidebar can list one bucket at a time. A switcher at its top picks a bucket, every bucket, or only the sessions that need you, and shows how many sessions in other buckets need you. Settings → Appearance can show the buckets as a rail of buttons beside the sessions instead, saved to your account. Rail buttons show letters that differ for every bucket, and a bucket's settings can replace them with your own letters or emoji, a color, or an uploaded picture. In a single bucket, sessions idle for over a day fold into one row.
+
+- [Web] Session search moved into the bucket switcher: press `/`, open the switcher, or use the rail's search button, then type to find a bucket or a session in any bucket, or show every result in the sidebar. The search box no longer takes a row of its own.
+
 - [Web] A terminal that is not live says why in proportion to what it needs from you: a pill while it reconnects, a banner with Retry now or View worker while its connection or worker is down, and a card naming the fix (update the worker or reload the page) when its terminal engine doesn't match.
 
 - [Web] A session terminal follows the window on every frame of a resize drag instead of holding its old grid until the session answers at the new size, and its text no longer bounces while the window height changes.

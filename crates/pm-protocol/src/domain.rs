@@ -534,6 +534,17 @@ pub struct Bucket {
     pub allowed_worker_ids: Vec<u64>,
     /// Exactly one bucket is the default when buckets exist.
     pub is_default: bool,
+    pub icon: BucketIcon,
+}
+
+/// How a bucket shows in the sidebar rail. Every field absent shows its initials.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BucketIcon {
+    pub text: Option<String>,
+    /// A `#rrggbb` color.
+    pub color: Option<String>,
+    /// A `data:image/...;base64,` URL.
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1508,6 +1519,10 @@ pub enum ClientMsg {
     SetBucketDefaultAgent {
         bucket_id: u64,
         agent: Option<AgentKind>,
+    },
+    SetBucketIcon {
+        bucket_id: u64,
+        icon: BucketIcon,
     },
     SetProjectDefaultAgent {
         project_id: u64,

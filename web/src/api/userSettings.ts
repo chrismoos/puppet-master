@@ -1,6 +1,7 @@
 import { APPEARANCES, type Appearance } from "@puppet-master/client-core/theme/appearance";
 import { uiThemeFromStoredValue, type UiTheme } from "@puppet-master/client-core/theme/uiTheme";
 import { validateTerminalTheme, type TerminalTheme } from "@puppet-master/client-core/theme/terminalTheme";
+import { SIDEBAR_STYLES, type SidebarStyle } from "../sidebarStyle";
 import { authedFetch } from "./token";
 
 const HTTP_UNAUTHORIZED = 401;
@@ -91,4 +92,19 @@ export async function applyPushWebIdleMinutes(minutes: number): Promise<number> 
     throw new Error("daemon returned no idle threshold");
   }
   return body.pushWebIdleMinutes;
+}
+
+export async function applySidebarStyle(style: SidebarStyle): Promise<SidebarStyle> {
+  const response = await authedFetch("/api/user/settings/sidebar-style", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(style),
+  });
+  if (response.status === HTTP_UNAUTHORIZED) throw new Error("not authenticated");
+  const body = await response.json().catch(() => ({})) as { sidebarStyle?: unknown; error?: string };
+  if (!response.ok) throw new Error(body.error ?? `sidebar style update failed (${response.status})`);
+  if (!SIDEBAR_STYLES.includes(body.sidebarStyle as SidebarStyle)) {
+    throw new Error("daemon returned an unknown sidebar style");
+  }
+  return body.sidebarStyle as SidebarStyle;
 }

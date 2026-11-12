@@ -10,6 +10,9 @@ import { orderWorkers, resolveProjectWorkerId } from "@puppet-master/client-core
 import { setBucketWorker, setDefaultBucket, setProjectWorker, setProjectWorkerPath } from "../api/workers";
 import { agentFromValue, agentLabel, agentValue, resolveAgent } from "@puppet-master/client-core/state/agent";
 import { AgentSelect } from "../components/AgentSelect";
+import { BucketIconEditor } from "./BucketIconEditor";
+import { railMonograms } from "./BucketRail";
+import type { RailIcon } from "./BucketSwitcher";
 import { coveredAgents } from "@puppet-master/client-core/state/modelProfile";
 import { permissionModeLabel, resolvePermissionMode } from "@puppet-master/client-core/state/permission";
 
@@ -134,6 +137,7 @@ export function ProjectsCatalog({
   const [bucketAgent, setBucketAgent] = useState("");
   const [bucketProfile, setBucketProfile] = useState("");
   const [bucketPermission, setBucketPermission] = useState("");
+  const [bucketIcon, setBucketIcon] = useState<RailIcon>({});
   const [projectPath, setProjectPath] = useState("");
   const [projectWorker, setProjectWorkerValue] = useState("");
   const [projectAllowed, setProjectAllowed] = useState<string[]>([]);
@@ -162,6 +166,11 @@ export function ProjectsCatalog({
     setBucketAgent(agentValue(selectedBucket.defaultAgent));
     setBucketProfile(selectedBucket.modelProfileId?.toString() ?? "");
     setBucketPermission(permissionValue(selectedBucket.permissionMode));
+    setBucketIcon({
+      text: selectedBucket.icon?.text,
+      color: selectedBucket.icon?.color,
+      image: selectedBucket.icon?.image,
+    });
     setConfirmDelete(false);
     setCreating(null);
   }, [selectedBucket]);
@@ -341,6 +350,7 @@ export function ProjectsCatalog({
           selectedBucket.id,
           permissionFromValue(bucketPermission),
         );
+        await client.setBucketIcon(selectedBucket.id, bucketIcon);
       },
       () => navigate("/settings/projects?catalog=buckets"),
     );
@@ -549,6 +559,11 @@ export function ProjectsCatalog({
               <h3 ref={detailHeadingRef} tabIndex={-1}>{selectedBucket.name}</h3>
               <p className="catalog-drawer-intro">Controls the defaults available to projects in this bucket.</p>
               <div className="catalog-readonly"><span>Name</span><b>{selectedBucket.name}</b></div>
+              <BucketIconEditor
+                value={bucketIcon}
+                letters={railMonograms(buckets.map((bucket) => ({ id: bucket.id.toString(), name: bucket.name }))).get(selectedBucket.id.toString()) ?? "?"}
+                onChange={setBucketIcon}
+              />
               <label className="catalog-check catalog-default-check"><input type="radio" name="default-bucket-editor" checked={selectedBucket.isDefault} disabled={selectedBucket.isDefault} onChange={() => void run(() => setDefaultBucket(selectedBucket.id))} /><span>Default bucket</span><small>{selectedBucket.isDefault ? "Current default" : "Make default"}</small></label>
               <fieldset className="catalog-fieldset"><legend>Workers projects may use</legend>{bucketWorkerRows(bucketAllowed, (next) => { if (next.length === 0) { setError("a bucket requires at least one Worker"); return; } setBucketAllowed(next); if (!next.includes(bucketDefaultWorker)) setBucketDefaultWorker(next[0] ?? ""); })}</fieldset>
               <CatalogField label="Default Worker"><select value={bucketDefaultWorker} onChange={(event) => setBucketDefaultWorker(event.target.value)}>{[...new Set([...bucketAllowed, selectedBucket.defaultWorkerId.toString()])].map((id) => <option key={id} value={id} disabled={!state.workers.has(id)}>{workerName(state.workers.get(id), BigInt(id))}</option>)}</select></CatalogField>

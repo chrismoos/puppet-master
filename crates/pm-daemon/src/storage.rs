@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pm_protocol::domain::{
-    AgentKind, AgentSelectionSource, Bucket, BucketBriefing, ConnectMode, ContextField,
+    AgentKind, AgentSelectionSource, Bucket, BucketBriefing, BucketIcon, ConnectMode, ContextField,
     ContextKind, ContextSeverity, InstructionLayer, InstructionRevision, InstructionTarget, Item,
     ItemAttachment, ItemPriority, ItemQuery, ItemRef, ItemSourceKind, ItemStatus,
     ItemSummaryFilter, ModelDialect, ModelProfile, ModelProfileEndpoint, ModelProfileSource,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS supervisor_snoozes (
     silent_revision INTEGER
 );";
 
-const SCHEMA_VERSION: i64 = 57;
+const SCHEMA_VERSION: i64 = 58;
 pub const SESSION_RECENT_GRACE_MS: i64 = 60_000;
 pub const SESSION_PAGE_SIZE: u32 = 50;
 pub const SESSION_PAGE_LIMIT_MAX: u32 = 50;
@@ -621,6 +621,12 @@ END;
 CREATE INDEX idx_sessions_ended_page ON sessions(ended_at_unix_ms DESC, id DESC)
     WHERE state IN ('exited','failed');
 "#;
+
+const MIGRATE_V57_TO_V58: &str = "
+ALTER TABLE buckets ADD COLUMN icon_text TEXT;
+ALTER TABLE buckets ADD COLUMN icon_color TEXT;
+ALTER TABLE buckets ADD COLUMN icon_image TEXT;
+";
 
 const MIGRATE_V27_TO_V28: &str = "
 ALTER TABLE buckets ADD COLUMN default_agent TEXT;
@@ -1411,6 +1417,9 @@ CREATE TABLE buckets (
     position INTEGER NOT NULL DEFAULT 0,
     permission_mode TEXT NOT NULL DEFAULT 'default',
     default_agent TEXT,
+    icon_text TEXT,
+    icon_color TEXT,
+    icon_image TEXT,
     default_worker_id INTEGER NOT NULL DEFAULT 0,
     is_default INTEGER NOT NULL DEFAULT 0,
     model_profile_id INTEGER REFERENCES model_profiles(id)
@@ -2709,6 +2718,14 @@ impl Storage {
                 conn.execute_batch(AGENT_MESSAGE_ORIGIN_SCHEMA)?;
             }
         }
+        let has_icon_text: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('buckets') WHERE name='icon_text'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_buckets > 0 && has_icon_text == 0 {
+            conn.execute_batch(MIGRATE_V57_TO_V58)?;
+        }
         conn.execute_batch(crate::connections::SCHEMA)?;
         crate::connections::migrate(&conn)?;
         conn.execute_batch(SUPERVISOR_SNOOZE_SCHEMA)?;
@@ -2783,7 +2800,7 @@ impl Storage {
         let conn = self.conn.lock().unwrap();
         let mut bucket = conn
             .query_row(
-                "SELECT id, name, position, permission_mode, default_worker_id, is_default, default_agent, model_profile_id FROM buckets WHERE id = ?1",
+                "SELECT id, name, position, permission_mode, default_worker_id, is_default, default_agent, model_profile_id, icon_text, icon_color, icon_image FROM buckets WHERE id = ?1",
                 params![id as i64],
                 row_to_bucket,
             )
@@ -2954,6 +2971,17 @@ impl Storage {
         let n = self.conn.lock().unwrap().execute(
             "UPDATE buckets SET default_agent = ?2 WHERE id = ?1",
             params![id as i64, agent.map(|agent| agent.as_str())],
+        )?;
+        if n == 0 {
+            return Err(StorageError::NotFound("bucket", id));
+        }
+        self.get_bucket(id)
+    }
+
+    pub fn set_bucket_icon(&self, id: u64, icon: &BucketIcon) -> Result<Bucket> {
+        let n = self.conn.lock().unwrap().execute(
+            "UPDATE buckets SET icon_text = ?2, icon_color = ?3, icon_image = ?4 WHERE id = ?1",
+            params![id as i64, icon.text, icon.color, icon.image],
         )?;
         if n == 0 {
             return Err(StorageError::NotFound("bucket", id));
@@ -8186,7 +8214,7 @@ impl Storage {
         let conn = self.conn.lock().unwrap();
         let mut buckets = conn
             .prepare(
-                "SELECT id, name, position, permission_mode, default_worker_id, is_default, default_agent, model_profile_id FROM buckets ORDER BY position, id",
+                "SELECT id, name, position, permission_mode, default_worker_id, is_default, default_agent, model_profile_id, icon_text, icon_color, icon_image FROM buckets ORDER BY position, id",
             )?
             .query_map([], row_to_bucket)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -8907,6 +8935,11 @@ fn row_to_bucket(row: &rusqlite::Row) -> rusqlite::Result<Bucket> {
         default_worker_id: row.get::<_, i64>(4)? as u64,
         allowed_worker_ids: Vec::new(),
         is_default: row.get(5)?,
+        icon: BucketIcon {
+            text: row.get(8)?,
+            color: row.get(9)?,
+            image: row.get(10)?,
+        },
     })
 }
 
@@ -11296,6 +11329,70 @@ mod tests {
                 .unwrap()
                 .needs_input_unseen
         );
+    }
+
+    #[test]
+    fn bucket_icon_round_trips_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(&tmp.path().join("icons.db")).unwrap();
+        let bucket = storage.create_bucket("work").unwrap().id;
+        assert_eq!(
+            storage.get_bucket(bucket).unwrap().icon,
+            BucketIcon::default()
+        );
+
+        let icon = BucketIcon {
+            text: Some("🐙".into()),
+            color: Some("#3dd68c".into()),
+            image: Some("data:image/png;base64,AA==".into()),
+        };
+        assert_eq!(storage.set_bucket_icon(bucket, &icon).unwrap().icon, icon);
+        let listed = storage.snapshot(0).unwrap().buckets;
+        assert_eq!(listed.iter().find(|b| b.id == bucket).unwrap().icon, icon);
+
+        storage
+            .set_bucket_icon(bucket, &BucketIcon::default())
+            .unwrap();
+        assert_eq!(
+            storage.get_bucket(bucket).unwrap().icon,
+            BucketIcon::default()
+        );
+        assert!(matches!(
+            storage.set_bucket_icon(9_999, &icon),
+            Err(StorageError::NotFound("bucket", 9_999))
+        ));
+    }
+
+    #[test]
+    fn bucket_icon_migration_keeps_existing_buckets_without_an_icon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("bucket-icons-v57.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            let old_schema = SCHEMA.replace(
+                "    icon_text TEXT,\n    icon_color TEXT,\n    icon_image TEXT,\n",
+                "",
+            );
+            assert!(!old_schema.contains("icon_text"));
+            conn.execute_batch(&old_schema).unwrap();
+            conn.execute("INSERT INTO buckets (id,name,position,permission_mode,default_worker_id,is_default) VALUES (7,'kept',0,'default',0,1)", []).unwrap();
+            conn.execute(
+                "INSERT INTO bucket_workers (bucket_id,worker_id) VALUES (7,0)",
+                [],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 57).unwrap();
+        }
+
+        let storage = Storage::open(&db).unwrap();
+        let bucket = storage.get_bucket(7).unwrap();
+        assert_eq!(bucket.name, "kept");
+        assert_eq!(bucket.icon, BucketIcon::default());
+        let icon = BucketIcon {
+            text: Some("K".into()),
+            ..BucketIcon::default()
+        };
+        assert_eq!(storage.set_bucket_icon(7, &icon).unwrap().icon, icon);
     }
 
     #[test]

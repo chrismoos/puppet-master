@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ContextChip } from "../components/ContextChip";
 import { LinkedItemSummary } from "../components/LinkedItemSummary";
 import { Popover } from "../components/Popover";
@@ -43,14 +43,30 @@ import { AGENT_TERMINAL_DRAG_TYPE, agentTerminalForSession, SESSION_DRAG_TYPE } 
 import {
   COLLAPSED_BUCKETS_KEY,
   COLLAPSED_SUPERVISORS_KEY,
+  SIDEBAR_SCOPE_KEY,
   SUPERVISOR_FILTERS_KEY,
+  readString,
   readStringMap,
   readStringSet,
+  writeString,
   writeStringMap,
   writeStringSet,
 } from "../storage";
 import { overNativeVerticalScrollbar, wireTransientScrollbar } from "../transientScrollbar";
+import { BucketRail } from "./BucketRail";
+import { BucketSwitcher, type SwitcherSession } from "./BucketSwitcher";
+import { parseSidebarStyle, USER_SIDEBAR_STYLE_KEY } from "../sidebarStyle";
 import { SessionInfoDialog } from "./SessionInfoDialog";
+import {
+  bucketOfSession,
+  bucketTallies,
+  effectiveScope,
+  isStaleRow,
+  parseScope,
+  scopeKey,
+  scopeSidebar,
+  type SidebarScope,
+} from "./sidebarScope";
 import { SpawnPopover } from "./SpawnPopover";
 
 export interface NotifyControls {
@@ -709,6 +725,10 @@ export function Sidebar({
   const [searchTotal, setSearchTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [offlineHostsOpen, setOfflineHostsOpen] = useState<boolean | null>(null);
+  const [storedScope, setStoredScope] = useState<SidebarScope>(() => parseScope(readString(SIDEBAR_SCOPE_KEY)));
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const [staleOpen, setStaleOpen] = useState(false);
   const historyRequestVersion = useRef(0);
   const searchRequestVersion = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -723,6 +743,42 @@ export function Sidebar({
       revealOnHover: true,
       revealOn: ["scroll", "wheel", "touchmove"],
     });
+  }, []);
+
+  const bucketIds = new Set([...state.buckets.keys()]);
+  const scope = state.hydrated ? effectiveScope(storedScope, bucketIds) : storedScope;
+
+  const pickScope = useCallback((next: SidebarScope) => {
+    writeString(SIDEBAR_SCOPE_KEY, scopeKey(next));
+    setStoredScope(next);
+    setStaleOpen(false);
+  }, []);
+
+  const closeSwitcher = useCallback((open: boolean) => {
+    setSwitcherOpen(open);
+    if (!open) setSearch("");
+  }, []);
+
+  const lastFollowed = useRef(selectedId);
+  useEffect(() => {
+    if (selectedId === lastFollowed.current) return;
+    lastFollowed.current = selectedId;
+    if (!selectedId || storedScope.kind !== "bucket") return;
+    const bucketId = bucketOfSession(state, selectedId);
+    if (bucketId && bucketId !== storedScope.bucketId) pickScope({ kind: "bucket", bucketId });
+  }, [selectedId, state, storedScope, pickScope]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']")) return;
+      event.preventDefault();
+      setShowResults(false);
+      setSwitcherOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   useEffect(() => {
@@ -806,13 +862,38 @@ export function Sidebar({
   };
 
   const searching = Boolean(search.trim());
-  const pageCursor = searching ? searchCursor : historyCursor;
-  const resultTotal = searching ? searchTotal : historyTotal;
+  const listingResults = searching && showResults;
+  const pageCursor = listingResults ? searchCursor : searching ? "" : historyCursor;
+  const resultTotal = listingResults ? searchTotal : searching ? null : historyTotal;
   const searchOrder = searchIds
     ? new Map([...searchIds].map((id, index) => [id, index]))
     : undefined;
-  const fullModel = buildSidebar(state, searchIds ? true : showEnded, selectedId, searchIds, searchOrder);
-  const model = stateFilter ? filterSidebarByState(fullModel, stateFilter) : fullModel;
+  const listedIds = listingResults ? searchIds : null;
+  const fullModel = buildSidebar(state, listedIds ? true : showEnded, selectedId, listedIds, searchOrder);
+  const scopedModel = listingResults ? fullModel : scopeSidebar(fullModel, scope);
+  const model = stateFilter ? filterSidebarByState(scopedModel, stateFilter) : scopedModel;
+  const singleBucket = !listingResults && scope.kind === "bucket";
+  const sidebarStyle = parseSidebarStyle(state.userSettings.get(USER_SIDEBAR_STYLE_KEY));
+  const tallies = bucketTallies(state);
+  const switcherBuckets = fullModel.buckets.map(({ bucket }) => {
+    const tally = tallies.get(bucket.id.toString());
+    return {
+      id: bucket.id.toString(),
+      name: bucket.name,
+      live: tally?.live ?? 0,
+      needsInput: tally?.needsInput ?? 0,
+      icon: bucket.icon,
+    };
+  });
+  const bucketNames = new Map(switcherBuckets.map((bucket) => [bucket.id, bucket.name]));
+  const switcherSessions: SwitcherSession[] = searching && searchIds
+    ? [...searchIds].flatMap((id) => {
+      const session = state.sessions.get(id);
+      if (!session) return [];
+      const bucketId = bucketOfSession(state, id);
+      return [{ id, name: sessionDisplayName(session), bucketName: bucketId ? bucketNames.get(bucketId) ?? null : null }];
+    })
+    : [];
   const remoteWorkers = [...state.workers.values()]
     .filter((worker) => worker.id !== LOCAL_WORKER_ID)
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -821,6 +902,35 @@ export function Sidebar({
   // An empty host row is worse than a long one, so a fleet that is entirely
   // offline opens the group until the user says otherwise.
   const showOfflineHosts = offlineHostsOpen ?? onlineHosts.length === 0;
+
+  const switcherProps: Parameters<typeof BucketSwitcher>[0] = {
+    scope,
+    buckets: switcherBuckets,
+    open: switcherOpen,
+    onOpenChange: closeSwitcher,
+    query: search,
+    onQuery: (query) => {
+      setShowResults(false);
+      setSearch(query);
+    },
+    sessions: switcherSessions,
+    resultTotal: searchTotal,
+    loading,
+    onPickScope: (next) => {
+      pickScope(next);
+      closeSwitcher(false);
+    },
+    onPickSession: (id) => {
+      const bucketId = bucketOfSession(state, id);
+      if (bucketId && scope.kind !== "all") pickScope({ kind: "bucket", bucketId });
+      closeSwitcher(false);
+      onSelect(id);
+    },
+    onShowAllResults: () => {
+      setShowResults(true);
+      setSwitcherOpen(false);
+    },
+  };
 
   const toggle = (
     set: Set<string>,
@@ -1071,7 +1181,27 @@ export function Sidebar({
 
 
   return (
-    <nav className="sidebar" aria-label="sessions">
+    <div className={`sidebar ${sidebarStyle === "rail" ? "has-rail" : ""}`}>
+      {sidebarStyle === "rail" && (
+        <BucketRail
+          scope={scope}
+          buckets={switcherBuckets}
+          searchOpen={switcherOpen}
+          onPickScope={(next) => {
+            pickScope(next);
+            closeSwitcher(false);
+          }}
+          onOpenSearch={() => {
+            if (switcherOpen) {
+              closeSwitcher(false);
+              return;
+            }
+            setShowResults(false);
+            setSwitcherOpen(true);
+          }}
+        />
+      )}
+    <nav className="sb-column" aria-label="sessions">
       {error && (
         <div className="sb-flash" role="alert">
           <span>{error}</span>
@@ -1080,24 +1210,44 @@ export function Sidebar({
           </button>
         </div>
       )}
-      <div className="sb-search">
-        <label className="visually-hidden" htmlFor="session-search">Search sessions</label>
-        <input
-          id="session-search"
-          type="search"
-          value={search}
-          placeholder="Search sessions"
-          onChange={(event) => setSearch(event.target.value)}
-        />
-        <span role="status" aria-live="polite">
-          {loading ? "loading…" : searching && resultTotal === 0 ? "no matches" :
-            searching && resultTotal !== null ? `${resultTotal} results` : ""}
-        </span>
-      </div>
+      {sidebarStyle === "rail" ? (
+        switcherOpen && (
+          <div className="sb-rail-search">
+            <BucketSwitcher inline {...switcherProps} />
+          </div>
+        )
+      ) : (
+        <div className="sb-switcher-row">
+          <BucketSwitcher {...switcherProps} />
+        </div>
+      )}
+      {listingResults && (
+        <div className="sb-results-bar" role="status" aria-live="polite">
+          <span className="sb-results-text">
+            {loading
+              ? "searching…"
+              : resultTotal === 0
+                ? `no matches for “${search.trim()}”`
+                : `${resultTotal ?? 0} result${resultTotal === 1 ? "" : "s"} for “${search.trim()}”`}
+          </span>
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              setShowResults(false);
+              setSearch("");
+            }}
+          >
+            clear
+          </button>
+        </div>
+      )}
 
       <div className="sb-scroll" ref={scrollRef}>
         {model.buckets.length === 0 && model.orphans.length === 0 && (
-          stateFilter ? (
+          listingResults ? null : scope.kind === "needs" && !stateFilter ? (
+            <p className="muted-line sb-empty">nothing needs you right now</p>
+          ) : stateFilter ? (
             <p className="muted-line sb-empty">
               no {ROLLUP_LABEL[stateFilter]} sessions here —{" "}
               <button type="button" className="link-btn" onClick={onClearStateFilter}>
@@ -1112,26 +1262,56 @@ export function Sidebar({
         )}
         {model.buckets.map(({ bucket, supervisors, sessions }) => {
           const bid = bucket.id.toString();
-          const bucketCollapsed = collapsedBuckets.has(bid);
+          const bucketCollapsed = !singleBucket && collapsedBuckets.has(bid);
           const bucketAttention = needsInputAttention([...supervisors, ...sessions]);
           const tree = supervisorTree({ bucket, supervisors, sessions }, model.order);
+          const members = (entry: SupervisorEntry) =>
+            entry.kind === "session" ? [entry.session] : [entry.group.supervisor, ...entry.group.workers];
+          const stale = singleBucket
+            ? tree.entries.filter((entry) => isStaleRow(members(entry), now, selectedId))
+            : [];
+          const fresh = stale.length > 0 ? tree.entries.filter((entry) => !stale.includes(entry)) : tree.entries;
+          const renderEntry = (entry: SupervisorEntry) => {
+            if (entry.kind === "session") return renderRow(entry.session);
+            const { supervisor, workers } = entry.group;
+            const sid = supervisor.id.toString();
+            return (
+              <SupervisorNode
+                key={sid}
+                row={renderRow(supervisor, { workers })}
+                workers={workers}
+                label={sessionDisplayName(supervisor)}
+                collapsed={collapsedSupervisors.has(sid)}
+                filter={supervisorFilters.get(sid) ?? null}
+                emptyNote={stateFilter ? `no ${ROLLUP_LABEL[stateFilter]} workers` : undefined}
+                onToggleCollapse={() => toggleSupervisor(sid)}
+                onPickState={(picked) => pickSupervisorState(sid, picked)}
+                onShowAll={() => clearSupervisorFilter(sid)}
+                renderWorker={(worker) => renderRow(worker, { child: true })}
+              />
+            );
+          };
           return (
             <div className="sb-bucket" key={bid}>
               <div className="sb-bucket-row">
-                <button
-                  type="button"
-                  className="sb-bucket-head"
-                  aria-expanded={!bucketCollapsed}
-                  onClick={() =>
-                    toggle(collapsedBuckets, COLLAPSED_BUCKETS_KEY, bid, setCollapsedBuckets)
-                  }
-                >
-                  <span className="sb-caret" aria-hidden="true">
-                    {bucketCollapsed ? "▸" : "▾"}
-                  </span>
-                  {bucket.name}
-                  {bucketCollapsed && <DescendantAttention attention={bucketAttention} />}
-                </button>
+                {singleBucket ? (
+                  <span className="sb-bucket-head sb-bucket-head-static">{bucket.name}</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="sb-bucket-head"
+                    aria-expanded={!bucketCollapsed}
+                    onClick={() =>
+                      toggle(collapsedBuckets, COLLAPSED_BUCKETS_KEY, bid, setCollapsedBuckets)
+                    }
+                  >
+                    <span className="sb-caret" aria-hidden="true">
+                      {bucketCollapsed ? "▸" : "▾"}
+                    </span>
+                    {bucket.name}
+                    {bucketCollapsed && <DescendantAttention attention={bucketAttention} />}
+                  </button>
+                )}
                 <BoardLink
                   bucketId={bid}
                   active={activeBoardBucketId === bid}
@@ -1148,27 +1328,25 @@ export function Sidebar({
                 />
                 {renderBucketMenu(bucket)}
               </div>
-              {!bucketCollapsed &&
-                tree.entries.map((entry) => {
-                  if (entry.kind === "session") return renderRow(entry.session);
-                  const { supervisor, workers } = entry.group;
-                  const sid = supervisor.id.toString();
-                  return (
-                    <SupervisorNode
-                      key={sid}
-                      row={renderRow(supervisor, { workers })}
-                      workers={workers}
-                      label={sessionDisplayName(supervisor)}
-                      collapsed={collapsedSupervisors.has(sid)}
-                      filter={supervisorFilters.get(sid) ?? null}
-                      emptyNote={stateFilter ? `no ${ROLLUP_LABEL[stateFilter]} workers` : undefined}
-                      onToggleCollapse={() => toggleSupervisor(sid)}
-                      onPickState={(picked) => pickSupervisorState(sid, picked)}
-                      onShowAll={() => clearSupervisorFilter(sid)}
-                      renderWorker={(worker) => renderRow(worker, { child: true })}
-                    />
-                  );
-                })}
+              {!bucketCollapsed && fresh.map(renderEntry)}
+              {singleBucket && fresh.length === 0 && stale.length === 0 && (
+                <p className="muted-line sb-empty">no sessions in this bucket yet</p>
+              )}
+              {stale.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className="sb-stale-toggle"
+                    aria-expanded={staleOpen}
+                    onClick={() => setStaleOpen(!staleOpen)}
+                  >
+                    <span className="sb-caret" aria-hidden="true">{staleOpen ? "▾" : "▸"}</span>
+                    <span className="sentence">idle over a day</span>
+                    <span className="sb-stale-count">{stale.length}</span>
+                  </button>
+                  {staleOpen && stale.map(renderEntry)}
+                </>
+              )}
             </div>
           );
         })}
@@ -1234,6 +1412,7 @@ export function Sidebar({
         />
       )}
     </nav>
+    </div>
   );
 }
 

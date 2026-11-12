@@ -223,6 +223,18 @@ message Bucket {
   // Model profile for this bucket's sessions; absent runs them on the
   // agent CLI's own account.
   optional uint64 model_profile_id = 9;
+  // How the bucket shows in the sidebar rail; every field absent uses its initials.
+  BucketIcon icon = 10;
+}
+
+// An image takes the place of text, and text of the bucket's initials.
+message BucketIcon {
+  // Up to a few letters or one emoji.
+  optional string text = 1;
+  // A #rrggbb color for the button.
+  optional string color = 2;
+  // A small square picture as a data:image/png, webp or jpeg base64 URL.
+  optional string image = 3;
 }
 
 message Project {
@@ -650,7 +662,14 @@ message ClientMessage {
     MessageSession message_session = 70;
     VoiceTurn voice_turn = 71;
     VoiceCancel voice_cancel = 72;
+    SetBucketIcon set_bucket_icon = 73;
   }
+}
+
+// Replaces the whole icon, so an absent field clears that part of it.
+message SetBucketIcon {
+  uint64 bucket_id = 1;
+  BucketIcon icon = 2;
 }
 
 enum ReviewMode {

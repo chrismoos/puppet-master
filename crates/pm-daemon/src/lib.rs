@@ -2,6 +2,7 @@
 pub mod appearance;
 pub mod attachments;
 pub mod auth;
+pub mod bucket_icon;
 pub mod connection;
 pub mod connections;
 pub mod daemon;
@@ -34,6 +35,7 @@ pub mod review_store;
 pub mod secrets;
 pub mod server;
 pub mod session_program_status;
+pub mod sidebar_style;
 pub mod stale_turn;
 pub mod storage;
 pub mod supervisor_wake;

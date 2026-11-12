@@ -4695,6 +4695,111 @@ async fn user_ui_theme_api_requires_auth_accepts_valid_choices_and_cleans_up() {
 }
 
 #[tokio::test]
+async fn user_sidebar_style_api_requires_auth_accepts_valid_choices_and_cleans_up() {
+    let (daemon, _tmp) = test_daemon();
+    let app = pm_daemon::http::router(daemon.clone());
+
+    for request in [
+        json_request(
+            "PUT",
+            "/api/user/settings/sidebar-style",
+            serde_json::json!("rail"),
+        ),
+        Request::delete("/api/user/settings/sidebar-style")
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    let setup = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/setup",
+            serde_json::json!({"username": "testuser", "password": "hunter2hunter2"}),
+        ))
+        .await
+        .unwrap();
+    let auth = dashboard_auth_from(&daemon, &setup);
+    let get = |auth: &str| {
+        Request::get("/api/user/settings")
+            .header(header::AUTHORIZATION, auth)
+            .header(header::HOST, TEST_HOST)
+            .header(header::ORIGIN, TEST_ORIGIN)
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    assert!(
+        body_json(app.clone().oneshot(get(&auth)).await.unwrap()).await["sidebarStyle"].is_null()
+    );
+
+    for accepted in ["dropdown", "rail"] {
+        let mut apply = json_request(
+            "PUT",
+            "/api/user/settings/sidebar-style",
+            serde_json::json!(accepted),
+        );
+        apply
+            .headers_mut()
+            .insert(header::AUTHORIZATION, auth.parse().unwrap());
+        let applied = app.clone().oneshot(apply).await.unwrap();
+        assert_eq!(applied.status(), StatusCode::OK, "rejected {accepted}");
+        assert_eq!(body_json(applied).await["sidebarStyle"], accepted);
+        assert_eq!(
+            body_json(app.clone().oneshot(get(&auth)).await.unwrap()).await["sidebarStyle"],
+            accepted
+        );
+    }
+
+    for rejected in [
+        serde_json::json!("tabs"),
+        serde_json::json!("Rail"),
+        serde_json::json!(null),
+        serde_json::json!({"style": "dropdown"}),
+    ] {
+        let mut bad = json_request("PUT", "/api/user/settings/sidebar-style", rejected.clone());
+        bad.headers_mut()
+            .insert(header::AUTHORIZATION, auth.parse().unwrap());
+        let rejected_response = app.clone().oneshot(bad).await.unwrap();
+        assert_eq!(rejected_response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(app.clone().oneshot(get(&auth)).await.unwrap()).await["sidebarStyle"],
+            "rail"
+        );
+    }
+
+    let reset = Request::delete("/api/user/settings/sidebar-style")
+        .header(header::AUTHORIZATION, &auth)
+        .header(header::HOST, TEST_HOST)
+        .header(header::ORIGIN, TEST_ORIGIN)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(reset).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    let after = body_json(app.clone().oneshot(get(&auth)).await.unwrap()).await;
+    assert!(after["sidebarStyle"].is_null());
+
+    let oversized = Request::put("/api/user/settings/sidebar-style")
+        .header(header::AUTHORIZATION, &auth)
+        .header(header::HOST, TEST_HOST)
+        .header(header::ORIGIN, TEST_ORIGIN)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(vec![b' '; 64]))
+        .unwrap();
+    assert_eq!(
+        app.oneshot(oversized).await.unwrap().status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+}
+
+#[tokio::test]
 async fn user_terminal_theme_api_never_crosses_authenticated_users() {
     use argon2::password_hash::{PasswordHasher, SaltString};
     use argon2::Argon2;

@@ -535,6 +535,27 @@ impl From<Bucket> for wire::Bucket {
                 .default_agent
                 .map(|agent| wire::AgentKind::from(agent) as i32),
             model_profile_id: v.model_profile_id,
+            icon: Some(v.icon.into()),
+        }
+    }
+}
+
+impl From<BucketIcon> for wire::BucketIcon {
+    fn from(v: BucketIcon) -> Self {
+        wire::BucketIcon {
+            text: v.text,
+            color: v.color,
+            image: v.image,
+        }
+    }
+}
+
+impl From<wire::BucketIcon> for BucketIcon {
+    fn from(v: wire::BucketIcon) -> Self {
+        BucketIcon {
+            text: v.text,
+            color: v.color,
+            image: v.image,
         }
     }
 }
@@ -552,6 +573,7 @@ impl TryFrom<wire::Bucket> for Bucket {
             is_default: v.is_default,
             default_agent: v.default_agent.map(optional_agent).transpose()?.flatten(),
             model_profile_id: v.model_profile_id,
+            icon: v.icon.map(BucketIcon::from).unwrap_or_default(),
         })
     }
 }
@@ -1751,6 +1773,12 @@ impl From<ClientEnvelope> for wire::ClientMessage {
                     mode: wire::PermissionMode::from(mode) as i32,
                 })
             }
+            ClientMsg::SetBucketIcon { bucket_id, icon } => {
+                Msg::SetBucketIcon(wire::SetBucketIcon {
+                    bucket_id,
+                    icon: Some(icon.into()),
+                })
+            }
             ClientMsg::SetBucketDefaultAgent { bucket_id, agent } => {
                 Msg::SetBucketDefaultAgent(wire::SetBucketDefaultAgent {
                     bucket_id,
@@ -2295,6 +2323,10 @@ impl TryFrom<wire::ClientMessage> for ClientEnvelope {
             Msg::SetProjectPermissionMode(m) => ClientMsg::SetProjectPermissionMode {
                 project_id: m.project_id,
                 mode: m.mode.try_into()?,
+            },
+            Msg::SetBucketIcon(m) => ClientMsg::SetBucketIcon {
+                bucket_id: m.bucket_id,
+                icon: m.icon.map(BucketIcon::from).unwrap_or_default(),
             },
             Msg::SetBucketDefaultAgent(m) => ClientMsg::SetBucketDefaultAgent {
                 bucket_id: m.bucket_id,
@@ -3995,6 +4027,18 @@ mod tests {
                 bucket_id: 2,
                 agent: Some(AgentKind::Codex),
             },
+            ClientMsg::SetBucketIcon {
+                bucket_id: 2,
+                icon: BucketIcon {
+                    text: None,
+                    color: Some("#3dd68c".into()),
+                    image: Some("data:image/png;base64,AA==".into()),
+                },
+            },
+            ClientMsg::SetBucketIcon {
+                bucket_id: 2,
+                icon: BucketIcon::default(),
+            },
             ClientMsg::SetProjectDefaultAgent {
                 project_id: 4,
                 agent: None,
@@ -4203,6 +4247,11 @@ mod tests {
                     default_worker_id: 0,
                     allowed_worker_ids: vec![0, 5],
                     is_default: true,
+                    icon: BucketIcon {
+                        text: Some("🐙".into()),
+                        color: Some("#3dd68c".into()),
+                        image: None,
+                    },
                 }],
                 projects: vec![Project {
                     id: 3,

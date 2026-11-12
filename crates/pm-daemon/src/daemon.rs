@@ -6,11 +6,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use pm_adapters::{select_endpoint, AdapterRegistry, Integration, SpawnCtx};
 use pm_protocol::domain::{
     AgentDialects, AgentInboxMode, AgentKind, AgentReplyArrived, AgentSelectionSource,
-    BucketBriefing, ConnectMode, ContextField, ControllerMsg, Event, HookKind, InstructionLayer,
-    InstructionRevision, InstructionTarget, Item, ItemQuery, ItemRef, ItemWrite, MessageOrigin,
-    ModelDialect, ModelProfile, ModelProfileSource, PermissionMode, ResolvedModelEndpoint,
-    RespondTarget, Scope, Session, SessionForward, SessionRole, SessionState, Snapshot,
-    UserSetting, UserSettingChanged, WorkerMsg, WorkerTerminal, LOCAL_WORKER_ID,
+    BucketBriefing, BucketIcon, ConnectMode, ContextField, ControllerMsg, Event, HookKind,
+    InstructionLayer, InstructionRevision, InstructionTarget, Item, ItemQuery, ItemRef, ItemWrite,
+    MessageOrigin, ModelDialect, ModelProfile, ModelProfileSource, PermissionMode,
+    ResolvedModelEndpoint, RespondTarget, Scope, Session, SessionForward, SessionRole,
+    SessionState, Snapshot, UserSetting, UserSettingChanged, WorkerMsg, WorkerTerminal,
+    LOCAL_WORKER_ID,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
@@ -2030,6 +2031,11 @@ impl Daemon {
                             .map(|(_theme, normalized)| normalized)
                             .map_err(|error| error.to_string())
                     }
+                    crate::sidebar_style::USER_SIDEBAR_STYLE_KEY => {
+                        crate::sidebar_style::normalize_sidebar_style(value.as_bytes())
+                            .map(|(_style, normalized)| normalized)
+                            .map_err(|error| error.to_string())
+                    }
                     crate::push::SETTING_PUSH_WEB_IDLE_MINUTES => {
                         crate::push::normalize_web_idle_minutes(value.as_bytes())
                             .map(|(_minutes, normalized)| normalized)
@@ -2126,6 +2132,24 @@ impl Daemon {
             crate::ui_theme::USER_UI_THEME_KEY,
             normalized,
             "user ui theme changed",
+        )
+    }
+
+    pub fn set_user_sidebar_style(
+        &self,
+        user_id: u64,
+        input: Option<&[u8]>,
+    ) -> Result<Option<String>, DaemonError> {
+        let normalized = input
+            .map(crate::sidebar_style::normalize_sidebar_style)
+            .transpose()
+            .map_err(|error| DaemonError::Rejected(error.to_string()))?
+            .map(|(_style, normalized)| normalized);
+        self.store_user_setting(
+            user_id,
+            crate::sidebar_style::USER_SIDEBAR_STYLE_KEY,
+            normalized,
+            "user sidebar style changed",
         )
     }
 
@@ -2844,6 +2868,15 @@ impl Daemon {
         self.validate_default_agent(agent)?;
         let _guard = self.state_lock.lock().unwrap();
         let bucket = self.storage.set_bucket_default_agent(id, agent)?;
+        self.publish(Event::BucketChanged(bucket));
+        Ok(())
+    }
+
+    pub fn set_bucket_icon(&self, id: u64, icon: BucketIcon) -> Result<(), DaemonError> {
+        let icon = crate::bucket_icon::normalize_bucket_icon(icon)
+            .map_err(|error| DaemonError::Rejected(error.to_string()))?;
+        let _guard = self.state_lock.lock().unwrap();
+        let bucket = self.storage.set_bucket_icon(id, &icon)?;
         self.publish(Event::BucketChanged(bucket));
         Ok(())
     }
@@ -10964,6 +10997,55 @@ mod agent_resolution_tests {
             .create_project(bucket, "api", temp.path().to_str().unwrap())
             .unwrap();
         (daemon, temp, bucket, project)
+    }
+
+    #[test]
+    fn bucket_icon_is_normalized_published_and_rejected_whole_when_invalid() {
+        let (daemon, _temp, bucket_id, _project_id) = daemon();
+        let (_snapshot, mut events) = daemon.subscribe();
+
+        daemon
+            .set_bucket_icon(
+                bucket_id,
+                BucketIcon {
+                    text: Some(" PM ".into()),
+                    color: Some("#3DD68C".into()),
+                    image: None,
+                },
+            )
+            .unwrap();
+        let expected = BucketIcon {
+            text: Some("PM".into()),
+            color: Some("#3dd68c".into()),
+            image: None,
+        };
+        assert_eq!(daemon.storage.get_bucket(bucket_id).unwrap().icon, expected);
+        let published = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| match event {
+                Event::BucketChanged(bucket) => Some(bucket),
+                _ => None,
+            })
+            .expect("the change was published");
+        assert_eq!(published.icon, expected);
+
+        let rejected = daemon.set_bucket_icon(
+            bucket_id,
+            BucketIcon {
+                text: Some("XY".into()),
+                color: Some("green".into()),
+                image: None,
+            },
+        );
+        assert!(matches!(rejected, Err(DaemonError::Rejected(_))));
+        assert_eq!(daemon.storage.get_bucket(bucket_id).unwrap().icon, expected);
+
+        daemon
+            .set_bucket_icon(bucket_id, BucketIcon::default())
+            .unwrap();
+        assert_eq!(
+            daemon.storage.get_bucket(bucket_id).unwrap().icon,
+            BucketIcon::default()
+        );
     }
 
     #[test]

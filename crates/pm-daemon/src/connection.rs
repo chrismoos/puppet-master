@@ -705,6 +705,14 @@ pub async fn handle_message(
             let _ = out_tx.send(reply(result)).await;
         }
 
+        ClientMsg::SetBucketIcon { bucket_id, icon } => {
+            let result = daemon
+                .set_bucket_icon(bucket_id, icon)
+                .map(|_| None)
+                .map_err(|e| e.to_string());
+            let _ = out_tx.send(reply(result)).await;
+        }
+
         ClientMsg::SetProjectDefaultAgent { project_id, agent } => {
             let result = daemon
                 .set_project_default_agent(project_id, agent)

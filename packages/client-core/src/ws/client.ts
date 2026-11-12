@@ -23,6 +23,8 @@ import {
   DeleteItemSchema,
   RestartTerminalSchema,
   SnoozeItemSchema,
+  SetBucketIconSchema,
+  BucketIconSchema,
   UpsertItemSchema,
   InterruptSessionSchema,
   KillSessionSchema,
@@ -561,6 +563,14 @@ export class PmClient {
 
   setBucketPermissionMode(bucketId: bigint, mode: PermissionMode): Promise<CommandOutcome> {
     return this.request(setBucketPermissionModeMsg(bucketId, mode));
+  }
+
+  /** Replaces the bucket's whole rail icon; an omitted part is cleared. */
+  setBucketIcon(bucketId: bigint, icon: { text?: string; color?: string; image?: string }): Promise<CommandOutcome> {
+    return this.request({
+      case: "setBucketIcon",
+      value: create(SetBucketIconSchema, { bucketId, icon: create(BucketIconSchema, icon) }),
+    });
   }
 
   setProjectPermissionMode(projectId: bigint, mode: PermissionMode): Promise<CommandOutcome> {

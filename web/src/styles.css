@@ -2262,42 +2262,426 @@ body.resizing-col {
   }
 }
 
-.sb-search {
-  display: flex;
-  align-items: center;
+.sb-switcher-row {
   padding: 8px 10px 6px;
   border-bottom: 1px solid var(--line-soft);
 }
 
-.sb-search input {
+.sb-switcher {
+  position: relative;
+}
+
+.sb-switcher-trigger {
   box-sizing: border-box;
-  flex: 1 1 auto;
-  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
   min-height: 32px;
   padding: 5px 9px;
-  color: var(--text);
+  font: inherit;
+  color: var(--bright);
+  text-align: left;
+  cursor: pointer;
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-search);
 }
 
-/* The count sits in the search row rather than on a line of its own, so it
-   cannot move the list when it appears. */
-.sb-search span[role="status"] {
-  flex: 0 1 auto;
+.sb-switcher-trigger:hover,
+.sb-switcher-trigger[aria-expanded="true"] {
+  border-color: var(--line-strong);
+}
+
+.sb-switcher-current {
+  flex: 1 1 auto;
   min-width: 0;
-  margin-left: 8px;
   overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Collapsed by margin rather than display, so the live region stays in the
-   accessibility tree and a later count is still announced. */
-.sb-search span[role="status"]:empty {
-  margin-left: 0;
+.sb-switcher-trigger .sb-caret {
+  color: var(--muted);
+}
+
+.sidebar.has-rail {
+  flex-direction: row;
+}
+
+.sb-column {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sb-rail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+  gap: 9px;
+  width: 52px;
+  padding: 10px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  background: var(--panel-3);
+  border-right: 1px solid var(--line-soft);
+}
+
+.sb-rail-btn {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+}
+
+.sb-rail-btn:hover {
+  color: var(--bright);
+  border-color: var(--line-strong);
+}
+
+.sb-rail-btn.is-current {
+  color: var(--amber);
+  background: var(--selected-tint);
+  border-color: var(--amber);
+}
+
+.sb-rail-btn.has-color {
+  color: var(--bright);
+  background: color-mix(in srgb, var(--rail-color) 28%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--rail-color) 70%, var(--line));
+}
+
+.sb-rail-btn.has-color.is-current {
+  background: color-mix(in srgb, var(--rail-color) 45%, var(--panel-2));
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber);
+}
+
+.sb-rail-btn.has-image {
+  padding: 0;
+  overflow: visible;
+}
+
+.sb-rail-btn.has-image.is-current {
+  box-shadow: 0 0 0 1px var(--amber);
+}
+
+.sb-rail-image {
+  width: 100%;
+  height: 100%;
+  border-radius: calc(var(--radius-card) - 1px);
+  object-fit: cover;
+}
+
+span.sb-rail-glyph {
+  line-height: 1;
+}
+
+span.sb-rail-glyph.is-long {
+  font-size: 9px;
+  letter-spacing: -0.02em;
+}
+
+.bucket-icon-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.bucket-icon-preview {
+  cursor: default;
+  margin-top: 4px;
+}
+
+.bucket-icon-fields {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bucket-icon-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.bucket-icon-field > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.bucket-icon-field input:not([type]) {
+  max-width: 120px;
+}
+
+.bucket-icon-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bucket-icon-inline input[type="color"] {
+  width: 34px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+  background: none;
+}
+
+svg.sb-rail-glyph {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.sb-rail-badge {
+  position: absolute;
+  top: -5px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--accent-ink);
+  background: var(--amber);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.sb-rail-sep {
+  flex: none;
+  width: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.sb-rail-search {
+  position: relative;
+  height: 0;
+}
+
+.sb-switcher.is-inline {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  right: 8px;
+  z-index: 30;
+}
+
+.sb-switcher.is-inline .sb-switcher-menu {
+  top: 0;
+}
+
+.sb-switcher-elsewhere,
+.sb-switcher-needs {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--accent-ink);
+  background: var(--amber);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sb-switcher-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 520px);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-menu);
+  box-shadow: var(--shadow-md);
+}
+
+.sb-switcher-search {
+  padding: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.sb-switcher-search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+}
+
+.sb-switcher-search input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+.sb-switcher-list {
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.sb-switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-btn);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sb-switcher-item.is-active {
+  background: var(--hover-tint);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.sb-switcher-item.is-current {
+  color: var(--bright);
+  font-weight: 700;
+  background: var(--selected-tint);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.sb-switcher-item.has-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px 3ch;
+  gap: 6px;
+}
+
+.sb-switcher-needs-cell {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sb-switcher-item.has-columns .sb-switcher-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.sb-switcher-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-switcher-count,
+.sb-switcher-bucket {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sb-switcher-bucket {
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-switcher-more {
+  color: var(--blue);
+}
+
+.sb-switcher-label {
+  padding: 8px 8px 2px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: var(--label-transform);
+  letter-spacing: calc(0.08em * var(--label-tracking));
+}
+
+.sb-switcher-sep {
+  margin: 4px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.sb-switcher-status {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sb-switcher-status:empty {
+  padding: 0;
+}
+
+.sb-results-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sb-results-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-stale-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.sb-stale-toggle:hover {
+  color: var(--bright);
+}
+
+.sb-stale-count {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: 10px;
 }
 
 .sb-load-more {
