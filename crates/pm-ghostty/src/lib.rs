@@ -252,6 +252,45 @@ mod tests {
         assert_eq!(restored.visible_text().unwrap()[0], "primary state");
     }
 
+    const HYPERLINK_HISTORY_LINES: usize = 200;
+    const HYPERLINK_HISTORY_FIXTURE: &str = "testdata/hyperlink-history.snapshot";
+
+    fn hyperlink_history_input() -> Vec<u8> {
+        (0..HYPERLINK_HISTORY_LINES)
+            .flat_map(|line| {
+                format!(
+                    "\x1b]8;id=l{line};file:///fixture/{line}\x1b\\link {line:04} \x1b[38;5;{}mxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\x1b[0m\x1b]8;;\x1b\\\r\n",
+                    line % 256
+                )
+                .into_bytes()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hyperlink_history_fixture_round_trip() {
+        let fixture = include_bytes!("../testdata/hyperlink-history.snapshot");
+        assert_eq!(terminal(&hyperlink_history_input()).snapshot().unwrap(), fixture);
+        let mut restored = Terminal::restore(fixture).unwrap();
+        assert_eq!(restored.snapshot().unwrap(), fixture);
+        let history = restored.scrollback_text().unwrap();
+        assert_eq!(history.len(), HYPERLINK_HISTORY_LINES - 7);
+        assert!(history[0].starts_with("link 0000 x"));
+        assert!(restored.visible_text().unwrap()[6].starts_with("link 0199 x"));
+        let vt = String::from_utf8(restored.snapshot_vt().unwrap()).unwrap();
+        assert!(vt.contains("file:///fixture/199"));
+        restored.write(b"\x1b]8;;file:///fixture/after\x1b\\after\x1b]8;;\x1b\\");
+        assert!(restored.visible_text().unwrap()[7].starts_with("after"));
+    }
+
+    #[test]
+    #[ignore = "writes the fixture with the linked library, run only before moving the Ghostty revision"]
+    fn regenerate_hyperlink_history_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(HYPERLINK_HISTORY_FIXTURE);
+        let snapshot = terminal(&hyperlink_history_input()).snapshot().unwrap();
+        std::fs::write(path, snapshot).unwrap();
+    }
+
     #[test]
     fn binary_snapshot_preserves_both_screens_and_modes() {
         let original = terminal(b"primary\x1b[?1049h\x1b[?1003h\x1b[3;5Halternate");
@@ -341,3 +380,4 @@ mod tests {
         );
     }
 }
+

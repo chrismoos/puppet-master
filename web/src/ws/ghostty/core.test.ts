@@ -67,6 +67,20 @@ describe("Ghostty terminal core", () => {
     expect(core.snapshot().rowData[0]?.text).toContain("primary state");
   });
 
+  it("restores a worker's hyperlinked scrollback and keeps writing into it", async () => {
+    const bytes = new Uint8Array(await readFile(new URL("../../../../crates/pm-ghostty/testdata/hyperlink-history.snapshot", import.meta.url)));
+    const core = await createCore();
+    core.restoreSnapshot(bytes);
+    const fixtureRows = 8;
+    const fixtureHistory = 193;
+    expect(core.snapshot().rows).toBe(fixtureRows);
+    expect(core.scrollbarState()!.total).toBe(fixtureHistory + fixtureRows);
+    expect(core.snapshot().rowData[fixtureRows - 2]?.text).toContain("link 0199 x");
+    core.write("\x1b]8;;file:///fixture/after\x1b\\after\x1b]8;;\x1b\\");
+    expect(core.snapshot().rowData[fixtureRows - 2]?.text).toContain("link 0199 x");
+    expect(core.snapshot().rowData[fixtureRows - 1]?.text).toContain("after");
+  });
+
   it("keeps its own scrollback limit after restoring a worker's snapshot", async () => {
     const workerLines = 5000;
     const written = workerLines + 1000;
