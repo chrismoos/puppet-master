@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] The sidebar shows buckets as a rail of buttons by default. Settings → Appearance switches back to the dropdown, and an account that already chose one keeps it.
+
 - [Daemon] Supervisors can set their bucket's rail icon when you ask, with letters or an emoji, a color, or a picture file from their working directory, and can read it back. Only a short description comes back unless the agent asks to see the picture.
 
 - [Web] Terminals run on libghostty-vt 1.0.1, which uses less memory after a terminal is restored from its worker. Workers on the previous version keep working and need no update.

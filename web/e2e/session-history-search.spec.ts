@@ -53,6 +53,9 @@ test("bounded history pages, grouped metadata search, and deep retention", async
     }) as typeof WebSocket;
   });
   await logIn(page);
+  await page.evaluate(() => { location.hash = "#/settings/appearance"; });
+  await page.getByRole("group", { name: "Sidebar buckets" }).getByRole("button", { name: "Dropdown" }).click();
+  await page.evaluate(() => { location.hash = "#/"; });
 
   const rows = page.locator(".sb-session");
   await expect(rows).toHaveCount(2);

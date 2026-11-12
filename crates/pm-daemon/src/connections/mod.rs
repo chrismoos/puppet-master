@@ -417,9 +417,9 @@ impl Config {
 fn byte_limit(bytes: usize) -> String {
     const KIB: usize = 1024;
     const MIB: usize = KIB * KIB;
-    if bytes % MIB == 0 {
+    if bytes.is_multiple_of(MIB) {
         format!("{} MiB", bytes / MIB)
-    } else if bytes % KIB == 0 {
+    } else if bytes.is_multiple_of(KIB) {
         format!("{} KiB", bytes / KIB)
     } else {
         format!("{bytes}-byte")

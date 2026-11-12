@@ -18,12 +18,11 @@ function option(page: Page, name: string | RegExp): Locator {
   return page.locator(".sb-switcher-list").getByRole("option", { name });
 }
 
-async function useRail(page: Page): Promise<void> {
+async function useSidebarStyle(page: Page, style: "Dropdown" | "Rail"): Promise<void> {
   await page.evaluate(() => { location.hash = "#/settings/appearance"; });
-  const style = page.getByRole("group", { name: "Sidebar buckets" });
-  await expect(style.getByRole("button", { name: "Dropdown" })).toHaveAttribute("aria-pressed", "true");
-  await style.getByRole("button", { name: "Rail" }).click();
-  await expect(style.getByRole("button", { name: "Rail" })).toHaveAttribute("aria-pressed", "true");
+  const choice = page.getByRole("group", { name: "Sidebar buckets" }).getByRole("button", { name: style });
+  await choice.click();
+  await expect(choice).toHaveAttribute("aria-pressed", "true");
   await page.evaluate(() => { location.hash = "#/"; });
 }
 
@@ -38,6 +37,7 @@ test("the switcher scopes the sidebar to one bucket and follows the selection", 
     if (localStorage.getItem("pm.showEnded") === null) localStorage.setItem("pm.showEnded", "false");
   });
   await logIn(page);
+  await useSidebarStyle(page, "Dropdown");
 
   const trigger = page.locator(".sb-switcher-trigger");
   const buckets = page.locator(".sb-scroll > .sb-bucket");
@@ -93,6 +93,7 @@ test("the switcher scopes the sidebar to one bucket and follows the selection", 
 test("switcher search finds sessions in any bucket without moving the list", async ({ page, isolatedDaemon }) => {
   await page.addInitScript(() => localStorage.setItem("pm.showEnded", "false"));
   await logIn(page);
+  await useSidebarStyle(page, "Dropdown");
 
   const sidebar = page.locator(".sidebar");
   const trigger = page.locator(".sb-switcher-trigger");
@@ -174,7 +175,12 @@ test("the rail style scopes the sidebar from a column of distinct bucket buttons
   await page.addInitScript(() => localStorage.setItem("pm.showEnded", "false"));
   await logIn(page);
 
-  await useRail(page);
+  await page.evaluate(() => { location.hash = "#/settings/appearance"; });
+  await expect(
+    page.getByRole("group", { name: "Sidebar buckets" }).getByRole("button", { name: "Rail" }),
+    "a new account shows the rail",
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.evaluate(() => { location.hash = "#/"; });
 
   const rail = page.getByRole("navigation", { name: "buckets" });
   await expect(page.locator(".sb-switcher-trigger")).toHaveCount(0);
@@ -243,7 +249,6 @@ test("switching buckets on the rail reopens the session last open there", async 
     }
     await page.addInitScript(() => localStorage.setItem("pm.showEnded", "false"));
     await logIn(page, { minimumSessions: 4 });
-    await useRail(page);
 
     const rail = page.getByRole("navigation", { name: "buckets" });
     const bucket = (name: string) => rail.getByRole("button", { name: new RegExp(`^${name}(,|$)`) });

@@ -1,7 +1,7 @@
 //! How the web sidebar switches between buckets.
 //!
 //! Only an explicit choice is stored. No stored value means the browser
-//! uses the dropdown switcher.
+//! shows the rail.
 
 use serde::{Deserialize, Serialize};
 

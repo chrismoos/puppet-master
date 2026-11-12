@@ -7,9 +7,9 @@ describe("the stored sidebar style", () => {
     expect(parseSidebarStyle('"rail"')).toBe("rail");
   });
 
-  it("uses the dropdown when nothing valid is stored", () => {
-    for (const stored of [undefined, '"Rail"', "rail", "null", "{}", "not json"]) {
-      expect(parseSidebarStyle(stored), String(stored)).toBe("dropdown");
+  it("uses the rail when nothing valid is stored", () => {
+    for (const stored of [undefined, '"Dropdown"', "dropdown", "null", "{}", "not json"]) {
+      expect(parseSidebarStyle(stored), String(stored)).toBe("rail");
     }
   });
 });
