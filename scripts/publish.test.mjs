@@ -27,6 +27,7 @@ import {
   stableFromPreRelease,
   uncoveredPlatforms,
   chooseImageBuilder,
+  capturedStdio,
   platformProbeArgs,
   IMAGE_BASE,
   KERNEL_EMULATION_BUILDKIT_DOCKERFILE,
@@ -494,6 +495,12 @@ test("the platform probe runs a script through env and keeps nothing", () => {
   assert.ok(probe.includes("--output=type=cacheonly"));
   assert.ok(!probe.includes("--push"));
   assert.equal(probe.at(-1), "-");
+});
+
+// The kernel-emulation BuildKit image is built from a Dockerfile on stdin.
+test("a captured command given input gets it on stdin", () => {
+  assert.equal(capturedStdio("FROM x\n")[0], "pipe");
+  assert.equal(capturedStdio(undefined)[0], "ignore");
 });
 
 test("the worker image builds with the builder publish chose", () => {

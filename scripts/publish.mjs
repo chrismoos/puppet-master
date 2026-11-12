@@ -112,10 +112,16 @@ function die(message) {
   throw new PublishError(message);
 }
 
+// spawnSync drops `input` when stdin is ignored, so a command fed from
+// stdin needs a pipe.
+export function capturedStdio(input) {
+  return [input === undefined ? "ignore" : "pipe", "pipe", "pipe"];
+}
+
 function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, {
     cwd: ROOT,
-    stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+    stdio: options.capture ? capturedStdio(options.input) : "inherit",
     encoding: "utf8",
     ...options,
   });
