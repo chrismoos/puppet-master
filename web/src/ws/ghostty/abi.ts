@@ -1,13 +1,15 @@
 export const GHOSTTY_TERMINAL_OPTION = {
-  foreground: 11,
-  background: 12,
-  cursor: 13,
-  palette: 14,
-  selection: 21,
-  defaultCursorBlink: 23,
-  scrollbackMaxBytes: 27,
-  scrollbackMaxLines: 28,
-  mode: 34,
+  userdata: 1,
+  writePty: 2,
+  foreground: 12,
+  background: 13,
+  cursor: 14,
+  palette: 15,
+  selection: 22,
+  defaultCursorBlink: 24,
+  scrollbackMaxBytes: 28,
+  scrollbackMaxLines: 29,
+  mode: 35,
 } as const;
 
 export const GHOSTTY_TERMINAL_DATA = {
@@ -16,9 +18,15 @@ export const GHOSTTY_TERMINAL_DATA = {
   mouseTracking: 11,
   cursorX: 3,
   cursorY: 4,
+  selection: 31,
   viewportActive: 32,
   mode: 37,
   defaultPalette: 25,
+} as const;
+
+export const GHOSTTY_FORMATTER_OPTION = {
+  unwrap: 2,
+  selection: 4,
 } as const;
 
 export const GHOSTTY_DEC_MODE = {
@@ -38,11 +46,11 @@ export const GHOSTTY_SCROLL_VIEWPORT_TAG = {
 } as const;
 
 export const GHOSTTY_RENDER_STATE_SET = {
-  clearDirty: 0,
+  clearDirty: 1,
 } as const;
 
 export const GHOSTTY_RENDER_STATE_ROW_SET = {
-  clearDirty: 0,
+  clearDirty: 1,
 } as const;
 
 export const GHOSTTY_RENDER_STATE_DIRTY = {
@@ -70,6 +78,27 @@ export const GHOSTTY_RENDER_STATE_DATA = {
   cursorInViewport: 14,
   cursorX: 15,
   cursorY: 16,
+} as const;
+
+export const GHOSTTY_ROW_CELLS_DATA = {
+  raw: 1,
+  style: 2,
+  graphemesLength: 3,
+  graphemes: 4,
+  background: 5,
+  foreground: 6,
+  selected: 7,
+} as const;
+
+export const GHOSTTY_CELL_DATA = {
+  wide: 3,
+} as const;
+
+export const GHOSTTY_CELL_WIDE = {
+  narrow: 0,
+  wide: 1,
+  spacerTail: 2,
+  spacerHead: 3,
 } as const;
 
 export const GHOSTTY_ROW_METADATA = {
@@ -122,9 +151,9 @@ export const GHOSTTY_PALETTE_COLOR_BYTES = 3;
 export const GHOSTTY_ROW_CELLS_QUERY_FIELD_COUNT = 5;
 
 export const GHOSTTY_MOUSE_ENCODER_OPTION = {
-  size: 2,
-  anyButtonPressed: 3,
-  trackLastCell: 4,
+  size: 3,
+  anyButtonPressed: 4,
+  trackLastCell: 5,
 } as const;
 
 export type GhosttyPointTag = (typeof GHOSTTY_GRID_REF_TAG)[keyof typeof GHOSTTY_GRID_REF_TAG];

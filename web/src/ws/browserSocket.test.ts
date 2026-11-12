@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import ghosttyRevision from "./ghostty/vendor/VERSION?raw";
+import ghosttySnapshotCompatibility from "../../../crates/pm-protocol/ghostty-snapshot-compatibility?raw";
 import { browserSocketConnector } from "./browserSocket";
 import {
   TERMINAL_CLOSE_INCOMPATIBLE,
@@ -31,7 +31,7 @@ describe("browser terminal snapshot negotiation", () => {
     vi.mocked(authedFetch).mockResolvedValue(new Response("{}"));
     browserSocketConnector("/ws/terminal/7?generation=3");
     await vi.waitFor(() => expect(opened).toHaveBeenCalledOnce());
-    const identity = encodeURIComponent(`ghostty-vt:${ghosttyRevision.trim()}:pm-v1`);
+    const identity = encodeURIComponent(ghosttySnapshotCompatibility.trim());
     expect(authedFetch).toHaveBeenCalledWith(`/api/terminals/7/snapshot-compatibility?ghostty=${identity}`);
     expect(opened.mock.calls[0]?.[0]).toContain(`&ghostty=${identity}&ticket=one-use`);
   });

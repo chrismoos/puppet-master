@@ -2,7 +2,7 @@ import {
   TERMINAL_CLOSE_INCOMPATIBLE,
   TERMINAL_CLOSE_PAGE_OUTDATED,
 } from "@puppet-master/client-core/ws/terminalFrame";
-import ghosttyRevision from "./ghostty/vendor/VERSION?raw";
+import ghosttySnapshotCompatibility from "../../../crates/pm-protocol/ghostty-snapshot-compatibility?raw";
 import { WS_CLOSE_UNAUTHENTICATED } from "@puppet-master/client-core/ws/client";
 import type { SocketConnector, SocketLike } from "@puppet-master/client-core/platform";
 import { authedFetch, UnauthenticatedError } from "../api/token";
@@ -32,7 +32,7 @@ export const browserSocketConnector: SocketConnector = (path, subprotocol) =>
   deferredSocket(
     async () => {
       const terminalPath = /^\/ws\/terminal\/\d+\?/.test(path)
-        ? `${path}&ghostty=${encodeURIComponent(`ghostty-vt:${ghosttyRevision.trim()}:pm-v1`)}`
+        ? `${path}&ghostty=${encodeURIComponent(ghosttySnapshotCompatibility.trim())}`
         : path;
       const terminal = /^\/ws\/terminal\/(\d+)\?/.exec(terminalPath);
       if (terminal) {

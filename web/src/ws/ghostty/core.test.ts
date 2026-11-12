@@ -276,6 +276,25 @@ describe("Ghostty terminal core", () => {
     expect(core.snapshot().rowData[0]?.text).toContain("after");
   });
 
+  it("encodes typed text, control keys, and the terminal's cursor key mode", async () => {
+    const key = (init: { key: string; code: string; ctrlKey?: boolean }) => ({
+      shiftKey: false,
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      repeat: false,
+      isComposing: false,
+      getModifierState: () => false,
+      ...init,
+    }) as unknown as KeyboardEvent;
+    const core = await createCore();
+    expect(core.encodeKey(key({ key: "a", code: "KeyA" }))).toBe("a");
+    expect(core.encodeKey(key({ key: "c", code: "KeyC", ctrlKey: true }))).toBe("\u0003");
+    expect(core.encodeKey(key({ key: "ArrowUp", code: "ArrowUp" }))).toBe("\u001b[A");
+    core.write("\u001b[?1h");
+    expect(core.encodeKey(key({ key: "ArrowUp", code: "ArrowUp" }))).toBe("\u001bOA");
+  });
+
   it("uses the bracketed paste mode when encoding pasted text", async () => {
     const core = await createCore();
     core.write("\u001b[?2004h");

@@ -28,5 +28,27 @@ and `wasm32`. Build intermediates default to `target/ghostty-runtime` and can be
 moved with `GHOSTTY_BUILD_DIR`. An unsupported Cargo target fails explicitly.
 
 A bridge source change requires rebuilding every native archive. Updating the
-Ghostty revision requires rebuilding native and WebAssembly artifacts together
-and reviewing the snapshot compatibility identity before deploying mixed hosts.
+Ghostty revision requires rebuilding native and WebAssembly artifacts together.
+
+Workers send terminal snapshots that browsers restore, so both must read the
+same snapshot byte format. `crates/pm-protocol/ghostty-snapshot-compatibility`
+names that format, and the browser and every worker report it. A controller
+refuses snapshots from a worker reporting a different value, and asks a page
+loaded with a different value to reload. It names the Ghostty revision whose
+format the fleet last adopted, so it can be older than `VERSION`.
+
+Change it only when the format changes. Before moving `VERSION`, regenerate
+`testdata/hyperlink-history.snapshot` with the current library if the fixture
+does not already cover what upstream changed:
+
+```sh
+cargo test -p pm-ghostty --release -- --ignored regenerate_hyperlink_history_fixture
+```
+
+Then, with the new library, the `pm-ghostty` tests and the web
+`src/ws/ghostty/core.test.ts` restore tests must decode the snapshots written
+by the old library, and restoring and encoding them again must give the same
+bytes. Also restore a snapshot written by the new library with the previous
+WebAssembly build, which an open page may still be running. If any of this
+fails, set the identity to the new revision. Remote workers then need updating
+before their terminals can be restored.

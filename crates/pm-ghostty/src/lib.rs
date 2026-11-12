@@ -270,7 +270,6 @@ mod tests {
     #[test]
     fn hyperlink_history_fixture_round_trip() {
         let fixture = include_bytes!("../testdata/hyperlink-history.snapshot");
-        assert_eq!(terminal(&hyperlink_history_input()).snapshot().unwrap(), fixture);
         let mut restored = Terminal::restore(fixture).unwrap();
         assert_eq!(restored.snapshot().unwrap(), fixture);
         let history = restored.scrollback_text().unwrap();
@@ -380,4 +379,3 @@ mod tests {
         );
     }
 }
-

@@ -1,8 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  GHOSTTY_CELL_DATA,
+  GHOSTTY_CELL_WIDE,
   GHOSTTY_CURSOR_STYLE,
   GHOSTTY_DEC_MODE,
+  GHOSTTY_FORMATTER_OPTION,
   GHOSTTY_GRID_REF_TAG,
   GHOSTTY_KEY_EVENT_ACTION,
   GHOSTTY_MOUSE_ENCODER_OPTION,
@@ -13,6 +16,7 @@ import {
   GHOSTTY_RENDER_STATE_ROW_GET,
   GHOSTTY_RENDER_STATE_ROW_SET,
   GHOSTTY_RENDER_STATE_SET,
+  GHOSTTY_ROW_CELLS_DATA,
   GHOSTTY_ROW_METADATA,
   GHOSTTY_SCROLL_VIEWPORT_TAG,
   GHOSTTY_SNAPSHOT_DECODER_DATA,
@@ -29,6 +33,8 @@ type Mapping = readonly [table: Readonly<Record<string, number>>, enumType: stri
 
 const MAPPINGS: Readonly<Record<string, Mapping>> = {
   GHOSTTY_TERMINAL_OPTION: [GHOSTTY_TERMINAL_OPTION, "GhosttyTerminalOption", {
+    userdata: "USERDATA",
+    writePty: "WRITE_PTY",
     foreground: "COLOR_FOREGROUND",
     background: "COLOR_BACKGROUND",
     cursor: "COLOR_CURSOR",
@@ -45,9 +51,14 @@ const MAPPINGS: Readonly<Record<string, Mapping>> = {
     mouseTracking: "MOUSE_TRACKING",
     cursorX: "CURSOR_X",
     cursorY: "CURSOR_Y",
+    selection: "SELECTION",
     viewportActive: "VIEWPORT_ACTIVE",
     mode: "MODE",
     defaultPalette: "COLOR_PALETTE_DEFAULT",
+  }],
+  GHOSTTY_FORMATTER_OPTION: [GHOSTTY_FORMATTER_OPTION, "GhosttyFormatterOption", {
+    unwrap: "UNWRAP",
+    selection: "SELECTION",
   }],
   GHOSTTY_SCROLL_VIEWPORT_TAG: [GHOSTTY_SCROLL_VIEWPORT_TAG, "GhosttyTerminalScrollViewportTag", {
     top: "TOP",
@@ -78,6 +89,22 @@ const MAPPINGS: Readonly<Record<string, Mapping>> = {
     cursorX: "CURSOR_VIEWPORT_X",
     cursorY: "CURSOR_VIEWPORT_Y",
   }],
+  GHOSTTY_ROW_CELLS_DATA: [GHOSTTY_ROW_CELLS_DATA, "GhosttyRenderStateRowCellsData", {
+    raw: "RAW",
+    style: "STYLE",
+    graphemesLength: "GRAPHEMES_LEN",
+    graphemes: "GRAPHEMES_BUF",
+    background: "BG_COLOR",
+    foreground: "FG_COLOR",
+    selected: "SELECTED",
+  }],
+  GHOSTTY_CELL_DATA: [GHOSTTY_CELL_DATA, "GhosttyCellData", { wide: "WIDE" }],
+  GHOSTTY_CELL_WIDE: [GHOSTTY_CELL_WIDE, "GhosttyCellWide", {
+    narrow: "NARROW",
+    wide: "WIDE",
+    spacerTail: "SPACER_TAIL",
+    spacerHead: "SPACER_HEAD",
+  }],
   GHOSTTY_ROW_METADATA: [GHOSTTY_ROW_METADATA, "GhosttyRowData", {
     wrapsToNext: "WRAP",
     isWrapContinuation: "WRAP_CONTINUATION",
@@ -101,7 +128,7 @@ const MAPPINGS: Readonly<Record<string, Mapping>> = {
     primary: "PRIMARY",
     alternate: "ALTERNATE",
   }],
-  GHOSTTY_CURSOR_STYLE: [GHOSTTY_CURSOR_STYLE, "GhosttyRenderStateCursorVisualStyle", {
+  GHOSTTY_CURSOR_STYLE: [GHOSTTY_CURSOR_STYLE, "GhosttyCursorStyle", {
     bar: "BAR",
     block: "BLOCK",
     underline: "UNDERLINE",

@@ -10,8 +10,9 @@ pub mod worker_frame;
 /// version supports.
 pub const WORKER_PROTOCOL_VERSION: u32 = 24;
 pub const WORKER_PROTOCOL_GHOSTTY_SNAPSHOT: u32 = 24;
-pub const GHOSTTY_SNAPSHOT_COMPATIBILITY: &str =
-    "ghostty-vt:93404a48a9a8bf265bb1671e0e6d9985322f6682:pm-v1";
+/// Names the snapshot byte format workers and browsers must share, which can
+/// stay the same across Ghostty revisions that leave that format unchanged.
+pub const GHOSTTY_SNAPSHOT_COMPATIBILITY: &str = include_str!("../ghostty-snapshot-compatibility");
 
 pub fn ghostty_snapshot_compatible(protocol_version: u32, identity: &str) -> bool {
     protocol_version >= WORKER_PROTOCOL_GHOSTTY_SNAPSHOT
@@ -220,14 +221,21 @@ pub fn negotiate_worker_protocol(announced: u32) -> Result<PeerProtocol, Protoco
 #[cfg(test)]
 mod protocol_tests {
     #[test]
-    fn snapshot_identity_matches_native_and_browser_artifacts() {
+    fn native_and_browser_artifacts_share_one_ghostty_revision() {
         let native = include_str!("../../pm-ghostty/vendor/VERSION").trim();
         let browser = include_str!("../../../web/src/ws/ghostty/vendor/VERSION").trim();
         assert_eq!(native, browser);
-        assert_eq!(
-            super::GHOSTTY_SNAPSHOT_COMPATIBILITY,
-            format!("ghostty-vt:{native}:pm-v1")
-        );
+    }
+
+    #[test]
+    fn snapshot_identity_names_a_ghostty_revision_and_profile() {
+        let identity = super::GHOSTTY_SNAPSHOT_COMPATIBILITY;
+        let revision = identity
+            .strip_prefix("ghostty-vt:")
+            .and_then(|rest| rest.strip_suffix(":pm-v1"))
+            .unwrap_or_else(|| panic!("unexpected snapshot identity {identity:?}"));
+        assert_eq!(revision.len(), 40);
+        assert!(revision.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     use super::*;

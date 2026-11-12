@@ -1,5 +1,6 @@
 import ghosttyWasmUrl from "./vendor/ghostty-vt.wasm?url";
 import ghosttyWritePtyWasmUrl from "./vendor/ghostty-write-pty.wasm?url&no-inline";
+import { GHOSTTY_TERMINAL_OPTION } from "./abi";
 
 type WasmFunction = (...args: Array<number | bigint>) => number;
 
@@ -16,6 +17,7 @@ interface TypeLayout {
   readonly align: number;
   readonly fields: Readonly<Record<string, TypeField>>;
   readonly values?: Readonly<Record<string, number>>;
+  readonly bits?: Readonly<Record<string, { readonly lsb: number; readonly width: number }>>;
 }
 
 type TypeLayouts = Readonly<Record<string, TypeLayout>>;
@@ -118,14 +120,14 @@ export class GhosttyRuntime {
     }
     const id = this.nextPtyWriterId++;
     this.ptyWriters.set(id, writer);
-    this.call("ghostty_terminal_set", terminal, 0, id);
-    this.call("ghostty_terminal_set", terminal, 1, this.writePtyFunctionIndex);
+    this.call("ghostty_terminal_set", terminal, GHOSTTY_TERMINAL_OPTION.userdata, id);
+    this.call("ghostty_terminal_set", terminal, GHOSTTY_TERMINAL_OPTION.writePty, this.writePtyFunctionIndex);
     return id;
   }
 
   detachPtyWriter(terminal: number, id: number): void {
-    this.call("ghostty_terminal_set", terminal, 1, 0);
-    this.call("ghostty_terminal_set", terminal, 0, 0);
+    this.call("ghostty_terminal_set", terminal, GHOSTTY_TERMINAL_OPTION.writePty, 0);
+    this.call("ghostty_terminal_set", terminal, GHOSTTY_TERMINAL_OPTION.userdata, 0);
     this.ptyWriters.delete(id);
   }
 
@@ -142,6 +144,13 @@ export class GhosttyRuntime {
       this.memoryView = new DataView(this.memory.buffer);
     }
     return this.memoryView;
+  }
+
+  /** Zeroes a struct and records its size when libghostty-vt versions it with a `size` field. */
+  initStruct(pointer: number, structName: string): void {
+    const layout = this.layout(structName);
+    this.bytes(pointer, layout.size).fill(0);
+    if (layout.fields.size) this.setField(pointer, structName, "size", layout.size);
   }
 
   setField(pointer: number, structName: string, fieldName: string, value: number): void {
@@ -162,6 +171,7 @@ export class GhosttyRuntime {
         return;
       case "u32":
       case "enum":
+      case "pointer":
         view.setUint32(offset, value, true);
         return;
       case "u64":
@@ -170,6 +180,15 @@ export class GhosttyRuntime {
       default:
         throw new Error(`Unsupported libghostty-vt field type: ${field.type}`);
     }
+  }
+
+  /** Reads one bit range of a packed field, such as a style flag. */
+  readBits(pointer: number, structName: string, fieldName: string, bitName: string): number {
+    const field = this.layout(structName).fields[fieldName];
+    const bits = field && this.layouts[field.type]?.bits?.[bitName];
+    if (!field || !bits) throw new Error(`libghostty-vt bits are unavailable: ${structName}.${fieldName}.${bitName}`);
+    const word = this.readField(pointer, structName, fieldName);
+    return (word >>> bits.lsb) & ((1 << bits.width) - 1);
   }
 
   readField(pointer: number, structName: string, fieldName: string): number {
@@ -187,6 +206,7 @@ export class GhosttyRuntime {
         return view.getInt32(offset, true);
       case "u32":
       case "enum":
+      case "pointer":
         return view.getUint32(offset, true);
       case "u64":
         return Number(view.getBigUint64(offset, true));

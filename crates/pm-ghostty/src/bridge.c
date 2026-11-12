@@ -42,37 +42,38 @@ int pm_ghostty_restore(const uint8_t *bytes, size_t len, GhosttyTerminal *out) {
   return result;
 }
 
-static GhosttyFormatterTerminalOptions format_options(bool vt) {
-  GhosttyFormatterTerminalOptions options = GHOSTTY_INIT_SIZED(GhosttyFormatterTerminalOptions);
-  options.emit = vt ? GHOSTTY_FORMATTER_FORMAT_VT : GHOSTTY_FORMATTER_FORMAT_PLAIN;
-  options.trim = !vt;
-  options.extra = (GhosttyFormatterTerminalExtra)GHOSTTY_INIT_SIZED(GhosttyFormatterTerminalExtra);
-  options.extra.screen = (GhosttyFormatterScreenExtra)GHOSTTY_INIT_SIZED(GhosttyFormatterScreenExtra);
-  if (vt) {
-    options.extra.palette = true;
-    options.extra.modes = true;
-    options.extra.scrolling_region = true;
-    options.extra.tabstops = true;
-    options.extra.pwd = true;
-    options.extra.keyboard = true;
-    options.extra.screen.cursor = true;
-    options.extra.screen.style = true;
-    options.extra.screen.hyperlink = true;
-    options.extra.screen.protection = true;
-    options.extra.screen.kitty_keyboard = true;
-    options.extra.screen.charsets = true;
+static GhosttyResult new_formatter(GhosttyTerminal terminal, bool vt,
+    const GhosttySelection *selection, GhosttyFormatter *out) {
+  const GhosttyFormatterFormat emit = vt ? GHOSTTY_FORMATTER_FORMAT_VT : GHOSTTY_FORMATTER_FORMAT_PLAIN;
+  const bool trim = !vt;
+  const GhosttyFormatterExtras extras = vt ? GHOSTTY_FORMATTER_EXTRAS_ALL : GHOSTTY_FORMATTER_EXTRAS_NONE;
+  GhosttyResult result = ghostty_formatter_terminal_new(NULL, out, terminal);
+  if (result != GHOSTTY_SUCCESS) return result;
+  result = ghostty_formatter_set(*out, GHOSTTY_FORMATTER_OPT_EMIT, &emit);
+  if (result == GHOSTTY_SUCCESS) result = ghostty_formatter_set(*out, GHOSTTY_FORMATTER_OPT_TRIM, &trim);
+  if (result == GHOSTTY_SUCCESS) result = ghostty_formatter_set(*out, GHOSTTY_FORMATTER_OPT_EXTRAS, &extras);
+  if (result == GHOSTTY_SUCCESS && selection != NULL) {
+    result = ghostty_formatter_set(*out, GHOSTTY_FORMATTER_OPT_SELECTION, selection);
   }
-  return options;
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_formatter_free(*out);
+    *out = NULL;
+  }
+  return result;
 }
 
-int pm_ghostty_format(GhosttyTerminal terminal, bool vt, uint8_t **out, size_t *len) {
+static int format_alloc(GhosttyTerminal terminal, bool vt, const GhosttySelection *selection,
+    uint8_t **out, size_t *len) {
   GhosttyFormatter formatter = NULL;
-  GhosttyResult result = ghostty_formatter_terminal_new(NULL, &formatter,
-      terminal, format_options(vt));
+  GhosttyResult result = new_formatter(terminal, vt, selection, &formatter);
   if (result != GHOSTTY_SUCCESS) return result;
   result = ghostty_formatter_format_alloc(formatter, NULL, out, len);
   ghostty_formatter_free(formatter);
   return result;
+}
+
+int pm_ghostty_format(GhosttyTerminal terminal, bool vt, uint8_t **out, size_t *len) {
+  return format_alloc(terminal, vt, NULL, out, len);
 }
 
 int pm_ghostty_row(GhosttyTerminal terminal, bool history, uint32_t y, uint8_t **out, size_t *len) {
@@ -81,22 +82,13 @@ int pm_ghostty_row(GhosttyTerminal terminal, bool history, uint32_t y, uint8_t *
   if (result != GHOSTTY_SUCCESS) return result;
   GhosttyPoint point = { .tag = history ? GHOSTTY_POINT_TAG_HISTORY : GHOSTTY_POINT_TAG_ACTIVE };
   point.value.coordinate.y = y;
-  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
-  selection.start = (GhosttyGridRef)GHOSTTY_INIT_SIZED(GhosttyGridRef);
-  selection.end = (GhosttyGridRef)GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  GhosttySelection selection = { 0 };
   result = ghostty_terminal_grid_ref(terminal, point, &selection.start);
   if (result != GHOSTTY_SUCCESS) return result;
   point.value.coordinate.x = cols - 1;
   result = ghostty_terminal_grid_ref(terminal, point, &selection.end);
   if (result != GHOSTTY_SUCCESS) return result;
-  GhosttyFormatterTerminalOptions options = format_options(false);
-  options.selection = &selection;
-  GhosttyFormatter formatter = NULL;
-  result = ghostty_formatter_terminal_new(NULL, &formatter, terminal, options);
-  if (result != GHOSTTY_SUCCESS) return result;
-  result = ghostty_formatter_format_alloc(formatter, NULL, out, len);
-  ghostty_formatter_free(formatter);
-  return result;
+  return format_alloc(terminal, false, &selection, out, len);
 }
 
 int pm_ghostty_mode(GhosttyTerminal terminal, uint16_t mode, bool ansi, bool *out) {
