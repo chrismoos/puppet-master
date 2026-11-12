@@ -74,4 +74,38 @@ describe("BucketRail", () => {
     expect(markup({ kind: "all" }, true)).toMatch(/aria-label="Search sessions" aria-expanded="true"/);
     expect(markup({ kind: "all" }, false)).toMatch(/aria-label="Search sessions" aria-expanded="false"/);
   });
+
+  it("rings a bucket that needs input and pulses it only while some of that is unseen", () => {
+    const rail = (needsInputUnseen: number) => renderToStaticMarkup(
+      <BucketRail
+        scope={{ kind: "all" }}
+        buckets={[{ id: "1", name: "puppet-master", live: 3, needsInput: 2, needsInputUnseen }]}
+        searchOpen={false}
+        onPickScope={() => {}}
+        onOpenSearch={() => {}}
+      />,
+    );
+    const bucketButton = (html: string) => html.match(/<button[^>]*aria-label="puppet-master[^"]*"[^>]*>/)?.[0] ?? "";
+    expect(bucketButton(rail(0))).toContain("has-needs");
+    expect(bucketButton(rail(0))).not.toContain("has-unseen-needs");
+    expect(bucketButton(rail(1))).toContain("has-unseen-needs");
+  });
+
+  it("marks a bucket holding a finished session nobody has viewed", () => {
+    const html = renderToStaticMarkup(
+      <BucketRail
+        scope={{ kind: "all" }}
+        buckets={[
+          { id: "1", name: "puppet-master", live: 3, needsInput: 1, finishedUnseen: 2 },
+          { id: "2", name: "infra", live: 1, needsInput: 0, finishedUnseen: 0 },
+        ]}
+        searchOpen={false}
+        onPickScope={() => {}}
+        onOpenSearch={() => {}}
+      />,
+    );
+    expect(html.match(/sb-rail-finished/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="puppet-master, 1 need input, 2 finished"');
+    expect(html).toContain('aria-label="infra"');
+  });
 });

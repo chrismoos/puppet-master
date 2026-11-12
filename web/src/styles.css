@@ -2358,9 +2358,52 @@ body.resizing-col {
 }
 
 .sb-rail-btn.is-current {
-  color: var(--amber);
-  background: var(--selected-tint);
+  color: var(--bright);
+  background: var(--panel);
+  border-color: var(--line-strong);
+}
+
+.sb-rail-btn.is-current::before {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: -10px;
+  width: 4px;
+  content: "";
+  background: var(--bright);
+  border-radius: 0 3px 3px 0;
+}
+
+.sb-rail-btn.has-needs {
   border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber);
+}
+
+.sb-rail-btn.has-unseen-needs {
+  animation: sb-rail-needs-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes sb-rail-needs-pulse {
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 35%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-rail-btn.has-unseen-needs {
+    animation: none;
+  }
+}
+
+.sb-rail-finished {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 10px;
+  height: 10px;
+  background: var(--green);
+  border: 2px solid var(--panel-3);
+  border-radius: 50%;
 }
 
 .sb-rail-btn.has-color {
@@ -2371,17 +2414,15 @@ body.resizing-col {
 
 .sb-rail-btn.has-color.is-current {
   background: color-mix(in srgb, var(--rail-color) 45%, var(--panel-2));
+}
+
+.sb-rail-btn.has-color.has-needs {
   border-color: var(--amber);
-  box-shadow: 0 0 0 1px var(--amber);
 }
 
 .sb-rail-btn.has-image {
   padding: 0;
   overflow: visible;
-}
-
-.sb-rail-btn.has-image.is-current {
-  box-shadow: 0 0 0 1px var(--amber);
 }
 
 .sb-rail-image {

@@ -7,6 +7,9 @@ export interface SwitcherBucket {
   /** Sessions in the bucket that are not ended. */
   live: number;
   needsInput: number;
+  needsInputUnseen?: number;
+  /** Idle sessions whose finished turn has not been viewed. */
+  finishedUnseen?: number;
   icon?: RailIcon;
 }
 

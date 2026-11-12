@@ -44,7 +44,7 @@ type E2eFixtures = {
     agentReply: (sessionTitle: string, threadId: number, body: string) => Promise<void>;
     callAgentTool: (sessionTitle: string, name: string, args: Record<string, unknown>) => Promise<string>;
     setSessionEndedState: (title: string, state: "exited" | "failed", endedAgoMs?: number) => void;
-    hookSession: (title: string, kind: "needs-input" | "prompt-submitted", detail?: string) => void;
+    hookSession: (title: string, kind: "needs-input" | "prompt-submitted" | "turn-ended", detail?: string) => void;
     explicitCwd: string;
     restart: (options?: { publicUrl?: boolean | string }) => Promise<void>;
     session: (title: string) => { id: number; cwd: string; role: string; supervisorApi: number; workerId: number } | null;

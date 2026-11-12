@@ -43,6 +43,7 @@ import { AGENT_TERMINAL_DRAG_TYPE, agentTerminalForSession, SESSION_DRAG_TYPE } 
 import {
   COLLAPSED_BUCKETS_KEY,
   COLLAPSED_SUPERVISORS_KEY,
+  SIDEBAR_LAST_SESSIONS_KEY,
   SIDEBAR_SCOPE_KEY,
   SUPERVISOR_FILTERS_KEY,
   readString,
@@ -61,7 +62,7 @@ import {
   bucketOfSession,
   bucketTallies,
   effectiveScope,
-  isStaleRow,
+  olderRows,
   parseScope,
   scopeKey,
   scopeSidebar,
@@ -273,6 +274,10 @@ export interface SupervisorTree {
   loose: Session[];
   /** Groups and loose sessions in one order, which is what the bucket renders. */
   entries: SupervisorEntry[];
+}
+
+function rowMembers(entry: SupervisorEntry): Session[] {
+  return entry.kind === "session" ? [entry.session] : [entry.group.supervisor, ...entry.group.workers];
 }
 
 /**
@@ -728,7 +733,7 @@ export function Sidebar({
   const [storedScope, setStoredScope] = useState<SidebarScope>(() => parseScope(readString(SIDEBAR_SCOPE_KEY)));
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [showResults, setShowResults] = useState(false);
-  const [staleOpen, setStaleOpen] = useState(false);
+  const [olderOpen, setOlderOpen] = useState(false);
   const historyRequestVersion = useRef(0);
   const searchRequestVersion = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -751,13 +756,27 @@ export function Sidebar({
   const pickScope = useCallback((next: SidebarScope) => {
     writeString(SIDEBAR_SCOPE_KEY, scopeKey(next));
     setStoredScope(next);
-    setStaleOpen(false);
+    setOlderOpen(false);
   }, []);
 
   const closeSwitcher = useCallback((open: boolean) => {
     setSwitcherOpen(open);
     if (!open) setSearch("");
   }, []);
+
+  const lastSessions = useRef<Map<string, string> | null>(null);
+  const rememberedSessions = () => {
+    lastSessions.current ??= readStringMap(SIDEBAR_LAST_SESSIONS_KEY);
+    return lastSessions.current;
+  };
+  useEffect(() => {
+    if (!selectedId) return;
+    const bucketId = bucketOfSession(state, selectedId);
+    const remembered = rememberedSessions();
+    if (!bucketId || remembered.get(bucketId) === selectedId) return;
+    remembered.set(bucketId, selectedId);
+    writeStringMap(SIDEBAR_LAST_SESSIONS_KEY, remembered);
+  }, [selectedId, state]);
 
   const lastFollowed = useRef(selectedId);
   useEffect(() => {
@@ -882,6 +901,8 @@ export function Sidebar({
       name: bucket.name,
       live: tally?.live ?? 0,
       needsInput: tally?.needsInput ?? 0,
+      needsInputUnseen: tally?.needsInputUnseen ?? 0,
+      finishedUnseen: tally?.finishedUnseen ?? 0,
       icon: bucket.icon,
     };
   });
@@ -902,6 +923,18 @@ export function Sidebar({
   // An empty host row is worse than a long one, so a fleet that is entirely
   // offline opens the group until the user says otherwise.
   const showOfflineHosts = offlineHostsOpen ?? onlineHosts.length === 0;
+
+  const sessionToReopen = (bucketId: string): string | null => {
+    const remembered = rememberedSessions().get(bucketId);
+    if (remembered && bucketOfSession(state, remembered) === bucketId) return remembered;
+    const listed = scopeSidebar(fullModel, { kind: "bucket", bucketId }).buckets[0];
+    if (!listed) return null;
+    const entries = supervisorTree(listed, model.order).entries;
+    const older = new Set(olderRows(entries, rowMembers, now, null));
+    const first = entries.find((entry) => !older.has(entry)) ?? entries[0];
+    if (!first) return null;
+    return (first.kind === "session" ? first.session : first.group.supervisor).id.toString();
+  };
 
   const switcherProps: Parameters<typeof BucketSwitcher>[0] = {
     scope,
@@ -1188,8 +1221,12 @@ export function Sidebar({
           buckets={switcherBuckets}
           searchOpen={switcherOpen}
           onPickScope={(next) => {
+            const switched = next.kind === "bucket" && scopeKey(next) !== scopeKey(scope);
             pickScope(next);
             closeSwitcher(false);
+            if (!switched) return;
+            const reopen = sessionToReopen(next.bucketId);
+            if (reopen && reopen !== selectedId) onSelect(reopen);
           }}
           onOpenSearch={() => {
             if (switcherOpen) {
@@ -1265,11 +1302,7 @@ export function Sidebar({
           const bucketCollapsed = !singleBucket && collapsedBuckets.has(bid);
           const bucketAttention = needsInputAttention([...supervisors, ...sessions]);
           const tree = supervisorTree({ bucket, supervisors, sessions }, model.order);
-          const members = (entry: SupervisorEntry) =>
-            entry.kind === "session" ? [entry.session] : [entry.group.supervisor, ...entry.group.workers];
-          const stale = singleBucket
-            ? tree.entries.filter((entry) => isStaleRow(members(entry), now, selectedId))
-            : [];
+          const stale = singleBucket ? olderRows(tree.entries, rowMembers, now, selectedId) : [];
           const fresh = stale.length > 0 ? tree.entries.filter((entry) => !stale.includes(entry)) : tree.entries;
           const renderEntry = (entry: SupervisorEntry) => {
             if (entry.kind === "session") return renderRow(entry.session);
@@ -1337,14 +1370,14 @@ export function Sidebar({
                   <button
                     type="button"
                     className="sb-stale-toggle"
-                    aria-expanded={staleOpen}
-                    onClick={() => setStaleOpen(!staleOpen)}
+                    aria-expanded={olderOpen}
+                    onClick={() => setOlderOpen(!olderOpen)}
                   >
-                    <span className="sb-caret" aria-hidden="true">{staleOpen ? "▾" : "▸"}</span>
-                    <span className="sentence">idle over a day</span>
+                    <span className="sb-caret" aria-hidden="true">{olderOpen ? "▾" : "▸"}</span>
+                    <span className="sentence">older</span>
                     <span className="sb-stale-count">{stale.length}</span>
                   </button>
-                  {staleOpen && stale.map(renderEntry)}
+                  {olderOpen && stale.map(renderEntry)}
                 </>
               )}
             </div>

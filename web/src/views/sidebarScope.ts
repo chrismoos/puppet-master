@@ -57,8 +57,15 @@ export function scopeSidebar(model: SidebarModel, scope: SidebarScope): SidebarM
   return { buckets, orphans: model.orphans.filter(needsInput), order: model.order };
 }
 
-/** How long an idle session goes untouched before a bucket folds it away. */
+/** How long an idle session goes untouched before a bucket may fold it under Older. */
 export const STALE_IDLE_MS = 24 * 60 * 60 * 1000;
+/** A bucket keeps at least this many rows showing, topping up with its most recent older ones. */
+export const RECENT_ROW_MINIMUM = 5;
+
+function lastActiveAt(session: Session): number {
+  const last = sessionEnded(session) ? Number(session.endedAtUnixMs) : sessionLastActiveAt(session);
+  return last || Number(session.createdAtUnixMs);
+}
 
 /**
  * True when every session in the row is idle or ended and none has been active
@@ -69,15 +76,33 @@ export function isStaleRow(members: readonly Session[], now: number, selectedId:
   return members.every((session) => {
     if (session.id.toString() === selectedId) return false;
     if (!sessionEnded(session) && session.state !== SessionState.IDLE) return false;
-    const last = sessionEnded(session) ? Number(session.endedAtUnixMs) : sessionLastActiveAt(session);
-    const at = last || Number(session.createdAtUnixMs);
-    return now - at >= STALE_IDLE_MS;
+    return now - lastActiveAt(session) >= STALE_IDLE_MS;
   });
+}
+
+/**
+ * The rows a bucket folds under Older, in their listed order: stale rows,
+ * less the most recent of them needed to keep RECENT_ROW_MINIMUM rows showing.
+ */
+export function olderRows<T>(
+  rows: readonly T[],
+  members: (row: T) => readonly Session[],
+  now: number,
+  selectedId: string | null,
+): T[] {
+  const stale = rows.filter((row) => isStaleRow(members(row), now, selectedId));
+  const topUp = Math.max(0, RECENT_ROW_MINIMUM - (rows.length - stale.length));
+  const rowAt = (row: T) => Math.max(...members(row).map(lastActiveAt));
+  const kept = new Set([...stale].sort((a, b) => rowAt(b) - rowAt(a)).slice(0, topUp));
+  return stale.filter((row) => !kept.has(row));
 }
 
 export interface BucketTally {
   live: number;
   needsInput: number;
+  needsInputUnseen: number;
+  /** Idle sessions whose finished turn has not been viewed. */
+  finishedUnseen: number;
 }
 
 /** Live and needs-input counts per bucket id, over every session that has not ended. */
@@ -91,9 +116,13 @@ export function bucketTallies(state: Pick<AppState, "projects" | "sessions">): M
     if (sessionEnded(session)) continue;
     const bucketId = bucketOfProject.get(session.projectId.toString());
     if (bucketId === undefined) continue;
-    const tally = tallies.get(bucketId) ?? { live: 0, needsInput: 0 };
+    const tally = tallies.get(bucketId) ?? { live: 0, needsInput: 0, needsInputUnseen: 0, finishedUnseen: 0 };
     tally.live += 1;
-    if (session.state === SessionState.NEEDS_INPUT) tally.needsInput += 1;
+    if (session.state === SessionState.NEEDS_INPUT) {
+      tally.needsInput += 1;
+      if (session.needsInputUnseen) tally.needsInputUnseen += 1;
+    }
+    if (session.state === SessionState.IDLE && session.idleUnseen) tally.finishedUnseen += 1;
     tallies.set(bucketId, tally);
   }
   return tallies;

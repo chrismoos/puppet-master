@@ -10,6 +10,7 @@ export const COLLAPSED_SUPERVISORS_KEY = "pm.collapsed.supervisors";
 export const SUPERVISOR_FILTERS_KEY = "pm.supervisorFilters";
 export const SIDEBAR_WIDTH_KEY = "pm.sidebarWidth";
 export const SIDEBAR_SCOPE_KEY = "pm.sidebarScope";
+export const SIDEBAR_LAST_SESSIONS_KEY = "pm.sidebarLastSessions";
 export const REVIEW_RAIL_WIDTH_KEY = "pm.reviewRailWidth";
 export const REVIEW_RAIL_COLLAPSED_KEY = "pm.reviewRailCollapsed";
 const LEGACY_VIEW_TABS_KEY = "pm.viewTabs";

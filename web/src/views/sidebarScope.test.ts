@@ -14,6 +14,8 @@ import {
   bucketTallies,
   effectiveScope,
   isStaleRow,
+  olderRows,
+  RECENT_ROW_MINIMUM,
   parseScope,
   scopeKey,
   scopeSidebar,
@@ -109,6 +111,45 @@ describe("isStaleRow", () => {
   });
 });
 
+describe("olderRows", () => {
+  const HOUR = 60 * 60 * 1000;
+  const idle = (id: bigint, ageMs: number) =>
+    session(id, { state: SessionState.IDLE, lastActivityAtUnixMs: BigInt(NOW - ageMs) });
+  const older = (rows: ReturnType<typeof session>[], selectedId: string | null = null) =>
+    olderRows(rows, (row) => [row], NOW, selectedId).map((row) => row.id);
+
+  it("tops a quiet bucket up to the minimum with its most recent older rows", () => {
+    const rows = [session(1n), idle(2n, 30 * HOUR), idle(3n, 100 * HOUR), idle(4n, 50 * HOUR),
+      idle(5n, 70 * HOUR), idle(6n, 40 * HOUR), idle(7n, 90 * HOUR)];
+    expect(RECENT_ROW_MINIMUM).toBe(5);
+    expect(older(rows)).toEqual([3n, 7n]);
+  });
+
+  it("hides nothing from the last day however many rows that is", () => {
+    const rows = Array.from({ length: 8 }, (_, index) => idle(BigInt(index + 1), (index + 1) * HOUR));
+    rows.push(idle(9n, 30 * HOUR));
+    expect(older(rows)).toEqual([9n]);
+  });
+
+  it("folds nothing while the bucket is at or under the minimum", () => {
+    expect(older([idle(1n, 30 * HOUR), idle(2n, 40 * HOUR), idle(3n, 50 * HOUR)])).toEqual([]);
+  });
+
+  it("never folds the selected row", () => {
+    const rows = Array.from({ length: 6 }, (_, index) => idle(BigInt(index + 1), (index + 2) * 24 * HOUR));
+    expect(older(rows, "6")).toEqual([5n]);
+  });
+
+  it("dates a row by its most recently active member", () => {
+    const groups = [
+      [idle(1n, 30 * HOUR), idle(2n, 200 * HOUR)],
+      ...Array.from({ length: 4 }, (_, index) => [idle(BigInt(index + 10), (index + 2) * HOUR)]),
+      [idle(20n, 150 * HOUR)],
+    ];
+    expect(olderRows(groups, (row) => row, NOW, null).map((row) => row[0].id)).toEqual([20n]);
+  });
+});
+
 describe("bucket tallies", () => {
   const state = {
     projects: new Map([
@@ -116,18 +157,18 @@ describe("bucket tallies", () => {
       ["2", create(ProjectSchema, { id: 2n, bucketId: 2n })],
     ]),
     sessions: new Map([
-      ["1", session(1n, { state: SessionState.NEEDS_INPUT })],
+      ["1", session(1n, { state: SessionState.NEEDS_INPUT, needsInputUnseen: true })],
       ["2", session(2n, { role: SessionRole.SUPERVISOR })],
       ["3", session(3n, { state: SessionState.EXITED })],
-      ["4", session(4n, { projectId: 2n, state: SessionState.IDLE })],
+      ["4", session(4n, { projectId: 2n, state: SessionState.IDLE, idleUnseen: true })],
       ["5", session(5n, { projectId: 99n })],
     ]),
   };
 
-  it("counts live sessions and those needing input, skipping ended and unfiled ones", () => {
+  it("counts live, needs-input and unseen sessions, skipping ended and unfiled ones", () => {
     expect(Object.fromEntries(bucketTallies(state))).toEqual({
-      "1": { live: 2, needsInput: 1 },
-      "2": { live: 1, needsInput: 0 },
+      "1": { live: 2, needsInput: 1, needsInputUnseen: 1, finishedUnseen: 0 },
+      "2": { live: 1, needsInput: 0, needsInputUnseen: 0, finishedUnseen: 1 },
     });
   });
 

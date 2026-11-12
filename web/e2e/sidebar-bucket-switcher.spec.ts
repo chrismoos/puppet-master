@@ -1,4 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "./fixtures";
 import { logIn } from "./support";
 
@@ -13,6 +16,15 @@ function cli(args: string[]): string {
 
 function option(page: Page, name: string | RegExp): Locator {
   return page.locator(".sb-switcher-list").getByRole("option", { name });
+}
+
+async function useRail(page: Page): Promise<void> {
+  await page.evaluate(() => { location.hash = "#/settings/appearance"; });
+  const style = page.getByRole("group", { name: "Sidebar buckets" });
+  await expect(style.getByRole("button", { name: "Dropdown" })).toHaveAttribute("aria-pressed", "true");
+  await style.getByRole("button", { name: "Rail" }).click();
+  await expect(style.getByRole("button", { name: "Rail" })).toHaveAttribute("aria-pressed", "true");
+  await page.evaluate(() => { location.hash = "#/"; });
 }
 
 async function pressSlashOutsideInputs(page: Page): Promise<void> {
@@ -162,12 +174,7 @@ test("the rail style scopes the sidebar from a column of distinct bucket buttons
   await page.addInitScript(() => localStorage.setItem("pm.showEnded", "false"));
   await logIn(page);
 
-  await page.evaluate(() => { location.hash = "#/settings/appearance"; });
-  const style = page.getByRole("group", { name: "Sidebar buckets" });
-  await expect(style.getByRole("button", { name: "Dropdown" })).toHaveAttribute("aria-pressed", "true");
-  await style.getByRole("button", { name: "Rail" }).click();
-  await expect(style.getByRole("button", { name: "Rail" })).toHaveAttribute("aria-pressed", "true");
-  await page.evaluate(() => { location.hash = "#/"; });
+  await useRail(page);
 
   const rail = page.getByRole("navigation", { name: "buckets" });
   await expect(page.locator(".sb-switcher-trigger")).toHaveCount(0);
@@ -221,6 +228,62 @@ test("the rail style scopes the sidebar from a column of distinct bucket buttons
   }).toPass();
   await finder.press("Escape");
   await expect(page.locator(".sb-switcher-menu")).toHaveCount(0);
+});
+
+test("switching buckets on the rail reopens the session last open there", async ({ page, isolatedDaemon }) => {
+  const memory = "rail-memory";
+  const projectDir = mkdtempSync(join(tmpdir(), "pm-rail-memory-"));
+  try {
+    const bucketId = cli(["bucket", "add", memory]).match(/\d+/)?.[0];
+    if (!bucketId) throw new Error("bucket add printed no id");
+    const projectId = cli(["project", "add", "--bucket", bucketId, memory, projectDir]).match(/project (\d+)/)?.[1];
+    if (!projectId) throw new Error("project add printed no id");
+    for (const title of ["memory-one", "memory-two"]) {
+      cli(["spawn", "--project", projectId, "--agent", "codex", "--title", title]);
+    }
+    await page.addInitScript(() => localStorage.setItem("pm.showEnded", "false"));
+    await logIn(page, { minimumSessions: 4 });
+    await useRail(page);
+
+    const rail = page.getByRole("navigation", { name: "buckets" });
+    const bucket = (name: string) => rail.getByRole("button", { name: new RegExp(`^${name}(,|$)`) });
+    const selected = page.locator(".sb-session.is-selected");
+
+    await bucket("browser-e2e").click();
+    await page.locator(".sb-session", { hasText: "browser-e2e-two" }).click();
+    await expect(selected).toContainText("browser-e2e-two");
+
+    await bucket(memory).click();
+    await expect(bucket(memory)).toHaveAttribute("aria-pressed", "true");
+    const firstRow = page.locator(".sb-session").first();
+    await expect(selected).toHaveCount(1);
+    await expect(firstRow).toHaveClass(/is-selected/);
+
+    await bucket("browser-e2e").click();
+    await expect(selected).toContainText("browser-e2e-two");
+
+    await bucket(memory).click();
+    await page.reload();
+    await bucket("browser-e2e").click();
+    await expect(selected).toContainText("browser-e2e-two");
+
+    const away = (await selected.innerText()).includes("memory-one") ? "memory-two" : "memory-one";
+    isolatedDaemon.hookSession(away, "prompt-submitted");
+    isolatedDaemon.hookSession(away, "turn-ended");
+    await bucket("browser-e2e").click();
+    await expect(bucket(memory)).toHaveAccessibleName(`${memory}, 1 finished`);
+    await expect(bucket(memory).locator(".sb-rail-finished")).toBeVisible();
+
+    isolatedDaemon.hookSession(away, "needs-input", "Pick a merge order");
+    await expect(bucket(memory)).toHaveAccessibleName(`${memory}, 1 need input`);
+    await expect(bucket(memory)).toHaveClass(/has-unseen-needs/);
+    await bucket(memory).click();
+    await page.locator(".sb-session", { hasText: away }).click();
+    await expect(bucket(memory)).toHaveClass(/has-needs/);
+    await expect(bucket(memory)).not.toHaveClass(/has-unseen-needs/);
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+  }
 });
 
 test("a bucket's own letters, color and picture replace its rail letters", async ({ page }) => {

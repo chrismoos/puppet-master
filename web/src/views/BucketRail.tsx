@@ -78,31 +78,59 @@ export function BucketRail({
   onPickScope: (scope: SidebarScope) => void;
   onOpenSearch: () => void;
 }) {
-  const needsTotal = buckets.reduce((sum, bucket) => sum + bucket.needsInput, 0);
+  const sum = (count: (bucket: SwitcherBucket) => number) => buckets.reduce((total, bucket) => total + count(bucket), 0);
+  const needsTotal = sum((bucket) => bucket.needsInput);
+  const needsUnseenTotal = sum((bucket) => bucket.needsInputUnseen ?? 0);
   const current = scopeKey(scope);
   const monograms = railMonograms(buckets);
-  const button = (target: SidebarScope, label: string, face: ReactNode, needs: number, icon?: RailIcon) => {
+  const button = (
+    target: SidebarScope,
+    label: string,
+    face: ReactNode,
+    counts: { needs: number; needsUnseen: number; finished: number },
+    icon?: RailIcon,
+  ) => {
     const isCurrent = scopeKey(target) === current;
+    const { needs, needsUnseen, finished } = counts;
+    const status = [
+      needs > 0 ? `${needs} need input` : "",
+      finished > 0 ? `${finished} finished` : "",
+    ].filter(Boolean);
+    const classes = [
+      "sb-rail-btn",
+      isCurrent ? "is-current" : "",
+      needs > 0 ? "has-needs" : "",
+      needsUnseen > 0 ? "has-unseen-needs" : "",
+      icon?.color ? "has-color" : "",
+      icon?.image ? "has-image" : "",
+    ].filter(Boolean).join(" ");
     return (
       <button
         key={scopeKey(target)}
         type="button"
-        className={`sb-rail-btn ${isCurrent ? "is-current" : ""} ${icon?.color ? "has-color" : ""} ${icon?.image ? "has-image" : ""}`}
+        className={classes}
         style={railColorStyle(icon)}
         aria-pressed={isCurrent}
-        aria-label={needs > 0 ? `${label}, ${needs} need input` : label}
+        aria-label={status.length > 0 ? `${label}, ${status.join(", ")}` : label}
         title={label}
         onClick={() => onPickScope(target)}
       >
         {face}
         {needs > 0 && <span className="sb-rail-badge" aria-hidden="true">{needs}</span>}
+        {finished > 0 && <span className="sb-rail-finished" aria-hidden="true" />}
       </button>
     );
   };
+  const none = { needs: 0, needsUnseen: 0, finished: 0 };
   return (
     <nav className="sb-rail" aria-label="buckets">
-      {button(ALL_SCOPE, "All buckets", <span className="sb-rail-glyph" aria-hidden="true">All</span>, 0)}
-      {button({ kind: "needs" }, "Needs you", <span className="sb-rail-glyph" aria-hidden="true">!</span>, needsTotal)}
+      {button(ALL_SCOPE, "All buckets", <span className="sb-rail-glyph" aria-hidden="true">All</span>, none)}
+      {button(
+        { kind: "needs" },
+        "Needs you",
+        <span className="sb-rail-glyph" aria-hidden="true">!</span>,
+        { ...none, needs: needsTotal, needsUnseen: needsUnseenTotal },
+      )}
       <button
         type="button"
         className={`sb-rail-btn ${searchOpen ? "is-current" : ""}`}
@@ -122,7 +150,11 @@ export function BucketRail({
         { kind: "bucket", bucketId: bucket.id },
         bucket.name,
         <RailFace icon={bucket.icon} letters={monograms.get(bucket.id) ?? bucketMonogram(bucket.name)} />,
-        bucket.needsInput,
+        {
+          needs: bucket.needsInput,
+          needsUnseen: bucket.needsInputUnseen ?? 0,
+          finished: bucket.finishedUnseen ?? 0,
+        },
         bucket.icon,
       ))}
     </nav>
