@@ -300,37 +300,6 @@ export function uncoveredPlatforms(inspected, platforms) {
   return platforms.filter((platform) => !available.has(platform));
 }
 
-// The worker image's own base, so the probe pulls nothing the release
-// build would not.
-export const PLATFORM_PROBE_DOCKERFILE = "FROM ubuntu:25.10\nRUN true\n";
-
-// BuildKit leaves a platform out of its list when emulation is provided
-// by Rosetta rather than QEMU, so an unlisted platform is tried with a
-// one-step build before the release is refused.
-export function platformProbeArgs(builder, platform) {
-  return [
-    "buildx",
-    "build",
-    "--builder",
-    builder,
-    "--platform",
-    platform,
-    "--progress",
-    "quiet",
-    "--output=type=cacheonly",
-    "-",
-  ];
-}
-
-function builderRunsPlatform(platform) {
-  const result = spawnSync("docker", platformProbeArgs(IMAGE_BUILDER, platform), {
-    cwd: ROOT,
-    input: PLATFORM_PROBE_DOCKERFILE,
-    encoding: "utf8",
-  });
-  return result.status === 0;
-}
-
 function ensureImageBuilder() {
   if (tryCapture("docker", ["buildx", "inspect", IMAGE_BUILDER]) === null) {
     process.stderr.write(`publish: creating the ${IMAGE_BUILDER} buildx builder\n`);
@@ -340,14 +309,13 @@ function ensureImageBuilder() {
   }
   const inspected = tryCapture("docker", ["buildx", "inspect", IMAGE_BUILDER, "--bootstrap"]);
   if (inspected === null) die(`the ${IMAGE_BUILDER} buildx builder cannot be started`);
-  const missing = uncoveredPlatforms(inspected, IMAGE_PLATFORMS).filter(
-    (platform) => !builderRunsPlatform(platform),
-  );
+  const missing = uncoveredPlatforms(inspected, IMAGE_PLATFORMS);
   if (missing.length > 0) {
     die(
       `the ${IMAGE_BUILDER} builder cannot build ${missing.join(" or ")}. Install QEMU ` +
         "emulation for the foreign architecture with: docker run --privileged --rm " +
-        "tonistiigi/binfmt --install all",
+        "tonistiigi/binfmt --install all (Rosetta alone is not enough, because BuildKit " +
+        "then runs its own emulator and Rosetta refuses the scripts it starts)",
     );
   }
 }

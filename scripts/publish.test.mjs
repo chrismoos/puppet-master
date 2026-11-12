@@ -26,8 +26,6 @@ import {
   servesSameContent,
   stableFromPreRelease,
   uncoveredPlatforms,
-  platformProbeArgs,
-  PLATFORM_PROBE_DOCKERFILE,
   unstagedPlatforms,
   workerContract,
   workerContractChanged,
@@ -439,18 +437,4 @@ test("a builder missing a platform is reported rather than attempted", () => {
   assert.deepEqual(uncoveredPlatforms(both, IMAGE_PLATFORMS), []);
   const native = "Driver: docker\nPlatforms: linux/arm64, linux/arm/v7\n";
   assert.deepEqual(uncoveredPlatforms(native, IMAGE_PLATFORMS), ["linux/amd64"]);
-});
-
-// Rosetta emulation runs amd64 builds without BuildKit listing amd64, so
-// an unlisted platform gets one real build step on that platform alone,
-// read from stdin and kept nowhere.
-test("an unlisted platform is probed with a throwaway build", () => {
-  const probe = platformProbeArgs("pm-release", "linux/amd64");
-  assert.deepEqual(probe.slice(0, 2), ["buildx", "build"]);
-  assert.equal(probe[probe.indexOf("--builder") + 1], "pm-release");
-  assert.equal(probe[probe.indexOf("--platform") + 1], "linux/amd64");
-  assert.ok(probe.includes("--output=type=cacheonly"));
-  assert.ok(!probe.includes("--push"));
-  assert.equal(probe.at(-1), "-");
-  assert.match(PLATFORM_PROBE_DOCKERFILE, /^FROM \S+\nRUN /);
 });
