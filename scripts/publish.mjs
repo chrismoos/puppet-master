@@ -53,6 +53,17 @@ export const IMAGE_PLATFORMS = ["linux/amd64", "linux/arm64"];
 // driver, which can neither build for a foreign architecture nor push a
 // manifest list.
 const IMAGE_BUILDER = "pm-release";
+// Used when the Docker host's kernel runs a platform that BuildKit's own
+// check misses, as Rosetta does. Its BuildKit has no bundled QEMU, so build
+// steps go straight to the kernel's emulator instead of stacking a second one.
+const KERNEL_EMULATION_BUILDER = "pm-release-kernel-emulation";
+const KERNEL_EMULATION_BUILDKIT_IMAGE = "pm-release-buildkit:kernel-emulation";
+export const KERNEL_EMULATION_BUILDKIT_DOCKERFILE =
+  "FROM moby/buildkit:buildx-stable-1\nRUN rm -f /usr/bin/buildkit-qemu-*\n";
+// The worker image's base, so probing a platform pulls nothing the release
+// build would not.
+export const IMAGE_BASE = "ubuntu:25.10";
+export const PLATFORM_MACHINES = { "linux/amd64": "x86_64", "linux/arm64": "aarch64" };
 
 const PROTO_SCHEMA = "proto/pm/v1/pm.proto";
 
@@ -93,6 +104,7 @@ const { command, commandArg, channel, bump, dryRun, skipTests } = parseArgs(args
 // launcher's own version, so a version published without one leaves
 // sandboxed workers on that version with no image to pull.
 const { skipWorkerImages } = parseArgs(args);
+let imageBuilder = IMAGE_BUILDER;
 
 class PublishError extends Error {}
 
@@ -255,12 +267,12 @@ export function unstagedPlatforms(platforms, exists) {
   return platforms.filter((platform) => !exists(imageBinaryPath(platform)));
 }
 
-export function imageBuildArgs({ version, gitRev, push }) {
+export function imageBuildArgs({ version, gitRev, push, builder = IMAGE_BUILDER }) {
   return [
     "buildx",
     "build",
     "--builder",
-    IMAGE_BUILDER,
+    builder,
     "--platform",
     IMAGE_PLATFORMS.join(","),
     "--build-arg",
@@ -300,24 +312,96 @@ export function uncoveredPlatforms(inspected, platforms) {
   return platforms.filter((platform) => !available.has(platform));
 }
 
-function ensureImageBuilder() {
-  if (tryCapture("docker", ["buildx", "inspect", IMAGE_BUILDER]) === null) {
-    process.stderr.write(`publish: creating the ${IMAGE_BUILDER} buildx builder\n`);
-    run("docker", ["buildx", "create", "--name", IMAGE_BUILDER, "--driver", "docker-container", "--bootstrap"], {
+// A platform BuildKit does not list can still be one the Docker host
+// runs, and then the kernel-emulation builder covers it. Returns the
+// builder, or the platforms nothing here can build.
+export function chooseImageBuilder(unlisted, hostRuns) {
+  if (unlisted.length === 0) return { builder: IMAGE_BUILDER, unbuildable: [] };
+  const unbuildable = unlisted.filter((platform) => !hostRuns(platform));
+  if (unbuildable.length > 0) return { builder: null, unbuildable };
+  return { builder: KERNEL_EMULATION_BUILDER, unbuildable: [] };
+}
+
+// Starts a script through `#!/usr/bin/env`, which is where npm failed when
+// BuildKit's QEMU and Rosetta were both in the path. A bare `RUN true`
+// passes there.
+export const PLATFORM_PROBE_DOCKERFILE =
+  `FROM ${IMAGE_BASE}\n` +
+  "RUN printf '#!/usr/bin/env sh\\nexit 0\\n' > /tmp/pm-probe && chmod +x /tmp/pm-probe && /tmp/pm-probe\n";
+
+export function platformProbeArgs(builder, platform) {
+  return [
+    "buildx",
+    "build",
+    "--builder",
+    builder,
+    "--platform",
+    platform,
+    "--progress",
+    "quiet",
+    "--output=type=cacheonly",
+    "-",
+  ];
+}
+
+function hostRuns(platform) {
+  return tryCapture("docker", ["run", "--rm", "--platform", platform, IMAGE_BASE, "uname", "-m"]) ===
+    PLATFORM_MACHINES[platform];
+}
+
+function startBuilder(name, createArgs) {
+  if (tryCapture("docker", ["buildx", "inspect", name]) === null) {
+    process.stderr.write(`publish: creating the ${name} buildx builder\n`);
+    run("docker", ["buildx", "create", "--name", name, "--driver", "docker-container", ...createArgs, "--bootstrap"], {
       capture: true,
     });
   }
-  const inspected = tryCapture("docker", ["buildx", "inspect", IMAGE_BUILDER, "--bootstrap"]);
-  if (inspected === null) die(`the ${IMAGE_BUILDER} buildx builder cannot be started`);
-  const missing = uncoveredPlatforms(inspected, IMAGE_PLATFORMS);
-  if (missing.length > 0) {
+  const inspected = tryCapture("docker", ["buildx", "inspect", name, "--bootstrap"]);
+  if (inspected === null) die(`the ${name} buildx builder cannot be started`);
+  return inspected;
+}
+
+function startKernelEmulationBuilder() {
+  run("docker", ["buildx", "build", "--load", "--tag", KERNEL_EMULATION_BUILDKIT_IMAGE, "-"], {
+    capture: true,
+    input: KERNEL_EMULATION_BUILDKIT_DOCKERFILE,
+  });
+  startBuilder(KERNEL_EMULATION_BUILDER, ["--driver-opt", `image=${KERNEL_EMULATION_BUILDKIT_IMAGE}`]);
+}
+
+function probeImageBuilder(builder) {
+  for (const platform of IMAGE_PLATFORMS) {
+    const result = spawnSync("docker", platformProbeArgs(builder, platform), {
+      cwd: ROOT,
+      input: PLATFORM_PROBE_DOCKERFILE,
+      encoding: "utf8",
+    });
+    if (result.status !== 0) {
+      die(`the ${builder} builder cannot run a script on ${platform}:\n${result.stderr?.trim() ?? ""}`);
+    }
+  }
+}
+
+function ensureImageBuilder() {
+  const inspected = startBuilder(IMAGE_BUILDER, []);
+  const unlisted = uncoveredPlatforms(inspected, IMAGE_PLATFORMS);
+  const { builder, unbuildable } = chooseImageBuilder(unlisted, hostRuns);
+  if (builder === null) {
     die(
-      `the ${IMAGE_BUILDER} builder cannot build ${missing.join(" or ")}. Install QEMU ` +
+      `neither BuildKit nor the Docker host can run ${unbuildable.join(" or ")}. Install QEMU ` +
         "emulation for the foreign architecture with: docker run --privileged --rm " +
-        "tonistiigi/binfmt --install all (Rosetta alone is not enough, because BuildKit " +
-        "then runs its own emulator and Rosetta refuses the scripts it starts)",
+        "tonistiigi/binfmt --install all",
     );
   }
+  if (builder === KERNEL_EMULATION_BUILDER) {
+    process.stderr.write(
+      `publish: BuildKit does not list ${unlisted.join(" or ")} but the Docker host runs it, ` +
+        `using ${KERNEL_EMULATION_BUILDER}\n`,
+    );
+    startKernelEmulationBuilder();
+  }
+  probeImageBuilder(builder);
+  return builder;
 }
 
 // docker has no command for "am I logged in", so the credential is
@@ -361,7 +445,7 @@ function requireRegistryLogin() {
 // image should not find that out an hour in.
 function requireRegistry() {
   if (skipWorkerImages) return;
-  ensureImageBuilder();
+  imageBuilder = ensureImageBuilder();
   if (dryRun) return;
   requireRegistryLogin();
 }
@@ -869,7 +953,7 @@ function buildAndPublish({ version, channelName, promotedFrom }) {
       die(`the image publishes ${unstaged.join(" and ")}, which no release target built`);
     }
     process.stderr.write(`publish: building the worker image for ${IMAGE_PLATFORMS.join(" and ")}\n`);
-    run("docker", imageBuildArgs({ version, gitRev, push: !dryRun }));
+    run("docker", imageBuildArgs({ version, gitRev, push: !dryRun, builder: imageBuilder }));
     requireImagePublished(version);
   }
 

@@ -26,6 +26,12 @@ import {
   servesSameContent,
   stableFromPreRelease,
   uncoveredPlatforms,
+  chooseImageBuilder,
+  platformProbeArgs,
+  IMAGE_BASE,
+  KERNEL_EMULATION_BUILDKIT_DOCKERFILE,
+  PLATFORM_MACHINES,
+  PLATFORM_PROBE_DOCKERFILE,
   unstagedPlatforms,
   workerContract,
   workerContractChanged,
@@ -437,4 +443,61 @@ test("a builder missing a platform is reported rather than attempted", () => {
   assert.deepEqual(uncoveredPlatforms(both, IMAGE_PLATFORMS), []);
   const native = "Driver: docker\nPlatforms: linux/arm64, linux/arm/v7\n";
   assert.deepEqual(uncoveredPlatforms(native, IMAGE_PLATFORMS), ["linux/amd64"]);
+});
+
+test("a builder that lists every platform is used as it is", () => {
+  const runsNothing = () => false;
+  assert.deepEqual(chooseImageBuilder([], runsNothing), { builder: "pm-release", unbuildable: [] });
+});
+
+// Rosetta runs amd64 for the Docker host while BuildKit's own check, run in
+// an empty chroot, says it cannot.
+test("an unlisted platform the Docker host runs selects the kernel-emulation builder", () => {
+  const runsAmd64 = (platform) => platform === "linux/amd64";
+  assert.deepEqual(chooseImageBuilder(["linux/amd64"], runsAmd64), {
+    builder: "pm-release-kernel-emulation",
+    unbuildable: [],
+  });
+});
+
+test("an unlisted platform the Docker host cannot run is refused", () => {
+  const runsAmd64 = (platform) => platform === "linux/amd64";
+  assert.deepEqual(chooseImageBuilder(["linux/amd64", "linux/riscv64"], runsAmd64), {
+    builder: null,
+    unbuildable: ["linux/riscv64"],
+  });
+});
+
+test("the kernel-emulation BuildKit has no bundled QEMU", () => {
+  assert.match(KERNEL_EMULATION_BUILDKIT_DOCKERFILE, /^FROM moby\/buildkit:/);
+  assert.match(KERNEL_EMULATION_BUILDKIT_DOCKERFILE, /rm -f \/usr\/bin\/buildkit-qemu-\*/);
+});
+
+test("every image platform has a machine name to check the Docker host against", () => {
+  for (const platform of IMAGE_PLATFORMS) assert.ok(PLATFORM_MACHINES[platform], platform);
+});
+
+test("probing a platform uses the worker image's own base", () => {
+  const dockerfile = readFileSync(new URL("../docker/sandbox-worker/Dockerfile", import.meta.url), "utf8");
+  const bases = [...dockerfile.matchAll(/^FROM (\S+)/gm)].map((match) => match[1]);
+  assert.equal(bases.at(-1), IMAGE_BASE);
+  assert.ok(PLATFORM_PROBE_DOCKERFILE.startsWith(`FROM ${IMAGE_BASE}\n`));
+});
+
+// npm failed only once a script started through `env`, so that is what
+// the probe has to run.
+test("the platform probe runs a script through env and keeps nothing", () => {
+  assert.match(PLATFORM_PROBE_DOCKERFILE, /#!\/usr\/bin\/env sh/);
+  const probe = platformProbeArgs("pm-release", "linux/amd64");
+  assert.equal(probe[probe.indexOf("--builder") + 1], "pm-release");
+  assert.equal(probe[probe.indexOf("--platform") + 1], "linux/amd64");
+  assert.ok(probe.includes("--output=type=cacheonly"));
+  assert.ok(!probe.includes("--push"));
+  assert.equal(probe.at(-1), "-");
+});
+
+test("the worker image builds with the builder publish chose", () => {
+  const args = imageBuildArgs({ version: "1.2.3", gitRev: "abc1234", push: true, builder: "pm-release-kernel-emulation" });
+  assert.equal(args[args.indexOf("--builder") + 1], "pm-release-kernel-emulation");
+  assert.equal(imageBuildArgs({ version: "1.2.3", gitRev: "abc1234", push: true })[3], "pm-release");
 });
