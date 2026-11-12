@@ -7,11 +7,12 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
+use base64::Engine;
 use pm_daemon::daemon::AgentReport;
 use pm_daemon::storage::ITEM_BODY_MAX;
 use pm_protocol::domain::{
-    AgentKind, ContextField, ContextKind, ContextSeverity, ControllerMsg, HookKind, ItemWrite,
-    PermissionMode, SessionContext, SessionRole, SessionState, WorkerMsg,
+    AgentKind, BucketIcon, ContextField, ContextKind, ContextSeverity, ControllerMsg, HookKind,
+    ItemWrite, PermissionMode, SessionContext, SessionRole, SessionState, WorkerMsg,
     ITEM_STATUS_CREATE_GUIDANCE, LOCAL_WORKER_ID,
 };
 use serde_json::{json, Value};
@@ -1707,6 +1708,8 @@ async fn supervisor_tools_are_gated_by_the_spawn_toggle() {
         "list_instructions",
         "get_effective_instructions",
         "set_instructions",
+        "get_bucket_icon",
+        "set_bucket_icon",
     ] {
         assert!(names.iter().any(|n| n == tool), "missing {tool}: {names:?}");
     }
@@ -4633,4 +4636,139 @@ async fn a_report_repeating_a_stale_headline_or_goal_is_asked_to_update_it() {
         .set_report_freshness_thresholds(NEVER_STALE_MS, STALE_AT_ONCE_MS);
     let regoaled = report(json!({"goal": "Moving storage", "headline": "testing"})).await;
     assert_eq!(call_text(&regoaled), "recorded");
+}
+
+#[tokio::test]
+async fn supervisors_set_their_bucket_icon_from_text_color_or_an_image_file() {
+    let env = daemon_env();
+    let bucket_id = env.daemon.get_project(env.project_id).unwrap().bucket_id;
+    let icon = || {
+        env.daemon
+            .subscribe()
+            .0
+            .buckets
+            .into_iter()
+            .find(|bucket| bucket.id == bucket_id)
+            .unwrap()
+            .icon
+    };
+    let app = pm_daemon::http::router(Arc::clone(&env.daemon));
+    let plain = spawn_test_session(&env, "p");
+    let plain_token = env.daemon.session_token(plain).unwrap().unwrap();
+    let refused = call(&app, &plain_token, "set_bucket_icon", json!({"text": "X"})).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert_eq!(icon(), BucketIcon::default());
+
+    let sup = spawn_supervisor(&env);
+    let token = env.daemon.session_token(sup).unwrap().unwrap();
+    let set = call(
+        &app,
+        &token,
+        "set_bucket_icon",
+        json!({"text": " 🤖 ", "color": "#3DD68C"}),
+    )
+    .await;
+    assert_eq!(set["isError"], false, "{set}");
+    assert_eq!(
+        serde_json::from_str::<Value>(call_text(&set)).unwrap(),
+        json!({"text": "🤖", "color": "#3dd68c", "image": null})
+    );
+    assert_eq!(icon().text.as_deref(), Some("🤖"));
+
+    let png = b"\x89PNG\r\n\x1a\nnot-really-pixels".to_vec();
+    std::fs::write(env.project_root().join("icon.png"), &png).unwrap();
+    let pictured = call(
+        &app,
+        &token,
+        "set_bucket_icon",
+        json!({"image_path": "icon.png"}),
+    )
+    .await;
+    assert_eq!(pictured["isError"], false, "{pictured}");
+    let stored = icon();
+    assert_eq!(stored.text, None, "each call replaces the whole icon");
+    assert_eq!(
+        stored.image.as_deref(),
+        Some(
+            format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&png)
+            )
+            .as_str()
+        )
+    );
+
+    assert_eq!(
+        serde_json::from_str::<Value>(call_text(&pictured)).unwrap(),
+        json!({"text": null, "color": null, "image": {"type": "image/png", "bytes": png.len()}}),
+        "the result describes the image without repeating it"
+    );
+    let summary = call(&app, &token, "get_bucket_icon", json!({})).await;
+    assert_eq!(summary["content"].as_array().unwrap().len(), 1, "{summary}");
+    assert_eq!(call_text(&summary), call_text(&pictured));
+    let seen = call(
+        &app,
+        &token,
+        "get_bucket_icon",
+        json!({"include_image": true}),
+    )
+    .await;
+    assert_eq!(
+        seen["content"][1],
+        json!({
+            "type": "image",
+            "mimeType": "image/png",
+            "data": base64::engine::general_purpose::STANDARD.encode(&png),
+        })
+    );
+    assert_eq!(
+        call(&app, &plain_token, "get_bucket_icon", json!({})).await["isError"],
+        true
+    );
+
+    for (args, message) in [
+        (json!({"color": "green"}), "#rrggbb"),
+        (json!({"image_path": "../outside.png"}), "traversal"),
+        (json!({"image_path": "missing.png"}), "image_path"),
+        (json!({"text": 7}), "text must be a string"),
+    ] {
+        let rejected = call(&app, &token, "set_bucket_icon", args.clone()).await;
+        assert_eq!(rejected["isError"], true, "{args}");
+        assert!(
+            call_text(&rejected).contains(message),
+            "{args}: {}",
+            call_text(&rejected)
+        );
+        assert_eq!(icon(), stored, "a refused call leaves the icon alone");
+    }
+    std::fs::write(env.project_root().join("icon.gif"), b"GIF89a").unwrap();
+    let gif = call(
+        &app,
+        &token,
+        "set_bucket_icon",
+        json!({"image_path": "icon.gif"}),
+    )
+    .await;
+    assert!(
+        call_text(&gif).contains("PNG, WebP or JPEG"),
+        "{}",
+        call_text(&gif)
+    );
+    std::fs::write(
+        env.project_root().join("huge.png"),
+        [&b"\x89PNG\r\n\x1a\n"[..], &vec![0; 64 * 1024]].concat(),
+    )
+    .unwrap();
+    let huge = call(
+        &app,
+        &token,
+        "set_bucket_icon",
+        json!({"image_path": "huge.png"}),
+    )
+    .await;
+    assert_eq!(huge["isError"], true);
+
+    let cleared = call(&app, &token, "set_bucket_icon", json!({})).await;
+    assert_eq!(cleared["isError"], false, "{cleared}");
+    assert_eq!(icon(), BucketIcon::default());
 }

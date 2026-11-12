@@ -414,6 +414,18 @@ impl Config {
     }
 }
 
+fn byte_limit(bytes: usize) -> String {
+    const KIB: usize = 1024;
+    const MIB: usize = KIB * KIB;
+    if bytes % MIB == 0 {
+        format!("{} MiB", bytes / MIB)
+    } else if bytes % KIB == 0 {
+        format!("{} KiB", bytes / KIB)
+    } else {
+        format!("{bytes}-byte")
+    }
+}
+
 impl Daemon {
     pub(super) fn connection_lock(&self, id: u64) -> Arc<tokio::sync::Mutex<()>> {
         self.connection_locks
@@ -431,6 +443,22 @@ impl Daemon {
         path: &str,
         argument: &str,
     ) -> Result<Value> {
+        let content = self
+            .session_file_bytes(session, path, argument, MAX_DOCUMENT_BYTES)
+            .await?;
+        serde_json::from_slice(&content)
+            .with_context(|| format!("{argument} does not hold a JSON document"))
+    }
+
+    /// Reads a file inside the session's working directory on whichever
+    /// worker runs it, refusing traversal, symlinks and files over `max_bytes`.
+    pub(crate) async fn session_file_bytes(
+        &self,
+        session: &Session,
+        path: &str,
+        argument: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>> {
         let content = if session.worker_id == pm_protocol::domain::LOCAL_WORKER_ID {
             crate::attachments::scoped_local_file(&session.cwd, path)
                 .map_err(|error| anyhow::anyhow!("{argument}: {error}"))?
@@ -441,7 +469,7 @@ impl Daemon {
                     session.worker_id,
                     session.cwd.clone(),
                     path.to_owned(),
-                    MAX_DOCUMENT_BYTES as u64,
+                    max_bytes as u64,
                 )
                 .await
                 .map_err(|error| anyhow::anyhow!("{argument}: {error}"))?;
@@ -450,11 +478,13 @@ impl Daemon {
             }
             read.content
         };
-        if content.len() > MAX_DOCUMENT_BYTES {
-            bail!("{argument} names a file over the 4 MiB limit");
+        if content.len() > max_bytes {
+            bail!(
+                "{argument} names a file over the {} limit",
+                byte_limit(max_bytes)
+            );
         }
-        serde_json::from_slice(&content)
-            .with_context(|| format!("{argument} does not hold a JSON document"))
+        Ok(content)
     }
 
     pub(crate) fn connection_session(&self, token: &str) -> Result<Session> {

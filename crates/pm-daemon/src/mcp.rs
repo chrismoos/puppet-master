@@ -744,8 +744,96 @@ fn supervisor_tool_definitions(spawnable_agents: &[&str]) -> Value {
             "name": "set_instructions",
             "description": "Create or replace one persistent instruction overlay inside your bucket. Use only when the user explicitly requests a durable rule. scope is bucket or project; project scope requires a project in this bucket. target may be all, worker, or supervisor. expected_revision is 0 to create or the current revision to update; conflicts never overwrite. Changes affect new spawns and resumes, not running turns.",
             "inputSchema": { "type":"object", "properties": { "scope":{"type":"string","enum":["bucket","project"]}, "project":{"description":"Required for project scope: name or id in this bucket"}, "role":{"type":"string","enum":["all","worker","supervisor"]}, "markdown":{"type":"string","maxLength":crate::storage::INSTRUCTION_MARKDOWN_MAX}, "expected_revision":{"type":"integer","minimum":0}, "note":{"type":"string"} }, "required":["scope","role","markdown","expected_revision"] }
+        },
+        {
+            "name": "get_bucket_icon",
+            "description": "Read how your bucket's button looks in the web sidebar rail: its text, color, and the type and size of any image. The image itself is attached as an image block only when include_image is true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_image": { "type": "boolean", "default": false, "description": "Attach the icon image so you can see it" }
+                }
+            }
+        },
+        {
+            "name": "set_bucket_icon",
+            "description": "Set how your bucket's button looks in the web sidebar rail. Use only when the user asks for it. Each call replaces the whole icon, and omitting every field restores the default letters. The rail shows image_path when set, otherwise text on color.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "A few letters or one emoji, at most 32 bytes" },
+                    "color": { "type": "string", "description": "Button color as #rrggbb" },
+                    "image_path": { "type": "string", "description": "A PNG, JPEG or WebP file inside your working directory, read once. Scale it to a small square first: the file may be at most about 48 KiB." }
+                }
+            }
         }
     ])
+}
+
+async fn set_bucket_icon_tool(
+    daemon: &Daemon,
+    supervisor_id: u64,
+    bucket_id: u64,
+    args: &Value,
+) -> anyhow::Result<String> {
+    let string = |key: &str| -> anyhow::Result<Option<String>> {
+        match args.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(_) => anyhow::bail!("{key} must be a string"),
+        }
+    };
+    let image = match string("image_path")? {
+        Some(path) => {
+            let session = daemon.storage.get_session(supervisor_id)?;
+            let bytes = daemon
+                .session_file_bytes(
+                    &session,
+                    &path,
+                    "image_path",
+                    crate::bucket_icon::ICON_IMAGE_FILE_MAX_BYTES,
+                )
+                .await?;
+            Some(crate::bucket_icon::image_data_url(&bytes)?)
+        }
+        None => None,
+    };
+    let icon = pm_protocol::domain::BucketIcon {
+        text: string("text")?,
+        color: string("color")?,
+        image,
+    };
+    daemon.set_bucket_icon(bucket_id, icon)?;
+    Ok(bucket_icon_summary(&daemon.storage.get_bucket(bucket_id)?.icon).to_string())
+}
+
+/// Describes an icon without its image bytes, so reading it costs a few tokens.
+fn bucket_icon_summary(icon: &pm_protocol::domain::BucketIcon) -> Value {
+    let image = icon
+        .image
+        .as_deref()
+        .and_then(crate::bucket_icon::split_image_data_url)
+        .map(|(mime, bytes)| json!({ "type": mime, "bytes": bytes.len() }));
+    json!({ "text": icon.text, "color": icon.color, "image": image })
+}
+
+fn bucket_icon_result(icon: &pm_protocol::domain::BucketIcon, include_image: bool) -> Value {
+    let mut content =
+        vec![json!({ "type": "text", "text": bucket_icon_summary(icon).to_string() })];
+    if include_image {
+        if let Some((mime, bytes)) = icon
+            .image
+            .as_deref()
+            .and_then(crate::bucket_icon::split_image_data_url)
+        {
+            content.push(json!({
+                "type": "image",
+                "mimeType": mime,
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+            }));
+        }
+    }
+    json!({ "content": content, "isError": false })
 }
 
 /// Reads the `git` object of a report into a partial update. Absent
@@ -1938,7 +2026,9 @@ async fn call_tool(
         | "list_sessions"
         | "list_instructions"
         | "get_effective_instructions"
-        | "set_instructions" => {
+        | "set_instructions"
+        | "get_bucket_icon"
+        | "set_bucket_icon" => {
             let (supervisor_id, bucket_id) = match daemon.supervisor_session(token) {
                 Ok(scope) => scope,
                 Err(e) => return Ok(tool_text(true, e.to_string())),
@@ -2052,6 +2142,19 @@ async fn call_tool(
                             false,
                             format!("instruction layer {} is now revision {}", l.id, l.revision),
                         ),
+                        Err(e) => tool_text(true, e.to_string()),
+                    }
+                }
+                "get_bucket_icon" => match daemon.storage.get_bucket(bucket_id) {
+                    Ok(bucket) => bucket_icon_result(
+                        &bucket.icon,
+                        args["include_image"].as_bool().unwrap_or(false),
+                    ),
+                    Err(e) => tool_text(true, e.to_string()),
+                },
+                "set_bucket_icon" => {
+                    match set_bucket_icon_tool(daemon, supervisor_id, bucket_id, args).await {
+                        Ok(text) => tool_text(false, text),
                         Err(e) => tool_text(true, e.to_string()),
                     }
                 }

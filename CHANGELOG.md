@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Daemon] Supervisors can set their bucket's rail icon when you ask, with letters or an emoji, a color, or a picture file from their working directory, and can read it back. Only a short description comes back unless the agent asks to see the picture.
+
 - [Web] Terminals run on libghostty-vt 1.0.1, which uses less memory after a terminal is restored from its worker. Workers on the previous version keep working and need no update.
 
 - [Web] A terminal whose program left synchronized output on now leaves it after the timeout, instead of redrawing only every half second and then crashing when the program next sent a progress report.
