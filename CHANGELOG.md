@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] A terminal whose program left synchronized output on now leaves it after the timeout, instead of redrawing only every half second and then crashing when the program next sent a progress report.
+
 - [Web] The sidebar can list one bucket at a time. A switcher at its top picks a bucket, every bucket, or only the sessions that need you, and shows how many sessions in other buckets need you. Settings → Appearance can show the buckets as a rail of buttons beside the sessions instead, saved to your account. Rail buttons show letters that differ for every bucket, and a bucket's settings can replace them with your own letters or emoji, a color, or an uploaded picture. In a single bucket, sessions idle for over a day fold into an Older row, while at least five recent sessions stay listed.
 
 - [Web] On the rail, switching to a bucket reopens the session you last had open there, or its first session. A bucket's button shows an amber ring when a session needs you, pulsing until you have seen it, and a green dot for a finished turn you have not viewed. The selected bucket is marked with a bar beside its button instead of amber.

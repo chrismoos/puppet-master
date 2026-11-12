@@ -252,6 +252,16 @@ describe("Ghostty terminal core", () => {
     expect(output).toEqual(["\u001b[0n"]);
   });
 
+  it("ends synchronized output and keeps parsing progress reports afterward", async () => {
+    const core = await createCore();
+    core.write("\u001b[?2026h");
+    expect(core.isSynchronizedOutput()).toBe(true);
+    core.endSynchronizedOutput();
+    expect(core.isSynchronizedOutput()).toBe(false);
+    core.write("\u001b]9;4;1;50\u0007after");
+    expect(core.snapshot().rowData[0]?.text).toContain("after");
+  });
+
   it("uses the bracketed paste mode when encoding pasted text", async () => {
     const core = await createCore();
     core.write("\u001b[?2004h");

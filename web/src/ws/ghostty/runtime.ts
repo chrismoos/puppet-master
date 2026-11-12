@@ -15,6 +15,7 @@ interface TypeLayout {
   readonly size: number;
   readonly align: number;
   readonly fields: Readonly<Record<string, TypeField>>;
+  readonly values?: Readonly<Record<string, number>>;
 }
 
 type TypeLayouts = Readonly<Record<string, TypeLayout>>;

@@ -7,7 +7,7 @@ export const GHOSTTY_TERMINAL_OPTION = {
   defaultCursorBlink: 23,
   scrollbackMaxBytes: 27,
   scrollbackMaxLines: 28,
-  mode: 30,
+  mode: 34,
 } as const;
 
 export const GHOSTTY_TERMINAL_DATA = {
