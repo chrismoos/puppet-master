@@ -333,6 +333,11 @@ test("a bucket's own letters, color and picture replace its rail letters", async
   await expect(picture).toHaveAttribute("src", /^data:image\/(webp|png);base64,/);
   const natural = await picture.evaluate((image: HTMLImageElement) => [image.naturalWidth, image.naturalHeight]);
   expect(natural).toEqual([68, 68]);
+  const frame = await button.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return [style.backgroundColor, style.borderTopColor];
+  });
+  expect(frame).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
 
   await page.reload();
   await expect(button.locator("img.sb-rail-image")).toBeVisible();

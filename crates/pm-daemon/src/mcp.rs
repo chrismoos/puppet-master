@@ -763,7 +763,7 @@ fn supervisor_tool_definitions(spawnable_agents: &[&str]) -> Value {
                 "properties": {
                     "text": { "type": "string", "description": "A few letters or one emoji, at most 32 bytes" },
                     "color": { "type": "string", "description": "Button color as #rrggbb" },
-                    "image_path": { "type": "string", "description": "A PNG, JPEG or WebP file inside your working directory, read once. Scale it to a small square first: the file may be at most about 48 KiB." }
+                    "image_path": { "type": "string", "description": "A PNG, JPEG or WebP file inside your working directory, read once. Scale it to a small square first: the file may be at most about 48 KiB. The rail rounds the corners itself, so a full-bleed square with opaque corners looks best." }
                 }
             }
         }

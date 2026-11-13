@@ -2420,9 +2420,22 @@ body.resizing-col {
   border-color: var(--amber);
 }
 
-.sb-rail-btn.has-image {
+.sb-rail-btn.has-image,
+.sb-rail-btn.has-image.is-current {
   padding: 0;
   overflow: visible;
+  background: transparent;
+  border-color: transparent;
+}
+
+/* A picture's own transparent corners show the rail, so states draw a ring instead of tinting a frame. */
+.sb-rail-btn.has-image:hover,
+.sb-rail-btn.has-image.is-current {
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+.sb-rail-btn.has-image.has-needs {
+  box-shadow: 0 0 0 2px var(--amber);
 }
 
 .sb-rail-image {
