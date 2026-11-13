@@ -36,7 +36,7 @@ export function PrivacyScreen() {
 
 const styles = StyleSheet.create({
   cover: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: "center",
     backgroundColor: colors.bg,
     justifyContent: "center",

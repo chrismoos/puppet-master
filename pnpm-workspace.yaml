@@ -9,7 +9,7 @@ packages:
 nodeLinker: hoisted
 
 overrides:
-  react-native: 0.81.5
+  react-native: 0.85.3
 
 # pnpm refuses to run a dependency's install scripts until it is listed here.
 # Both of these link a platform binary on install.

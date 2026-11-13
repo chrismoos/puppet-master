@@ -1281,7 +1281,7 @@ export function TerminalScreen({
 }
 
 const styles = StyleSheet.create({
-  sizePromptOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "center", paddingHorizontal: 12 },
+  sizePromptOverlay: { ...StyleSheet.absoluteFill, justifyContent: "center", paddingHorizontal: 12 },
   sizePrompt: { padding: 12, borderRadius: 8, backgroundColor: "#202938", borderWidth: 1, borderColor: "#506078" },
   sizePromptText: { color: "#e8eaf0", fontSize: 13 },
   sizePromptActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 8 },
