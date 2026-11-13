@@ -88,4 +88,28 @@ describe("TerminalSizePrompt", () => {
     expect(h.prompt.needsClaim()).toBe(true);
   });
 
+
+  it("reclaims from another viewer on return, as Update does", () => {
+    const h = harness();
+    h.prompt.observe({ cols: 50, rows: 24, local: false });
+    expect(h.prompt.reclaim()).toBe(true);
+    expect(h.resize).toHaveBeenCalledExactlyOnceWith({ cols: 120, rows: 40 });
+    expect(h.changed).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not reclaim a size it owns, a dismissed prompt, or a matching size", () => {
+    const owned = harness();
+    expect(owned.prompt.reclaim()).toBe(false);
+
+    const dismissed = harness();
+    dismissed.prompt.observe({ cols: 50, rows: 24, local: false });
+    dismissed.prompt.dismiss();
+    expect(dismissed.prompt.reclaim()).toBe(false);
+
+    const matching = harness();
+    matching.prompt.observe({ cols: 120, rows: 40, local: false });
+    expect(matching.prompt.reclaim()).toBe(false);
+
+    for (const h of [owned, dismissed, matching]) expect(h.resize).not.toHaveBeenCalled();
+  });
 });

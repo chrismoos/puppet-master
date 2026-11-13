@@ -1,7 +1,7 @@
 import { expect, test } from "./fixtures";
 import { expectTerminalRevealed, logIn } from "./support";
 
-test("a second viewer's size offers Update or Dismiss without reclaiming on focus", async ({ page, context }, testInfo) => {
+test("a second viewer's size is taken back by the first input here, never by focus alone", async ({ page, context }, testInfo) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await logIn(page);
   await page.locator(".sb-session-title").filter({ hasText: /^browser-e2e$/ }).locator("xpath=ancestor::button[contains(@class, 'sb-session')][1]").click();
@@ -14,35 +14,43 @@ test("a second viewer's size offers Update or Dismiss without reclaiming on focu
   await other.goto(page.url());
   await expectTerminalRevealed(other, "s:");
   await expect(firstBanner).toBeVisible();
-  await expect(other.locator(".terminal-size-prompt")).toBeHidden();
+  const otherBanner = other.locator(".terminal-size-prompt");
+  await expect(otherBanner).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath("size-mismatch-banner.png") });
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   // e2e-real-time-wait: focus must send no resize after the viewer assertion debounce expires.
   await page.waitForTimeout(300);
   await expect(firstBanner).toBeVisible();
-  await expect(other.locator(".terminal-size-prompt")).toBeHidden();
+  await expect(otherBanner).toBeHidden();
 
-  await firstBanner.getByRole("button", { name: "Dismiss", exact: true }).click();
+  // Another viewer taking the terminal means the user went to it, so moving
+  // the mouse here again is a return that takes the size back.
+  await page.mouse.move(400, 400);
+  await page.mouse.move(460, 440);
   await expect(firstBanner).toBeHidden();
-  await other.setViewportSize({ width: 750, height: 620 });
-  await expect(other.locator(".terminal-size-prompt")).toBeHidden();
-  // e2e-real-time-wait: dismissal must remain quiet after the other viewer's resize and replay settle.
-  await page.waitForTimeout(400);
-  await expect(firstBanner).toBeHidden();
-
-  const otherBanner = other.locator(".terminal-size-prompt");
-  await page.setViewportSize({ width: 1300, height: 850 });
   await expect(otherBanner).toBeVisible();
-  await otherBanner.getByRole("button", { name: "Update", exact: true }).click();
+
+  // The buttons are clicked without pointer input, which would itself count
+  // as coming back to that window.
+  await otherBanner.getByRole("button", { name: "Dismiss", exact: true }).dispatchEvent("click");
+  await expect(otherBanner).toBeHidden();
+  await page.setViewportSize({ width: 1300, height: 850 });
+  // e2e-real-time-wait: dismissal must remain quiet after the other viewer's resize and replay settle.
+  await other.waitForTimeout(400);
+  await expect(otherBanner).toBeHidden();
+
+  await other.setViewportSize({ width: 750, height: 620 });
+  await expect(firstBanner).toBeVisible();
+  await firstBanner.getByRole("button", { name: "Update", exact: true }).dispatchEvent("click");
+  await expect(firstBanner).toBeHidden();
+  await expect(otherBanner).toBeVisible();
+  await otherBanner.getByRole("button", { name: "Update", exact: true }).dispatchEvent("click");
   await expect(otherBanner).toBeHidden();
   await expect(firstBanner).toBeVisible();
-  await firstBanner.getByRole("button", { name: "Update", exact: true }).click();
-  await expect(firstBanner).toBeHidden();
-  await expect(otherBanner).toBeVisible();
   await other.close();
 });
 
-test("workspace terminals offer the same explicit size choice", async ({ page, context }) => {
+test("workspace terminals take the size back on the same return", async ({ page, context }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await logIn(page);
   await page.locator(".sb-session-title").filter({ hasText: /^browser-e2e$/ }).locator("xpath=ancestor::button[contains(@class, 'sb-session')][1]").click();
@@ -58,7 +66,8 @@ test("workspace terminals offer the same explicit size choice", async ({ page, c
   await other.goto(sessionUrl);
   await expectTerminalRevealed(other, "s:");
   await expect(banner).toBeVisible();
-  await banner.getByRole("button", { name: "Update", exact: true }).click();
+  await page.mouse.move(400, 400);
+  await page.mouse.move(460, 440);
   await expect(banner).toBeHidden();
   await expect(other.locator(".terminal-size-prompt")).toBeVisible();
   await other.close();

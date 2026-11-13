@@ -15,6 +15,7 @@ import { wireViewerSize, type ViewerSizeController } from "@puppet-master/client
 import { documentVisible, watchDocumentVisibility } from "./documentVisibility";
 import { TerminalClipboard } from "./terminalClipboard";
 import { registerForegroundCommandHandler, wireTerminalClipboard } from "./terminalHostWiring";
+import { markUserAway, onUserReturn } from "./userPresence";
 import {
   captureTerminalViewport,
   loadTerminalViewport,
@@ -104,6 +105,7 @@ export class WorkspaceTerminal {
     if (measureFit(this.terminal)) this.sizePrompt.requested(initialSize);
     const sizeEcho = this.handle.onViewerOwnership?.((ownership) => {
       this.sizePrompt.observe(ownership);
+      if (!ownership.local && this.active) markUserAway();
       this.flushHeldInput();
     }) ?? (() => {});
     const ptySize = this.handle.onPtySize((size) => {
@@ -214,6 +216,9 @@ export class WorkspaceTerminal {
     this.observer = new ResizeObserver(() => this.scheduleResize());
     this.observer.observe(host);
     const unregisterTheme = themeController.register(this);
+    const returnDispose = onUserReturn(() => {
+      if (this.active && documentVisible(document)) this.sizePrompt.reclaim();
+    });
     this.disposers = [
       () => data.dispose(),
       () => scroll.dispose(),
@@ -229,6 +234,7 @@ export class WorkspaceTerminal {
       visibility,
       () => viewer.dispose(),
       unregisterTheme,
+      returnDispose,
     ];
     this.scheduleResize();
   }

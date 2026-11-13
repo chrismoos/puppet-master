@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] When you come back to the browser after another screen resized a terminal you can see, the terminal fits this window again on your first click, key, scroll or mouse movement, without the Update prompt. Coming back means the tab was hidden, the window lost focus, a minute passed without input, or another screen took the terminal.
+
 - [Daemon] A Codex session shows needs-input when it asks you a question, not only for an approval.
 
 - [Daemon] A session no longer stays on needs-input after you answer its approval prompt. It returns to working when the agent carries on, and to idle when its turn ends. Codex sessions were most affected.

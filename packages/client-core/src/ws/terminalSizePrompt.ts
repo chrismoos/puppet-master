@@ -4,6 +4,7 @@ type ViewerState = "opening" | "resizing" | "claiming" | "owning" | "following" 
 
 export class TerminalSizePrompt {
   private local: TerminalSize | null = null;
+  private owner: TerminalSize | null = null;
   private state: ViewerState = "opening";
 
   constructor(
@@ -36,6 +37,7 @@ export class TerminalSizePrompt {
   }
 
   observe(ownership: TerminalOwnership): void {
+    this.owner = { cols: ownership.cols, rows: ownership.rows };
     if (this.state === "resizing") return;
     if (ownership.local) {
       this.state = "owning";
@@ -54,6 +56,18 @@ export class TerminalSizePrompt {
     if (!size) return;
     this.requested(size);
     this.resize(size);
+  }
+
+  /**
+   * Takes the size back from another viewer as Update does, unless this
+   * viewer owns it, the user dismissed the prompt, or the sizes already match.
+   */
+  reclaim(): boolean {
+    if (this.state !== "following") return false;
+    const fit = this.measure();
+    if (!fit || (fit.cols === this.owner?.cols && fit.rows === this.owner.rows)) return false;
+    this.update();
+    return true;
   }
 
   dismiss(): void {

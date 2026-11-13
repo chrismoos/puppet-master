@@ -20,6 +20,7 @@ import { registerForegroundCommandHandler, wireTerminalClipboard } from "./termi
 import { wireTransientTerminalScrollbar } from "./terminalScrollbar";
 import { documentVisible, watchDocumentVisibility } from "./documentVisibility";
 import { createTerminalSizePrompt } from "./terminalSizePrompt";
+import { markUserAway, onUserReturn } from "./userPresence";
 import { navigate, settingsRoutePath } from "../router";
 import {
   renderTerminalStatus,
@@ -167,7 +168,11 @@ export class TerminalStage {
     if (!this.focusDispose) {
       const onFocus = () => this.windowFocused();
       window.addEventListener("focus", onFocus);
-      this.focusDispose = () => window.removeEventListener("focus", onFocus);
+      const returnDispose = onUserReturn(() => this.userReturned());
+      this.focusDispose = () => {
+        window.removeEventListener("focus", onFocus);
+        returnDispose();
+      };
     }
     this.clipboard.attach();
     this.scheduleRefitVisible();
@@ -694,6 +699,15 @@ export class TerminalStage {
     layer.viewer?.refocused();
   }
 
+  private userReturned(): void {
+    if (!this.root.isConnected || !this.visibleId) return;
+    if (!documentVisible(document)) return;
+    const layer = this.layers.get(this.visibleId);
+    if (!layer?.handle) return;
+    this.layoutVisibleLayer(layer);
+    layer.sizePrompt.reclaim();
+  }
+
   private pageVisibilityChanged(visible: boolean): void {
     if (!visible) {
       for (const layer of this.layers.values()) {
@@ -765,6 +779,7 @@ export class TerminalStage {
     layer.viewer = viewer;
     const ownershipDispose = handle.onViewerOwnership?.((ownership) => {
       layer.sizePrompt.observe(ownership);
+      if (!ownership.local && this.visibleId === layer.key) markUserAway();
       if (!ownership.local && layer.sizePrompt.blocked() && this.visibleId === layer.key) {
         layer.pendingFit = { cols: ownership.cols, rows: ownership.rows };
         layer.pendingFollow = true;
