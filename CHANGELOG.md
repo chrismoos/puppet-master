@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Daemon] A review you finished stays finished. Notices about review comments wait until the agent's turn ends and are dropped if you finished the review or resolved the comments meanwhile, a notice is never delivered twice, and an agent cannot reopen a finished review without saying so explicitly.
+
 - [Web] A bucket picture with rounded or transparent corners no longer shows a grey wedge and frame at each corner of its rail button. The button behind a picture is see-through, and hover, the current bucket and needs-input draw a ring around it.
 
 - [iOS] The app builds with Expo SDK 57 and React Native 0.86 and uses the scene-based app life cycle, so it launches when built with Xcode 27 and `make ios-run` finds the Simulator, which Xcode 27 renamed Device Hub.

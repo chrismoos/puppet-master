@@ -320,7 +320,9 @@ fn review_tool_definitions() -> Value {
                 comment show up in it. `files` names an exact scope when you want one. To review \
                 a document that is not in a repository at all, set `source_file` instead and \
                 leave base and worktree empty. The reviewer comments in the browser; you take the \
-                comments with next_review_event.",
+                comments with next_review_event. A review the user finished stays finished: do \
+                not reopen it because of a review notice, only when the user asks, and then pass \
+                `reopen`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -330,7 +332,8 @@ fn review_tool_definitions() -> Value {
                     "files": { "type": "array", "items": { "type": "string" }, "description": "Exactly these paths are the scope; nothing is enumerated. Use it to include a file git would not list, or to leave generated noise out." },
                     "source_file": { "type": "string", "description": "Absolute path of a document to review against an empty baseline, with no repository involved. Leave base and worktree empty when using this." },
                     "label": { "type": "string", "description": "What to call this review wherever a person sees it, including its tab. Name it for the work, not the range — 'session git field' reads better than '69db9c7..WORKING' when several are open at once. Defaults to the SHAs." },
-                    "reset": { "type": "boolean", "description": "Discard existing threads and history for this target before opening." }
+                    "reset": { "type": "boolean", "description": "Discard existing threads and history for this target before opening." },
+                    "reopen": { "type": "boolean", "description": "Reopen this target's review even though the user finished it. Set it only when the user asked for the review again. Without it, a finished review is left finished and the call is refused." }
                 }
             }
         },
@@ -2863,8 +2866,11 @@ async fn review_tool_call(daemon: &Arc<Daemon>, token: &str, name: &str, args: &
             if let Some(problem) = frozen_head(&ctx).or_else(|| unresolved_ref(&ctx)) {
                 return tool_text(true, problem);
             }
-            let reset = args["reset"].as_bool().unwrap_or(false);
-            match daemon.open_review(session_id, &ctx, reset).await {
+            let options = crate::review::OpenReviewOptions {
+                reset: args["reset"].as_bool().unwrap_or(false),
+                reopen_finished: args["reopen"].as_bool().unwrap_or(false),
+            };
+            match daemon.open_review_with(session_id, &ctx, options).await {
                 Ok(review) => tool_text(
                     false,
                     format!(
@@ -2890,7 +2896,10 @@ async fn review_tool_call(daemon: &Arc<Daemon>, token: &str, name: &str, args: &
                 }
                 Ok(crate::review::ReviewWait::Finished) => tool_text(
                     false,
-                    "the review is finished. Nothing more is coming; carry on with your work."
+                    "the review is finished. Nothing more is coming; carry on with your work. \
+                     The user finished it, so do not reopen it with open_review, even if a \
+                     review notice about it arrives later: that notice is out of date. Open it \
+                     again only if the user asks."
                         .into(),
                 ),
                 Ok(crate::review::ReviewWait::TimedOut) => tool_text(

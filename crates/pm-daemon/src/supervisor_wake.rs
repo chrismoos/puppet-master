@@ -80,6 +80,12 @@ fn needs_supervision(state: SessionState) -> bool {
 /// Sessions in Idle or NeedsInput have finished their turn, as do sessions
 /// that remain in Working solely because background tasks are active.
 fn supervisor_turn_ended(state: SessionState, state_detail: &str) -> bool {
+    agent_turn_ended(state, state_detail)
+}
+
+/// Whether a session's agent is between turns, so a message handed to it
+/// now is read now rather than queued behind work in progress.
+pub(crate) fn agent_turn_ended(state: SessionState, state_detail: &str) -> bool {
     matches!(state, SessionState::Idle | SessionState::NeedsInput)
         || (state == SessionState::Working && state_detail == crate::daemon::BACKGROUND_WORK_DETAIL)
 }

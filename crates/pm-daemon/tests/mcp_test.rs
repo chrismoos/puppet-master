@@ -4790,3 +4790,95 @@ async fn supervisors_set_their_bucket_icon_from_text_color_or_an_image_file() {
     assert_eq!(cleared["isError"], false, "{cleared}");
     assert_eq!(icon(), BucketIcon::default());
 }
+
+#[tokio::test]
+async fn open_review_leaves_a_finished_review_finished_unless_reopen_is_set() {
+    let env = daemon_env();
+    let root = env.project_root();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q", "-b", "master"]);
+    git(&["config", "user.email", "review@test"]);
+    git(&["config", "user.name", "review"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "base"]);
+    std::fs::write(root.join("a.txt"), "two\n").unwrap();
+    let base = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&root)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    let app = pm_daemon::http::router(Arc::clone(&env.daemon));
+    let open = |reopen: Option<bool>| {
+        let mut arguments = json!({"worktree": root.display().to_string(), "base": base});
+        if let Some(reopen) = reopen {
+            arguments["reopen"] = json!(reopen);
+        }
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+            "name":"open_review","arguments":arguments}})
+    };
+
+    let (_, body) = rpc(&app, Some(&token), open(None)).await;
+    assert_eq!(body["result"]["isError"], false, "{body}");
+    let review = env.daemon.review_status(id).unwrap().remove(0);
+    env.daemon.finish_review(review.id).await.unwrap();
+
+    let (_, body) = rpc(
+        &app,
+        Some(&token),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+            "name":"next_review_event","arguments":{"wait_seconds":1}}}),
+    )
+    .await;
+    let finished = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(finished.contains("the review is finished"), "{finished}");
+    assert!(finished.contains("do not reopen it"), "{finished}");
+
+    let (_, body) = rpc(&app, Some(&token), open(None)).await;
+    assert_eq!(body["result"]["isError"], true, "{body}");
+    let refused = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(refused.contains("finished by the user"), "{refused}");
+    assert!(env.daemon.review_status(id).unwrap().is_empty());
+
+    let (_, body) = rpc(&app, Some(&token), open(Some(true))).await;
+    assert_eq!(body["result"]["isError"], false, "{body}");
+    let reopened = env.daemon.review_status(id).unwrap();
+    assert_eq!(reopened.len(), 1);
+    assert_eq!(reopened[0].id, review.id);
+
+    let (_, body) = rpc(
+        &app,
+        Some(&token),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}),
+    )
+    .await;
+    let tool = body["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "open_review")
+        .unwrap()
+        .clone();
+    assert!(tool["description"]
+        .as_str()
+        .unwrap()
+        .contains("only when the user asks"));
+    assert!(tool["inputSchema"]["properties"]["reopen"].is_object());
+}

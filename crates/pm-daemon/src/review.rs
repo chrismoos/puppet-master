@@ -173,6 +173,11 @@ pub enum ReviewWakeReason {
 pub(crate) struct ReviewWakeRuntime {
     waiting: std::sync::Mutex<std::collections::HashMap<u64, usize>>,
     last_wake_unix_ms: std::sync::Mutex<std::collections::HashMap<u64, i64>>,
+    /// Reviews with comments sent while their agent was inside a turn,
+    /// per session. Agent inboxes keep what they are given until a later
+    /// turn ends and cannot withdraw it, so a notice is held here instead
+    /// and its review is checked again when it is finally delivered.
+    held: std::sync::Mutex<std::collections::HashMap<u64, std::collections::BTreeSet<u64>>>,
 }
 
 impl ReviewWakeRuntime {
@@ -218,6 +223,43 @@ impl ReviewWakeRuntime {
             .unwrap()
             .insert(session_id, now);
     }
+
+    fn hold(&self, session_id: u64, review_id: u64) {
+        self.held
+            .lock()
+            .unwrap()
+            .entry(session_id)
+            .or_default()
+            .insert(review_id);
+    }
+
+    fn release(&self, session_id: u64, review_id: u64) {
+        let mut held = self.held.lock().unwrap();
+        if let Some(reviews) = held.get_mut(&session_id) {
+            reviews.remove(&review_id);
+            if reviews.is_empty() {
+                held.remove(&session_id);
+            }
+        }
+    }
+
+    fn held_sessions(&self) -> Vec<u64> {
+        self.held.lock().unwrap().keys().copied().collect()
+    }
+
+    fn take_held(&self, session_id: u64) -> Vec<u64> {
+        self.held
+            .lock()
+            .unwrap()
+            .remove(&session_id)
+            .map(|reviews| reviews.into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn forget_session(&self, session_id: u64) {
+        self.held.lock().unwrap().remove(&session_id);
+        self.last_wake_unix_ms.lock().unwrap().remove(&session_id);
+    }
 }
 
 pub(crate) struct ReviewWaitGuard<'a> {
@@ -229,6 +271,14 @@ impl Drop for ReviewWaitGuard<'_> {
     fn drop(&mut self) {
         self.runtime.decrement_waiting(self.session_id);
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenReviewOptions {
+    /// Discards the target's threads and history first.
+    pub reset: bool,
+    /// Allows a review the user finished to become open again.
+    pub reopen_finished: bool,
 }
 
 /// The outcome of waiting for review work.
@@ -369,6 +419,29 @@ impl Daemon {
         ctx: &ReviewContext,
         reset: bool,
     ) -> Result<Review, DaemonError> {
+        self.open_review_with(
+            session_id,
+            ctx,
+            OpenReviewOptions {
+                reset,
+                reopen_finished: true,
+            },
+        )
+        .await
+    }
+
+    /// [`Daemon::open_review`] for a caller that must not reopen a review
+    /// the user already finished unless it says so.
+    pub async fn open_review_with(
+        &self,
+        session_id: u64,
+        ctx: &ReviewContext,
+        options: OpenReviewOptions,
+    ) -> Result<Review, DaemonError> {
+        let OpenReviewOptions {
+            reset,
+            reopen_finished,
+        } = options;
         let session = self.storage.get_session(session_id)?;
         let mut ctx = ctx.clone();
         // File mode's worktree is only ever the directory holding the
@@ -419,6 +492,15 @@ impl Daemon {
         let existing = self.storage.find_review(&ctx.worktree, &range_key)?;
         let review = match existing {
             Some(review) => {
+                if review.state == ReviewState::Finished && !reopen_finished {
+                    return Err(DaemonError::Rejected(format!(
+                        "review {} was finished by the user, so it was not reopened. A notice \
+                         about it arriving now is out of date, not a request. Reopen it only if \
+                         the user asks you to, by calling open_review again with reopen set to \
+                         true.",
+                        review.id
+                    )));
+                }
                 if reset {
                     self.storage.reset_review(review.id)?;
                 }
@@ -1489,6 +1571,8 @@ impl Daemon {
             .storage
             .set_review_state(review_id, ReviewState::Finished)?;
         self.storage.release_review_claims(review_id)?;
+        self.review_wake_runtime
+            .release(review.session_id, review_id);
         info!(review = review_id, "review finished");
         // The live list holds open reviews, which is what the snapshot
         // carries too. Publishing a change instead would leave a
@@ -1534,14 +1618,102 @@ impl Daemon {
         if !session.state.is_live() {
             return;
         }
-        let now = crate::daemon::now_unix_ms();
-        if matches!(reason, ReviewWakeReason::CommentsSent(_))
-            && !self.review_wake_runtime.throttle_allows(session_id, now)
-        {
-            return;
+        let turn_ended =
+            crate::supervisor_wake::agent_turn_ended(session.state, &session.state_detail);
+        match reason {
+            // A busy agent learns a review ended from next_review_event, and
+            // a finish notice queued behind its turn would only be stale.
+            ReviewWakeReason::Finished => {
+                if turn_ended {
+                    self.deliver_review_notice(session_id, review_id, reason)
+                        .await;
+                }
+            }
+            ReviewWakeReason::CommentsSent(_) => {
+                let now = crate::daemon::now_unix_ms();
+                if !turn_ended || !self.review_wake_runtime.throttle_allows(session_id, now) {
+                    debug!(
+                        review = review_id,
+                        session = session_id,
+                        turn_ended,
+                        "holding the review notice until the agent's turn ends"
+                    );
+                    self.review_wake_runtime.hold(session_id, review_id);
+                    return;
+                }
+                self.deliver_pending_review_notice(session_id, review_id)
+                    .await;
+            }
         }
-        self.review_wake_runtime.record_wake(session_id, now);
+    }
 
+    /// Delivers the notices held while each agent was inside a turn, once
+    /// that turn has ended. A review finished or answered in the meantime
+    /// is dropped rather than announced.
+    pub async fn process_review_wakes(&self) {
+        let now = crate::daemon::now_unix_ms();
+        for session_id in self.review_wake_runtime.held_sessions() {
+            if self.is_session_awaiting_review(session_id) {
+                self.review_wake_runtime.take_held(session_id);
+                continue;
+            }
+            let Ok(session) = self.storage.get_session(session_id) else {
+                self.review_wake_runtime.forget_session(session_id);
+                continue;
+            };
+            if !session.state.is_live() {
+                self.review_wake_runtime.forget_session(session_id);
+                continue;
+            }
+            if !crate::supervisor_wake::agent_turn_ended(session.state, &session.state_detail)
+                || !self.review_wake_runtime.throttle_allows(session_id, now)
+            {
+                continue;
+            }
+            let mut held = self.review_wake_runtime.take_held(session_id).into_iter();
+            for review_id in held.by_ref() {
+                if self
+                    .deliver_pending_review_notice(session_id, review_id)
+                    .await
+                {
+                    break;
+                }
+            }
+            for review_id in held {
+                self.review_wake_runtime.hold(session_id, review_id);
+            }
+        }
+    }
+
+    /// Announces the comments still waiting on a review, if it is open,
+    /// still answered by this session, and has any. Returns whether a
+    /// notice was delivered.
+    async fn deliver_pending_review_notice(&self, session_id: u64, review_id: u64) -> bool {
+        let Ok(review) = self.storage.get_review(review_id) else {
+            return false;
+        };
+        if review.state != ReviewState::Open || review.session_id != session_id {
+            return false;
+        }
+        if review.open_count == 0 {
+            return false;
+        }
+        self.deliver_review_notice(
+            session_id,
+            review_id,
+            ReviewWakeReason::CommentsSent(review.open_count),
+        )
+        .await
+    }
+
+    async fn deliver_review_notice(
+        &self,
+        session_id: u64,
+        review_id: u64,
+        reason: ReviewWakeReason,
+    ) -> bool {
+        self.review_wake_runtime
+            .record_wake(session_id, crate::daemon::now_unix_ms());
         let notice = match reason {
             ReviewWakeReason::CommentsSent(threads_sent) => format!(
                 "[puppet-master] Review notice: New review comments were sent on review {} ({} thread{}). Call next_review_event to receive and address them.",
@@ -1556,13 +1728,23 @@ impl Daemon {
         };
 
         match self.send_review_input(session_id, &notice).await {
-            Ok(outcome) => {
+            Ok(outcome) if outcome.reason.is_none() => {
                 info!(
                     review = review_id,
                     session = session_id,
                     delivery = outcome.delivery,
                     "review wake notice delivered to agent"
                 );
+                true
+            }
+            Ok(outcome) => {
+                warn!(
+                    review = review_id,
+                    session = session_id,
+                    reason = outcome.reason,
+                    "review wake notice was not delivered"
+                );
+                false
             }
             Err(e) => {
                 warn!(
@@ -1571,6 +1753,7 @@ impl Daemon {
                     error = %e,
                     "could not deliver review wake notice to agent"
                 );
+                false
             }
         }
     }

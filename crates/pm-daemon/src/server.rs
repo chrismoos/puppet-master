@@ -220,6 +220,7 @@ pub async fn start(
             // one, which is async, so it runs on the runtime rather than
             // on a blocking thread.
             supervisor_wake_daemon.process_supervisor_wakes().await;
+            supervisor_wake_daemon.process_review_wakes().await;
         }
     });
 

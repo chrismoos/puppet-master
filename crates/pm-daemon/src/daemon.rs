@@ -655,6 +655,10 @@ pub(crate) struct SessionMessage<'a> {
     pub may_steer: bool,
     pub idempotency_key: Option<&'a str>,
     pub record_item_note: bool,
+    /// Whether the terminal may take the message when the agent's own
+    /// inbox does not. An inbox attempt that timed out may still have
+    /// queued it, so a message that must not arrive twice clears this.
+    pub terminal_fallback: bool,
 }
 
 /// What the user asked to be handed to a session.
@@ -2390,6 +2394,7 @@ impl Daemon {
             Event::SessionRemoved(session_id) => {
                 self.forget_program_status(*session_id);
                 self.supervisor_wake().forget_session(*session_id);
+                self.review_wake_runtime.forget_session(*session_id);
                 self.stale_turn().forget_session(*session_id);
                 let mut journal = self.session_wait_journal.lock().unwrap();
                 if let Some(previous) = journal.last.remove(session_id) {
@@ -7345,6 +7350,7 @@ impl Daemon {
                 may_steer: true,
                 idempotency_key: None,
                 record_item_note: true,
+                terminal_fallback: true,
             },
         )
         .await
@@ -7390,6 +7396,7 @@ impl Daemon {
                 may_steer: request.mode == AgentInboxMode::Steer,
                 idempotency_key: Some(request.idempotency_key).filter(|key| !key.is_empty()),
                 record_item_note: true,
+                terminal_fallback: true,
             },
         )
         .await
@@ -7400,7 +7407,7 @@ impl Daemon {
         session_id: u64,
         text: &str,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
-        self.send_own_input(session_id, text).await
+        self.send_own_input(session_id, text, true).await
     }
 
     pub(crate) async fn send_connection_input(
@@ -7408,15 +7415,19 @@ impl Daemon {
         session_id: u64,
         text: &str,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
-        self.send_own_input(session_id, text).await
+        self.send_own_input(session_id, text, true).await
     }
 
+    /// Review notices go to the agent's inbox when it has one and never
+    /// also to its terminal, so one notice cannot arrive twice.
     pub(crate) async fn send_review_input(
         &self,
         session_id: u64,
         text: &str,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
-        self.send_own_input(session_id, text).await
+        let terminal_fallback = !self.inbox_delivery_possible(session_id);
+        self.send_own_input(session_id, text, terminal_fallback)
+            .await
     }
 
     /// A message one of the daemon's own surfaces puts to the session it
@@ -7426,6 +7437,7 @@ impl Daemon {
         &self,
         session_id: u64,
         text: &str,
+        terminal_fallback: bool,
     ) -> Result<SupervisorInputOutcome, DaemonError> {
         self.send_session_input_inner(
             session_id,
@@ -7438,6 +7450,7 @@ impl Daemon {
                 may_steer: true,
                 idempotency_key: None,
                 record_item_note: false,
+                terminal_fallback,
             },
         )
         .await
@@ -7457,6 +7470,7 @@ impl Daemon {
             may_steer,
             idempotency_key,
             record_item_note,
+            terminal_fallback,
         } = message;
         let session = self.storage.get_session(session_id)?;
         if !session.state.is_live() {
@@ -7553,11 +7567,21 @@ impl Daemon {
         let confirm_events = self.wait_events_tx.subscribe();
         let confirm_baseline = self.session_lifecycle_baseline(session_id);
         let delivery = match self
-            .deliver_agent_message(session_id, text, submit, plan, may_steer, true)
+            .deliver_agent_message(session_id, text, submit, plan, may_steer, terminal_fallback)
             .await
         {
             Ok(delivery) => delivery,
-            Err(AgentMessageFailure::InboxOnly) => unreachable!("the terminal is allowed"),
+            Err(AgentMessageFailure::InboxOnly) => {
+                return Ok(SupervisorInputOutcome::not_delivered(
+                    session_id,
+                    submit,
+                    "inbox_declined",
+                    true,
+                    format!(
+                        "session {session_id}'s agent inbox did not take the message; input was not delivered"
+                    ),
+                ));
+            }
             Err(AgentMessageFailure::Terminal(failure)) => {
                 let (reason, retryable, detail) = supervisor_input_failure_details(failure);
                 return Ok(SupervisorInputOutcome::not_delivered(

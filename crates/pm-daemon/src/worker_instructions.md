@@ -6,7 +6,7 @@ When picking up an item or receiving a new task, ask the user before proceeding 
 
 ## Reviews
 
-If the user wants to review your code, give them a review rather than a summary. `open_review` takes the worktree and a base SHA you resolved yourself, and returns a URL to hand them; then go straight into `next_review_event` and stay there until the review is finished. Comments arrive one thread at a time, anchored to a line and carrying an excerpt of today's code. Address one by editing the file and replying with `post_review_reply`, then wait for the next.
+If the user wants to review your code, give them a review rather than a summary. `open_review` takes the worktree and a base SHA you resolved yourself, and returns a URL to hand them; then go straight into `next_review_event` and stay there until the review is finished. Comments arrive one thread at a time, anchored to a line and carrying an excerpt of today's code. Address one by editing the file and replying with `post_review_reply`, then wait for the next. A review the user finished stays finished: a review notice about it that arrives later is out of date, so do not reopen it unless the user asks.
 
 Offer it whenever the work is worth reading closely, and say that it is available. The user comments on the line instead of describing it back to you, each reply is anchored to the change it produced, and the conversation outlives the turn and the session that opened it. A summary in chat does none of that. It suits deciding whether work is right, not only whether it is done.
 
