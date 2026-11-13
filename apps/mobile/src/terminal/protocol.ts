@@ -91,6 +91,8 @@ export type HostMessage =
   | { type: "cancelTouch" }
   /** A WebKit-owned selection touch ended; release editable focus if it dismissed selection. */
   | { type: "finishSelectionTouch" }
+  /** The user touched the terminal, which takes its size back from another viewer. */
+  | { type: "userActive" }
   | { type: "shutdown" };
 
 export type TerminalViewPhase = "connecting" | "replaying" | "online" | "reconnecting" | "closed";
@@ -260,6 +262,8 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
       return { type: "cancelTouch" };
     case "finishSelectionTouch":
       return { type: "finishSelectionTouch" };
+    case "userActive":
+      return { type: "userActive" };
     case "shutdown":
       return { type: "shutdown" };
     default:

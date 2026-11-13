@@ -491,6 +491,7 @@ export function TerminalScreen({
     (phase: PanPhase) => (evt: GestureResponderEvent) => {
       const sample = toPanSample(evt);
       if (phase === "start") {
+        send({ type: "userActive" });
         selectionTouchRef.current = selectionModeRef.current;
         if (selectionTouchRef.current) {
           // WebKit owns every touch while native selection is active. Do not

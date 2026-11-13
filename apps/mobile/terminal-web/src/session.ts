@@ -111,11 +111,15 @@ export class TerminalViewSession {
       case "dismissSize":
         this.sizePrompt.dismiss();
         break;
+      case "userActive":
+        if (this.shown()) this.sizePrompt.reclaim();
+        break;
     }
   }
 
   sendInput(bytes: Uint8Array, submitted = false): void {
     if (!this.inputEnabled || !this.socket) return;
+    if (this.shown()) this.sizePrompt.reclaim();
     this.lastInputAt = this.hooks.now();
     this.socket.input(bytes, submitted);
   }

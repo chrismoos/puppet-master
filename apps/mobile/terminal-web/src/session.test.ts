@@ -206,6 +206,31 @@ describe("TerminalViewSession", () => {
     session.shutdown();
   });
 
+  it("takes the size back from another viewer when the user touches the terminal", () => {
+    const { session, socket } = takenByAnotherViewer();
+    const before = resizesSent(socket).length;
+    session.handle({ type: "userActive" });
+    expect(resizesSent(socket).slice(before)).toEqual([[80, 24]]);
+    session.shutdown();
+  });
+
+  it("takes the size back from another viewer when the user types", () => {
+    const { session, socket } = takenByAnotherViewer();
+    const before = resizesSent(socket).length;
+    session.sendInput(new Uint8Array([0x6c]));
+    expect(resizesSent(socket).slice(before)).toEqual([[80, 24]]);
+    session.shutdown();
+  });
+
+  it("leaves a dismissed prompt's size alone when the user touches the terminal", () => {
+    const { session, socket } = takenByAnotherViewer();
+    session.handle({ type: "dismissSize" });
+    const before = resizesSent(socket).length;
+    session.handle({ type: "userActive" });
+    expect(resizesSent(socket)).toHaveLength(before);
+    session.shutdown();
+  });
+
   it("leaves a dismissed prompt's size alone when the app returns to the foreground", () => {
     const { session, socket, settle } = takenByAnotherViewer();
     session.handle({ type: "dismissSize" });

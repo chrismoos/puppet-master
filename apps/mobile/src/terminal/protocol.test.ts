@@ -43,6 +43,10 @@ describe("host messages", () => {
     expect(garbled && garbled.type === "init" && garbled.visible).toBeUndefined();
   });
 
+  it("round-trips the user-active signal", () => {
+    expect(parseHostMessage(encodeHostMessage({ type: "userActive" }))).toEqual({ type: "userActive" });
+  });
+
   it("trims trailing slashes from the socket base URL", () => {
     const parsed = parseHostMessage(
       encodeHostMessage({
