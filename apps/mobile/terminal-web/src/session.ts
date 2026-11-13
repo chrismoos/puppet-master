@@ -74,7 +74,7 @@ export class TerminalViewSession {
       () => hooks.measureSize ? hooks.measureSize() : { cols: hooks.term.cols, rows: hooks.term.rows },
       (show) => hooks.post({ type: "sizeMismatch", show }),
       (size) => {
-        if (!this.socket || !this.hostVisible || !this.pageVisible) return;
+        if (!this.socket || !this.shown()) return;
         this.followSize = size;
         this.socket.resize(size.cols, size.rows);
         this.socket.refreshSnapshot();
@@ -127,8 +127,19 @@ export class TerminalViewSession {
     this.applyVisibility();
   }
 
+  private shown(): boolean {
+    return this.hostVisible && this.pageVisible;
+  }
+
+  /** Coming back into view takes the size back from another viewer, as the
+   * prompt's Update does. Going out of view withdraws an unacknowledged claim
+   * so a reconnect in the background cannot take the size. */
   private applyVisibility(): void {
-    this.viewer?.setVisible(this.hostVisible && this.pageVisible);
+    const shown = this.shown();
+    const wasShown = this.viewer?.visible() ?? false;
+    this.viewer?.setVisible(shown);
+    if (!shown) this.socket?.withdrawResize();
+    else if (!wasShown) this.sizePrompt.reclaim();
   }
 
   sendResize(cols: number, rows: number): void {
@@ -219,8 +230,8 @@ export class TerminalViewSession {
     this.firstFrameMs = null;
     this.lastInputAt = null;
     this.lastEchoMs = null;
-    this.inputEnabled = true;
-    this.hostVisible = true;
+    this.hostVisible = msg.visible ?? this.hostVisible;
+    this.inputEnabled = this.hostVisible;
     this.initAt = this.hooks.now();
     this.connectStartedAt = this.initAt;
     // Bearer path (iOS): the openSocket hook reads the current access
@@ -241,7 +252,7 @@ export class TerminalViewSession {
     };
     this.hooks.post({ type: "status", phase: "connecting" });
     const initialSize =
-      !this.sizePrompt.blocked() && msg.initialCols && msg.initialRows
+      this.shown() && !this.sizePrompt.blocked() && msg.initialCols && msg.initialRows
         ? { cols: msg.initialCols, rows: msg.initialRows }
         : null;
     if (initialSize) this.sizePrompt.requested(initialSize);
@@ -302,7 +313,7 @@ export class TerminalViewSession {
       },
       { canAssert: () => this.sizePrompt.needsClaim() },
     );
-    if (this.pageVisible) this.viewer.opened();
+    if (this.shown()) this.viewer.opened();
   }
 
   private receive(frame: PtyFrame): void {

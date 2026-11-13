@@ -204,6 +204,13 @@ export class TerminalSocket {
     this.sendResize(this.socket, cols, rows, request);
   }
 
+  /** Drops a size claim the daemon has not acknowledged, so a reconnect
+   * while the viewer is hidden does not deliver it. */
+  withdrawResize(): void {
+    this.pendingResize = null;
+    this.pendingClaim = 0n;
+  }
+
   private sendResize(socket: SocketLike, cols: number, rows: number, request: bigint): void {
     if (!this.ownershipSupported) {
       this.pendingResize = null;

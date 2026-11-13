@@ -36,6 +36,7 @@ import { colors } from "../theme";
 import { bytesToBase64 } from "../terminal/base64";
 import { AccessoryRowVisibility } from "../terminal/accessoryVisibility";
 import { bindTerminalVisibility } from "../terminal/visibility";
+import { isForeground } from "../adapters/lifecycle";
 import { TerminalAttachController } from "../terminal/attach";
 import { shouldBearerReInit } from "../terminal/bearerReconnect";
 import { createReplayVeil } from "../terminal/replayVeil";
@@ -698,6 +699,7 @@ export function TerminalScreen({
           accessToken: token,
           initialCols: size?.cols,
           initialRows: size?.rows,
+          visible: isForeground(AppState.currentState),
           replayCapBytes: TERMINAL_REPLAY_CAP_BYTES,
           fontSize: TERMINAL_FONT_SIZE,
         });
@@ -746,6 +748,7 @@ export function TerminalScreen({
                   terminalId: target.terminalId.toString(),
                   generation: gen,
                   ticket,
+                  visible: isForeground(AppState.currentState),
                   replayCapBytes: TERMINAL_REPLAY_CAP_BYTES,
                   fontSize: TERMINAL_FONT_SIZE,
                 });

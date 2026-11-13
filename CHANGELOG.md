@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [iOS] The phone no longer takes a terminal's size while the app is in the background, which could happen after a push or when iOS launched the app on its own.
+
+- [iOS] Returning to the app takes a terminal's size back from another screen, without the Update prompt. Touching the terminal does not.
+
 - [Web] When you come back to the browser after another screen resized a terminal you can see, the terminal fits this window again on your first click, key, scroll or mouse movement, without the Update prompt. Coming back means the tab was hidden, the window lost focus, a minute passed without input, or another screen took the terminal.
 
 - [Daemon] A Codex session shows needs-input when it asks you a question, not only for an approval.

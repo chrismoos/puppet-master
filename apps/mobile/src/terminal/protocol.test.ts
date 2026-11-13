@@ -35,6 +35,14 @@ describe("host messages", () => {
     expect(parsed && parsed.type === "init" && parsed.terminalId).toBe("18446744073709551615");
   });
 
+  it("carries the foreground state on init and drops a value that is not a boolean", () => {
+    const base = { type: "init", socketBaseUrl: "wss://pm.example", terminalId: "7", generation: "3", replayCapBytes: 1024, fontSize: 14 };
+    const hidden = parseHostMessage(JSON.stringify({ ...base, visible: false }));
+    expect(hidden && hidden.type === "init" && hidden.visible).toBe(false);
+    const garbled = parseHostMessage(JSON.stringify({ ...base, visible: "no" }));
+    expect(garbled && garbled.type === "init" && garbled.visible).toBeUndefined();
+  });
+
   it("trims trailing slashes from the socket base URL", () => {
     const parsed = parseHostMessage(
       encodeHostMessage({

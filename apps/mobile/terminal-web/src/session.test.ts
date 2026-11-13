@@ -162,11 +162,6 @@ describe("TerminalViewSession", () => {
     expect([term.cols, term.rows]).toEqual([120, 40]);
     expect(posts).toContainEqual({ type: "sizeMismatch", show: true });
     expect(session.shouldFit()).toBe(false);
-    const before = resizesSent(socket).length;
-    session.handle({ type: "setVisible", visible: false });
-    session.handle({ type: "setVisible", visible: true });
-    settle();
-    expect(resizesSent(socket)).toHaveLength(before);
     session.handle({ type: "dismissSize" });
     socket.deliver(encodeTerminalResize(3n, 100, 30));
     expect(posts.at(-1)).toEqual({ type: "sizeMismatch", show: false });
@@ -181,6 +176,80 @@ describe("TerminalViewSession", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+  });
+
+  function takenByAnotherViewer() {
+    const h = harness({ cols: 80, rows: 24 });
+    h.session.handleRaw(JSON.stringify({ ...JSON.parse(INIT), initialCols: 80, initialRows: 24 }));
+    const socket = h.sockets[0];
+    const query = new URL(socket.url).searchParams;
+    const owner = BigInt(query.get("viewer")!);
+    const acknowledgment = BigInt(query.get("claim")!);
+    socket.deliver(encodeTerminalOwnership({ generation: 3n, revision: 1n, owner, acknowledgment, cols: 80, rows: 24 }));
+    socket.deliver(encodeTerminalResize(3n, 80, 24));
+    socket.deliver(outputFrame(3n, REPLAY_ALL, new Uint8Array([0x68])));
+    h.settle();
+    socket.deliver(encodeTerminalOwnership({ generation: 3n, revision: 2n, owner: owner + 1n, acknowledgment, cols: 120, rows: 40 }));
+    socket.deliver(encodeTerminalResize(3n, 120, 40));
+    expect(h.posts).toContainEqual({ type: "sizeMismatch", show: true });
+    return { ...h, socket };
+  }
+
+  it("takes the size back from another viewer when the app returns to the foreground", () => {
+    const { session, socket, settle } = takenByAnotherViewer();
+    const before = resizesSent(socket).length;
+    session.handle({ type: "setVisible", visible: false });
+    expect(resizesSent(socket)).toHaveLength(before);
+    session.handle({ type: "setVisible", visible: true });
+    settle();
+    expect(resizesSent(socket).slice(before)).toEqual([[80, 24]]);
+    session.shutdown();
+  });
+
+  it("leaves a dismissed prompt's size alone when the app returns to the foreground", () => {
+    const { session, socket, settle } = takenByAnotherViewer();
+    session.handle({ type: "dismissSize" });
+    const before = resizesSent(socket).length;
+    session.handle({ type: "setVisible", visible: false });
+    session.handle({ type: "setVisible", visible: true });
+    settle();
+    expect(resizesSent(socket)).toHaveLength(before);
+    session.shutdown();
+  });
+
+  it("connects without claiming the size while the app is in the background, and claims on return", () => {
+    const { session, sockets, settle } = harness({ cols: 80, rows: 24 });
+    session.handleRaw(JSON.stringify({ ...JSON.parse(BEARER_INIT), visible: false }));
+    expect(sockets[0].url).not.toContain("cols=");
+    sockets[0].deliver(encodeTerminalResize(3n, 120, 40));
+    sockets[0].deliver(outputFrame(3n, REPLAY_ALL, new Uint8Array([0x68])));
+    settle();
+    expect(resizesSent(sockets[0])).toEqual([]);
+    session.handle({ type: "setVisible", visible: true });
+    settle();
+    expect(resizesSent(sockets[0])).toEqual([[80, 24]]);
+    session.shutdown();
+  });
+
+  it("keeps the background state across a fresh init that does not carry one", () => {
+    const { session, sockets } = harness();
+    session.handle({ type: "setVisible", visible: false });
+    session.handleRaw(BEARER_INIT);
+    expect(sockets[0].url).not.toContain("cols=");
+    session.shutdown();
+  });
+
+  it("does not deliver an unacknowledged claim on a reconnect while hidden", () => {
+    const { session, sockets } = harness();
+    session.handleRaw(BEARER_INIT);
+    expect(sockets[0].url).toContain("cols=");
+    session.handle({ type: "setVisible", visible: false });
+    sockets[0].onclose?.({ code: 1006, reason: "" } as SocketCloseEvent);
+    vi.advanceTimersByTime(60_000);
+    expect(sockets.length).toBeGreaterThan(1);
+    expect(sockets.at(-1)!.url).not.toContain("cols=");
+    expect(resizesSent(sockets.at(-1)!)).toEqual([]);
+    session.shutdown();
   });
 
   it("resizes the emulator to the size echo before writing replay", () => {

@@ -27,6 +27,9 @@ export interface TerminalInitMessage {
   /** Initial terminal size so the first replay arrives at the phone's dimensions. */
   initialCols?: number;
   initialRows?: number;
+  /** Whether the app is in the foreground. A hidden terminal connects without
+   * claiming its size. Absent keeps what the last setVisible said. */
+  visible?: boolean;
   replayCapBytes: number;
   fontSize: number;
   fontFamily?: string;
@@ -211,6 +214,7 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
         accessToken: msg["accessToken"] as string | undefined,
         initialCols: typeof initialCols === "number" && initialCols >= 2 ? initialCols : undefined,
         initialRows: typeof initialRows === "number" && initialRows >= 1 ? initialRows : undefined,
+        visible: typeof msg["visible"] === "boolean" ? msg["visible"] : undefined,
         replayCapBytes,
         fontSize,
         fontFamily: msg["fontFamily"] as string | undefined,
