@@ -1,3 +1,4 @@
+mod events;
 mod http;
 mod oauth;
 mod openapi;
@@ -6,6 +7,8 @@ mod scope;
 mod store;
 mod transport;
 mod update;
+
+pub(crate) use events::relay_connection_changes;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

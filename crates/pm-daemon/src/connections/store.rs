@@ -423,6 +423,23 @@ impl Storage {
             .collect()
     }
 
+    /// When the next pending or authorized call runs out, in Unix milliseconds.
+    pub(crate) fn next_connection_call_expiry(&self) -> Result<Option<i64>> {
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT MIN(expires_at) FROM connection_calls WHERE status IN ('pending','authorized')",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Marks every pending or authorized call past its deadline as expired.
+    pub(crate) fn expire_connection_calls(&self) -> Result<usize> {
+        Ok(self.conn.lock().unwrap().execute(
+            "UPDATE connection_calls SET status='expired' WHERE status IN ('pending','authorized') AND expires_at<=?1",
+            [now_unix_ms()],
+        )?)
+    }
+
     /// Calls that waited on a decision, newest request first, without arguments or results.
     pub(crate) fn connection_approval_summaries(&self) -> Result<Vec<Value>> {
         let conn = self.conn.lock().unwrap();
@@ -597,12 +614,12 @@ impl Storage {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use pm_protocol::domain::{AgentKind, PermissionMode};
     use serde_json::json;
 
-    fn fixture() -> (Storage, Connection, u64) {
+    pub(in crate::connections) fn fixture() -> (Storage, Connection, u64) {
         let storage = Storage::open_in_memory().unwrap();
         let bucket = storage.create_bucket("connections").unwrap();
         let project = storage
@@ -627,7 +644,11 @@ mod tests {
         (storage, connection, session.id)
     }
 
-    fn call(connection: &Connection, session: u64, status: &str) -> Call {
+    pub(in crate::connections) fn call(
+        connection: &Connection,
+        session: u64,
+        status: &str,
+    ) -> Call {
         Call {
             id: random_id(),
             request_id: "request".into(),

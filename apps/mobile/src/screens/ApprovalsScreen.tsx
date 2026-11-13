@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -28,12 +28,14 @@ import {
   type ApprovalTone,
 } from "@puppet-master/client-core/approvals";
 
+import { coalescedRefetch } from "@puppet-master/client-core/refetch";
 import { decideApproval, fetchApproval, fetchApprovals } from "../api/approvals";
 import type { DeviceAuthSession } from "../auth/session";
 import type { ControllerConfig } from "../config";
+
+type ConnectionsSubscription = (listener: () => void) => () => void;
 import { colors } from "../theme";
 
-const REFRESH_MS = 10_000;
 const FILTERS: Array<{ value: ApprovalFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "pending", label: "Waiting" },
@@ -95,12 +97,15 @@ export function ApprovalsScreen({
   config,
   auth,
   approvalId,
+  onConnectionsChanged,
   onSelect,
   onBack,
 }: {
   config: ControllerConfig;
   auth: DeviceAuthSession;
   approvalId: string | null;
+  /** Subscribes to approval changes, including after a reconnect, and returns the unsubscribe. */
+  onConnectionsChanged: ConnectionsSubscription;
   onSelect: (id: string | null) => void;
   onBack: () => void;
 }) {
@@ -113,22 +118,34 @@ export function ApprovalsScreen({
         auth={auth}
         id={approvalId}
         now={now}
+        onConnectionsChanged={onConnectionsChanged}
         onBack={() => onSelect(null)}
       />
     );
-  return <ApprovalListScreen config={config} auth={auth} now={now} onSelect={onSelect} onBack={onBack} />;
+  return (
+    <ApprovalListScreen
+      config={config}
+      auth={auth}
+      now={now}
+      onConnectionsChanged={onConnectionsChanged}
+      onSelect={onSelect}
+      onBack={onBack}
+    />
+  );
 }
 
 function ApprovalListScreen({
   config,
   auth,
   now,
+  onConnectionsChanged,
   onSelect,
   onBack,
 }: {
   config: ControllerConfig;
   auth: DeviceAuthSession;
   now: number;
+  onConnectionsChanged: ConnectionsSubscription;
   onSelect: (id: string) => void;
   onBack: () => void;
 }) {
@@ -136,26 +153,23 @@ function ApprovalListScreen({
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<ApprovalFilter>("all");
   const [refreshing, setRefreshing] = useState(false);
-  const busy = useRef(false);
-
-  const load = useCallback(async () => {
-    if (busy.current) return;
-    busy.current = true;
-    try {
-      setApprovals(sortApprovals(await fetchApprovals(auth, config.baseUrl)));
-      setError("");
-    } catch (failure) {
-      setError(errorText(failure, "Could not load approvals"));
-    } finally {
-      busy.current = false;
-    }
-  }, [auth, config.baseUrl]);
+  const load = useMemo(
+    () =>
+      coalescedRefetch(async () => {
+        try {
+          setApprovals(sortApprovals(await fetchApprovals(auth, config.baseUrl)));
+          setError("");
+        } catch (failure) {
+          setError(errorText(failure, "Could not load approvals"));
+        }
+      }),
+    [auth, config.baseUrl],
+  );
 
   useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [load]);
+    return onConnectionsChanged(() => void load());
+  }, [load, onConnectionsChanged]);
 
   const shown = approvals ? filterApprovals(approvals, filter) : [];
   const waiting = approvals ? pendingCount(approvals) : 0;
@@ -267,12 +281,14 @@ function ApprovalDetailScreen({
   auth,
   id,
   now,
+  onConnectionsChanged,
   onBack,
 }: {
   config: ControllerConfig;
   auth: DeviceAuthSession;
   id: string;
   now: number;
+  onConnectionsChanged: ConnectionsSubscription;
   onBack: () => void;
 }) {
   const [detail, setDetail] = useState<ApprovalDetail | null>(null);
@@ -289,16 +305,11 @@ function ApprovalDetailScreen({
     }
   }, [auth, config.baseUrl, id]);
 
+  // Reloading on every change follows an approved call until its result lands.
   useEffect(() => {
     void load();
-  }, [load]);
-
-  // Follow an approved call until it settles, so its result shows here.
-  useEffect(() => {
-    if (!detail || !["authorized", "executing"].includes(detail.status)) return;
-    const timer = setTimeout(() => void load(), 1_500);
-    return () => clearTimeout(timer);
-  }, [detail, load]);
+    return onConnectionsChanged(() => void load());
+  }, [load, onConnectionsChanged]);
 
   const decide = async (approve: boolean) => {
     setDeciding(approve ? "approve" : "deny");

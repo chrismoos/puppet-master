@@ -29,7 +29,7 @@ bytes = "1"
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 portable-pty = "0.8"
 axum = { version = "0.8", features = ["ws"] }
 rust-embed = "8"

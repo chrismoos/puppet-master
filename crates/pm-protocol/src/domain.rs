@@ -1978,6 +1978,9 @@ pub enum Event {
     /// persisted as a notice: it reaches whoever is connected, and the
     /// message itself keeps the answer for whoever reads it later.
     AgentReplyArrived(AgentReplyArrived),
+    /// A connection or connection call changed. Clients refetch over HTTP,
+    /// which applies the viewer's scope.
+    ConnectionsChanged,
 }
 
 /// What happened, for a notice the user is told about rather than asked about.

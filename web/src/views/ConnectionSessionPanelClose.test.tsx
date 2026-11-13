@@ -6,7 +6,19 @@ import * as api from "../api/connections";
 import { blankConnection, type Connection } from "../api/connections";
 import { ConnectionSessionPanel } from "./ConnectionsPanel";
 
-vi.mock("../state/hooks", () => ({ useAppState: () => ({ projects: new Map(), sessions: new Map() }) }));
+const changes = vi.hoisted(() => ({ refetch: null as (() => void) | null }));
+vi.mock("../state/hooks", () => ({
+  useAppState: () => ({ projects: new Map(), sessions: new Map() }),
+  useConnectionsChanged: (refetch: () => void, enabled = true) => {
+    changes.refetch = enabled ? refetch : null;
+  },
+}));
+
+/** Stands in for the daemon announcing that connections changed. */
+async function announceChange() {
+  await act(async () => changes.refetch?.());
+  await act(async () => {});
+}
 
 const draft: Connection = {
   id: 1,
@@ -42,6 +54,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  changes.refetch = null;
   host.remove();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -55,15 +68,15 @@ it("closes the whole setup sidebar and keeps it closed through background refres
   const close = host.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!;
   await act(async () => close.click());
   expect(host.querySelector("aside")).toBeNull();
-  // The panel polls every two seconds; the same draft must not reopen it.
-  await act(async () => vi.advanceTimersByTimeAsync(6_000));
+  // The panel refetches on every change; the same draft must not reopen it.
+  for (let i = 0; i < 3; i++) await announceChange();
   expect(api.listConnections).toHaveBeenCalledTimes(4);
   expect(host.querySelector("aside")).toBeNull();
   // A new proposal from the agent is new work, and opens it again.
   vi.mocked(api.listConnections).mockResolvedValue([
     { ...draft, policy_proposal: { id: "p1", revision: 2, session_id: 7, explanation: "", policy: { read_policy: "allow", write_policy: "approve", unknown_policy: "approve", rules: {} } } },
   ]);
-  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  await announceChange();
   expect(host.querySelector("aside.connection-session-panel")).not.toBeNull();
 });
 
@@ -82,7 +95,7 @@ it("keeps a closed draft closed after a reload, until the agent brings new work"
   vi.mocked(api.listConnections).mockResolvedValue([
     { ...draft, policy_proposal: { id: "p2", revision: 2, session_id: 7, explanation: "", policy: { read_policy: "allow", write_policy: "approve", unknown_policy: "approve", rules: {} } } },
   ]);
-  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  await announceChange();
   expect(host.querySelector("aside.connection-session-panel")).not.toBeNull();
 });
 
@@ -112,7 +125,8 @@ it("closes the whole sidebar when a decision completes setup, and it stays close
   await applyProposal(active, async () => settled);
   expect(host.querySelector("aside")).toBeNull();
   vi.mocked(api.listConnections).mockResolvedValue([settled]);
-  await act(async () => vi.advanceTimersByTimeAsync(4_000));
+  await announceChange();
+  await announceChange();
   expect(host.querySelector("aside")).toBeNull();
 });
 

@@ -14,13 +14,14 @@ import {
   type ApprovalFilter,
   type ApprovalSummary,
 } from "@puppet-master/client-core/approvals";
+import { coalescedRefetch } from "@puppet-master/client-core/refetch";
 import { approvalRoutePath } from "@puppet-master/client-core/router";
 import { decideApproval, getApproval, listApprovals } from "../api/approvals";
 import { navigate } from "../router";
+import { useConnectionsChanged } from "../state/hooks";
 import { CallArguments } from "./CallArguments";
 import "./ApprovalsPage.css";
 
-const REFRESH_MS = 5_000;
 const FILTERS: Array<{ value: ApprovalFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "pending", label: "Waiting" },
@@ -78,26 +79,21 @@ export function ApprovalsPage({ id }: { id?: string }) {
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<ApprovalFilter>("all");
   const now = useNow();
-  const busy = useRef(false);
-
-  const refresh = useCallback(async () => {
-    if (busy.current) return;
-    busy.current = true;
-    try {
-      setApprovals(sortApprovals(await listApprovals()));
-      setError("");
-    } catch (failure) {
-      setError(message(failure, "Could not load approvals"));
-    } finally {
-      busy.current = false;
-    }
-  }, []);
+  const [refresh] = useState(() =>
+    coalescedRefetch(async () => {
+      try {
+        setApprovals(sortApprovals(await listApprovals()));
+        setError("");
+      } catch (failure) {
+        setError(message(failure, "Could not load approvals"));
+      }
+    }),
+  );
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), REFRESH_MS);
-    return () => clearInterval(timer);
   }, [refresh]);
+  useConnectionsChanged(() => void refresh());
 
   const shown = approvals ? filterApprovals(approvals, filter) : [];
   const waiting = approvals ? pendingCount(approvals) : 0;
@@ -217,7 +213,7 @@ export function ApprovalModal({
     }
   }, [id]);
 
-  // Reload when the polled status moves, so a result arrives without a manual refresh.
+  // Reload when the listed status moves, so a result arrives without a manual refresh.
   useEffect(() => {
     void load();
   }, [load, status]);

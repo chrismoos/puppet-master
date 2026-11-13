@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { PmClient } from "@puppet-master/client-core/ws/client";
 import type { AppState } from "@puppet-master/client-core/state/reducer";
 
@@ -16,6 +16,21 @@ export function useAppState(): AppState {
   const client = useClient();
   // The server snapshot enables static renders, e.g. component tests.
   return useSyncExternalStore(client.subscribe, client.getState, client.getState);
+}
+
+/**
+ * Calls `refetch` whenever connections, connection calls or approvals may
+ * have changed, including after a reconnect. Without a client, as in a
+ * static render, it never fires.
+ */
+export function useConnectionsChanged(refetch: () => void, enabled = true): void {
+  const client = useContext(ClientContext);
+  const latest = useRef(refetch);
+  latest.current = refetch;
+  useEffect(() => {
+    if (!client || !enabled) return;
+    return client.onConnectionsChanged(() => latest.current());
+  }, [client, enabled]);
 }
 
 const TICK_INTERVAL_MS = 1_000;

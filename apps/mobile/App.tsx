@@ -363,11 +363,12 @@ export default function App() {
     routeTap(heldTap.current, "held");
   }, [hydrated, routeTap]);
 
-  // The menu badge only matters on the sessions list, so it is polled there.
+  // The menu badge only matters on the sessions list, so it is fetched there.
   const pendingApprovals = usePendingApprovalCount(
     auth,
     config?.baseUrl ?? null,
     screen.kind === "sessions" && authStatus.kind === "enrolled",
+    client.onConnectionsChanged,
   );
 
   const banner = connectionBanner(connPhase, authStatus, {
@@ -450,6 +451,7 @@ export default function App() {
           config={config}
           auth={auth}
           approvalId={screen.approvalId}
+          onConnectionsChanged={client.onConnectionsChanged}
           onSelect={(approvalId) => setScreen({ kind: "approvals", approvalId })}
           onBack={() => setScreen({ kind: "sessions" })}
         />

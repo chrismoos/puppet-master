@@ -12,6 +12,7 @@ vi.mock("../state/hooks", () => ({
     projects: new Map([["1", { id: 1n, name: "puppet-master" }]]),
     sessions: new Map([["797", { id: 797n, goal: "supervisor" }]]),
   }),
+  useConnectionsChanged: () => {},
 }));
 
 const HOUR = 60 * 60 * 1000;

@@ -198,6 +198,7 @@ export class PmClient {
   private alertListeners = new Set<(session: Session, kind: SessionAlertKind) => void>();
   private securityNoticeListeners = new Set<(notice: SecurityNotice) => void>();
   private agentReplyListeners = new Set<(reply: AgentReplyArrived) => void>();
+  private connectionsListeners = new Set<() => void>();
   private voiceListeners = new Set<(delta: VoiceDelta) => void>();
   private alertCatchUp = new AlertCatchUp();
   private ws: SocketLike | null = null;
@@ -311,6 +312,16 @@ export class PmClient {
   onAgentReply = (listener: (reply: AgentReplyArrived) => void): (() => void) => {
     this.agentReplyListeners.add(listener);
     return () => this.agentReplyListeners.delete(listener);
+  };
+
+  /**
+   * Fires when a connection, connection call or approval may have changed,
+   * and after every snapshot, since a change can land while the socket is
+   * down. Listeners refetch over HTTP, which scopes what the viewer sees.
+   */
+  onConnectionsChanged = (listener: () => void): (() => void) => {
+    this.connectionsListeners.add(listener);
+    return () => this.connectionsListeners.delete(listener);
   };
 
   /**
@@ -859,6 +870,10 @@ export class PmClient {
     for (const listener of this.alertListeners) listener(session, kind);
   }
 
+  private emitConnectionsChanged(): void {
+    for (const listener of this.connectionsListeners) listener();
+  }
+
   private emitSecurityNotice(notice: SecurityNotice): void {
     for (const listener of this.securityNoticeListeners) listener(notice);
   }
@@ -933,6 +948,7 @@ export class PmClient {
           this.emitAlert(session, kind);
         }
         for (const waiter of [...this.snapshotWaiters]) waiter.settle();
+        this.emitConnectionsChanged();
         break;
       }
       case "event": {
@@ -954,6 +970,7 @@ export class PmClient {
         if (msg.msg.value.event.case === "securityNotice") {
           this.emitSecurityNotice(msg.msg.value.event.value);
         }
+        if (msg.msg.value.event.case === "connectionsChanged") this.emitConnectionsChanged();
         if (msg.msg.value.event.case === "agentReplyArrived") {
           const reply = msg.msg.value.event.value;
           for (const listener of this.agentReplyListeners) listener(reply);

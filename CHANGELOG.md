@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Connections, connection calls and approvals update as soon as they change instead of every few seconds, and an open tab no longer polls for them. The iOS approvals list and badge do the same. A pending approval that runs out shows as expired without a reload.
+
 - [Daemon] A review you finished stays finished. Notices about review comments wait until the agent's turn ends and are dropped if you finished the review or resolved the comments meanwhile, a notice is never delivered twice, and an agent cannot reopen a finished review without saying so explicitly.
 
 - [Web] A bucket picture with rounded or transparent corners no longer shows a grey wedge and frame at each corner of its rail button. The button behind a picture is see-through, and hover, the current bucket and needs-input draw a ring around it.

@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { coalescedRefetch } from "@puppet-master/client-core/refetch";
 import { connectionRoutePath } from "@puppet-master/client-core/router";
 import {
   blankConnection,
@@ -27,7 +28,7 @@ import {
   type PolicyDraft,
 } from "../api/connections";
 import { startColumnResize } from "../columnResize";
-import { useAppState } from "../state/hooks";
+import { useAppState, useConnectionsChanged } from "../state/hooks";
 import {
   CONNECTION_PANEL_DISMISSED_KEY,
   CONNECTION_PANEL_MAX_WIDTH,
@@ -63,7 +64,6 @@ import { DEFAULT_PAGE_SIZE, paginate } from "./pagination";
 import { ConnectionUpdateReview } from "./ConnectionUpdateReview";
 import "./ConnectionsPanel.css";
 
-const REFRESH_MS = 2000;
 const MAX_OPENAPI_BYTES = 4 * 1024 * 1024;
 const BYTES_PER_KB = 1024;
 const POLICIES: Policy[] = ["allow", "approve", "deny"];
@@ -107,10 +107,7 @@ export function useConnections(enabled = true, sessionId?: string) {
   useEffect(() => {
     if (!enabled) return;
     let stopped = false;
-    let busy = false;
-    const refresh = async () => {
-      if (busy) return;
-      busy = true;
+    const refresh = coalescedRefetch(async () => {
       try {
         const [connections, calls] = await Promise.all([
           listConnections(),
@@ -129,18 +126,15 @@ export function useConnections(enabled = true, sessionId?: string) {
               ? error.message
               : "Could not load connections",
           );
-      } finally {
-        busy = false;
       }
-    };
+    });
     refreshRef.current = refresh;
     void refresh();
-    const timer = setInterval(() => void refresh(), REFRESH_MS);
     return () => {
       stopped = true;
-      clearInterval(timer);
     };
   }, [enabled, sessionId]);
+  useConnectionsChanged(() => void refreshRef.current(), enabled);
   return { connections, calls, error, loaded, refresh: () => refreshRef.current() };
 }
 

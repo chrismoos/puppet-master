@@ -10493,6 +10493,7 @@ impl Daemon {
                 // The user asked for this answer, so a scope narrowed to
                 // something else must not be what swallows it.
                 Event::AgentReplyArrived(_) => true,
+                Event::ConnectionsChanged => true,
                 _ => false,
             },
             Scope::Project(pid) => match event {
@@ -10532,6 +10533,7 @@ impl Daemon {
                     .unwrap_or(false),
                 Event::SecurityNotice(_) => true,
                 Event::AgentReplyArrived(_) => true,
+                Event::ConnectionsChanged => true,
                 _ => false,
             },
             Scope::Bucket(bid) => match event {
@@ -10604,6 +10606,7 @@ impl Daemon {
                 // out.
                 Event::SecurityNotice(_) => true,
                 Event::AgentReplyArrived(_) => true,
+                Event::ConnectionsChanged => true,
             },
         }
     }

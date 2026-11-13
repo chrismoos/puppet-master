@@ -2704,6 +2704,7 @@ impl From<Event> for wire::Event {
                 session_id: reply.session_id,
                 body: reply.body,
             }),
+            Event::ConnectionsChanged => W::ConnectionsChanged(wire::ConnectionsChanged {}),
         };
         wire::Event { event: Some(event) }
     }
@@ -2758,6 +2759,7 @@ impl TryFrom<wire::Event> for Event {
                 session_id: reply.session_id,
                 body: reply.body,
             }),
+            W::ConnectionsChanged(_) => Event::ConnectionsChanged,
         })
     }
 }
@@ -4324,6 +4326,7 @@ mod tests {
             }),
             ServerMsg::Event(Event::ModelProfileChanged(sample_model_profile())),
             ServerMsg::Event(Event::ModelProfileRemoved(11)),
+            ServerMsg::Event(Event::ConnectionsChanged),
             ServerMsg::Event(Event::ItemChanged(sample_item())),
             ServerMsg::Event(Event::ItemRemoved(ItemRef {
                 bucket_id: 1,

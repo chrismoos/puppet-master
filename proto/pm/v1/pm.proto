@@ -1336,6 +1336,10 @@ message AgentReplyArrived {
   string body = 3;
 }
 
+// A connection or connection call changed. It carries no data, because what
+// a client may read is scoped by the HTTP API, so a client refetches there.
+message ConnectionsChanged {}
+
 message CreateShell { uint64 session_id = 1; string title = 2; }
 message RestartTerminal { uint64 terminal_id = 1; }
 message CloseTerminal { uint64 terminal_id = 1; }
@@ -1642,6 +1646,7 @@ message Event {
     SessionAlert session_alert = 25;
     SecurityNotice security_notice = 26;
     AgentReplyArrived agent_reply_arrived = 27;
+    ConnectionsChanged connections_changed = 28;
   }
 }
 

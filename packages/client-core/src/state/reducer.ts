@@ -210,6 +210,9 @@ function applyEvent(state: AppState, event: Event): AppState {
     // nothing here for a later reader to need.
     case "agentReplyArrived":
       return state;
+    // Carries no data: listeners refetch connections over HTTP.
+    case "connectionsChanged":
+      return state;
     case "contextChanged": {
       const key = ev.value.sessionId.toString();
       if (!state.sessions.has(key)) return state;

@@ -1943,9 +1943,19 @@ pub struct SessionActivityUpdate {
 /// one connection is sufficient; async callers treat calls as cheap.
 pub struct Storage {
     pub(crate) conn: Mutex<Connection>,
+    connections_changed: std::sync::Arc<tokio::sync::Notify>,
 }
 
+/// Tables whose rows clients show as connections, calls and approvals.
+const CONNECTION_TABLES: [&str; 2] = ["connections", "connection_calls"];
+
 impl Storage {
+    /// Woken after any write to a connection or connection call, including a
+    /// rolled-back one.
+    pub(crate) fn connections_changed(&self) -> std::sync::Arc<tokio::sync::Notify> {
+        self.connections_changed.clone()
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         Self::init(Connection::open(path)?, true)
     }
@@ -2745,8 +2755,20 @@ impl Storage {
                 "DELETE FROM session_glance WHERE trim(key) = '' OR trim(value) = ''; \n                 DELETE FROM session_context WHERE trim(key) = '' OR trim(value) = '';",
             )?;
         }
+        let connections_changed = std::sync::Arc::new(tokio::sync::Notify::new());
+        let notify = connections_changed.clone();
+        // SQLite reports every changed row here, so a write site added later
+        // is covered without having to remember to announce it.
+        conn.update_hook(Some(
+            move |_: rusqlite::hooks::Action, _: &str, table: &str, _: i64| {
+                if CONNECTION_TABLES.contains(&table) {
+                    notify.notify_one();
+                }
+            },
+        ));
         Ok(Storage {
             conn: Mutex::new(conn),
+            connections_changed,
         })
     }
 

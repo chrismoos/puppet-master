@@ -54,6 +54,7 @@ pub struct ServerHandle {
     push_delivery_task: JoinHandle<()>,
     supervisor_wake_task: JoinHandle<()>,
     stale_turn_task: JoinHandle<()>,
+    connections_task: JoinHandle<()>,
     http_task: Option<JoinHandle<()>>,
 }
 
@@ -70,6 +71,7 @@ impl ServerHandle {
             self.push_delivery_task,
             self.supervisor_wake_task,
             self.stale_turn_task,
+            self.connections_task,
         ];
         if let Some(t) = self.http_task {
             tasks.push(t);
@@ -235,6 +237,15 @@ pub async fn start(
         }
     });
 
+    let connections_daemon = daemon.clone();
+    let connections_task = tokio::spawn(async move {
+        let announcer = connections_daemon.clone();
+        crate::connections::relay_connection_changes(connections_daemon.storage(), || {
+            announcer.publish(pm_protocol::domain::Event::ConnectionsChanged);
+        })
+        .await;
+    });
+
     let listener_daemon = daemon.clone();
     let listener_task = tokio::spawn(async move {
         loop {
@@ -298,6 +309,7 @@ pub async fn start(
         push_delivery_task,
         supervisor_wake_task,
         stale_turn_task,
+        connections_task,
         socket_path,
         http_addr: bound_addr,
         worker_addr: worker_plane_addr,

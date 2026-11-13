@@ -217,6 +217,8 @@ for (const narrow of [false, true]) {
       await expect(approval).toContainText("Update the reviewed order");
       await approval.getByText("Exact arguments", { exact: true }).click();
       await expect(approval.locator("pre")).toHaveText("{}");
+      if (!narrow)
+        await expect(page.getByRole("link", { name: "Approvals, 1 waiting" })).toBeVisible();
       expect(writes).toBe(0);
       await approval
         .getByRole("button", { name: "Approve and execute" })
@@ -496,4 +498,41 @@ test("a refused base URL reports what the API answered, and a read operation tes
       upstream.close((error) => (error ? reject(error) : resolve())),
     );
   }
+});
+
+test("connection views refetch when the daemon announces a change, and never poll", async ({
+  page,
+  isolatedDaemon,
+}) => {
+  await logIn(page);
+  await page
+    .locator(".sb-session")
+    .filter({ has: page.locator(".sb-session-title").getByText("browser-e2e", { exact: true }) })
+    .click();
+  await expect(page).toHaveURL(/#\/session\/\d+$/);
+  const panel = page.getByRole("complementary", { name: "Session connections" });
+  await expect(panel).toBeHidden();
+  // e2e-real-time-wait: lets the fetches made on load finish before counting
+  await page.waitForTimeout(1_500);
+  const fetched: string[] = [];
+  page.on("request", (request) => {
+    if (/\/api\/connection/.test(new URL(request.url()).pathname)) fetched.push(request.url());
+  });
+  // e2e-real-time-wait: the contract is that nothing is fetched over idle real time
+  await page.waitForTimeout(5_000);
+  expect(fetched).toEqual([]);
+
+  const cwd = isolatedDaemon.session("browser-e2e")!.cwd;
+  await writeFile(
+    join(cwd, "announced-openapi.json"),
+    JSON.stringify({ openapi: "3.1.0", paths: { "/orders": { get: { operationId: "list_orders" } } } }),
+  );
+  await isolatedDaemon.callAgentTool("browser-e2e", "seed_connection", {
+    name: "Announced API",
+    kind: "openapi",
+    endpoint: "http://127.0.0.1:9",
+    schema_path: "announced-openapi.json",
+  });
+  await expect(panel.getByRole("heading", { name: "Announced API" })).toBeVisible();
+  expect(fetched.length).toBeGreaterThan(0);
 });
