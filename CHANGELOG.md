@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- [iOS] The app builds with Expo SDK 56 and React Native 0.85, so `make ios-run` works with Xcode 27, where the Simulator became Device Hub.
+- [iOS] The app builds with Expo SDK 57 and React Native 0.86 and uses the scene-based app life cycle, so it launches when built with Xcode 27 and `make ios-run` finds the Simulator, which Xcode 27 renamed Device Hub.
   Migration: building the iOS app now needs a Swift 6.2-era Xcode or newer. Run `pnpm install`, then `make ios-reset` once to regenerate the iOS project.
 
 - [iOS] The phone no longer takes a terminal's size while the app is in the background, which could happen after a push or when iOS launched the app on its own.
