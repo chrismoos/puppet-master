@@ -1,3 +1,4 @@
+import { sessionEnded } from "../format";
 import { SessionRole, SessionState, type Session } from "../gen/pm/v1/pm_pb";
 
 /** The child states that mean a supervisor is waiting on work rather than out of it. */
@@ -37,4 +38,27 @@ export function displaySessionState(
   }
   if (running === 0) return session.state;
   return running === awaiting ? SessionState.AWAITING_WORKER : SessionState.WORKING;
+}
+
+export type SessionLookup = (id: string) => Session | undefined;
+
+function supervisorIsLive(session: Session, lookup: SessionLookup): boolean {
+  if (session.spawnedBySessionId === undefined) return false;
+  const supervisor = lookup(session.spawnedBySessionId.toString());
+  return supervisor !== undefined && supervisor.role === SessionRole.SUPERVISOR && !sessionEnded(supervisor);
+}
+
+/**
+ * Whether a session needs the user. A worker's question goes to its
+ * supervisor while that supervisor runs, which escalates with its own
+ * flag_blocked when it cannot answer, and comes back to the user once the
+ * supervisor has ended.
+ */
+export function awaitsUser(session: Session, lookup: SessionLookup): boolean {
+  return session.state === SessionState.NEEDS_INPUT && !supervisorIsLive(session, lookup);
+}
+
+/** Whether a session's question is waiting on its running supervisor rather than the user. */
+export function awaitsSupervisor(session: Session, lookup: SessionLookup): boolean {
+  return session.state === SessionState.NEEDS_INPUT && supervisorIsLive(session, lookup);
 }

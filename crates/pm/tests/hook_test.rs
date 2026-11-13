@@ -123,7 +123,11 @@ async fn pm_hook_binary_flips_session_state() {
         .into_iter()
         .find(|s| s.id == session_id)
         .unwrap();
-    assert_eq!(session.state, SessionState::NeedsInput);
+    assert_eq!(
+        session.state,
+        SessionState::Idle,
+        "a turn cannot end while its permission prompt is still open"
+    );
 
     run_hook("prompt-submitted", "").await;
     run_hook(

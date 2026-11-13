@@ -938,12 +938,12 @@ impl CodexAdapter {
             args.push("-c".into());
             args.push(c);
         }
-        // Emit an OSC9 desktop-notification escape into the PTY only
-        // when Codex pauses for approval, so the mux can detect
-        // needs-input; scoped to that one event and forced on
-        // regardless of terminal focus.
+        // Emit an OSC9 desktop-notification escape into the PTY only when
+        // Codex pauses for an approval or asks the user a question, so the
+        // mux can detect needs-input, forced on regardless of terminal
+        // focus. Codex ignores a name it does not know.
         for c in [
-            "tui.notifications=[\"approval-requested\"]",
+            "tui.notifications=[\"approval-requested\",\"async-question\"]",
             "tui.notification_method=\"osc9\"",
             "tui.notification_condition=\"always\"",
         ] {
@@ -1444,9 +1444,8 @@ fn opencode_plugin_js(pm_exe: &std::path::Path) -> String {
 
 // A permission or question is asked and answered inside a running turn,
 // so the answer never reaches the controller as a fresh submission: the
-// session below is already busy and the turn-ended hook preserves the
-// blocked state. Reporting each reply as a submission is what returns
-// the session to working.
+// session below is already busy. Reporting each reply as a submission is
+// what returns the session to working before the turn ends.
 const KINDS = {{
   "session.created": "session-start",
   "permission.asked": "needs-input",
@@ -2775,6 +2774,12 @@ mod tests {
             .args
             .iter()
             .any(|a| a == "--dangerously-bypass-hook-trust"));
+        assert!(plan.detect_osc9_needs_input);
+        assert_eq!(
+            config_value(&spec.args, "tui.notifications="),
+            Some("tui.notifications=[\"approval-requested\",\"async-question\"]"),
+            "both an approval and a question to the user mark needs-input"
+        );
 
         // The prompt is the trailing positional, left verbatim; the
         // reporting brief rides in developer_instructions instead.
@@ -3281,10 +3286,8 @@ console.log(JSON.stringify(sent));
 
     /// A permission is asked and answered inside a turn that never
     /// stopped, so the busy edge that normally reports a submission has
-    /// already been spent. Without the reply the session stays blocked
-    /// for the rest of its life: the controller preserves needs-input
-    /// across the turn end, and only a submission or a human typing into
-    /// the terminal clears it.
+    /// already been spent. Without the reply the session reads as blocked
+    /// for the rest of the turn.
     #[test]
     fn opencode_reports_an_answered_permission_as_a_submission() {
         let Some(sent) = hook_kinds_from_plugin(&[

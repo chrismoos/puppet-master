@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- [Daemon] A Codex session shows needs-input when it asks you a question, not only for an approval.
+
+- [Daemon] A session no longer stays on needs-input after you answer its approval prompt. It returns to working when the agent carries on, and to idle when its turn ends. Codex sessions were most affected.
+
+- [Web] A worker's question goes to its supervisor instead of flagging you. While the supervisor runs, the question is left out of the rail, the bucket counts, the needs-you list and the tab title, and its row reads "waiting on its supervisor". It counts for you again if the supervisor ends.
+
+- [Daemon] A supervisor is no longer woken about a worker it already saw through wait_sessions, or about one it killed itself.
+
 - [Web] The sidebar shows buckets as a rail of buttons by default. Settings → Appearance switches back to the dropdown, and an account that already chose one keeps it.
 
 - [Web] Rail buttons are a little larger, with bigger letters.

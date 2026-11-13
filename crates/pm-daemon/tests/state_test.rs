@@ -430,14 +430,12 @@ async fn turn_end_nudges_to_report_until_a_headline_is_set() {
 }
 
 #[tokio::test]
-async fn needs_input_survives_turn_end_until_user_input_acknowledges_it() {
+async fn a_question_survives_turn_end_until_user_input_acknowledges_it() {
     let env = daemon_env();
     let id = spawn_test_session(&env, "p");
     let token = env.daemon.session_token(id).unwrap().unwrap();
 
-    env.daemon
-        .handle_hook_event(&token, HookKind::NeedsInput, "pick one", "", "", false)
-        .unwrap();
+    env.daemon.apply_blocked(id, "pick one".into()).unwrap();
     env.daemon
         .handle_hook_event(&token, HookKind::TurnFailed, "rate_limit", "", "", false)
         .unwrap();
@@ -453,6 +451,67 @@ async fn needs_input_survives_turn_end_until_user_input_acknowledges_it() {
     env.daemon
         .terminal_input(terminal.id, bytes::Bytes::from_static(b"choice\r"));
     assert_eq!(state_of(&env, id), (SessionState::Working, String::new()));
+}
+
+#[tokio::test]
+async fn an_approval_prompt_ends_with_the_turn() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+
+    env.daemon
+        .handle_hook_event(&token, HookKind::NeedsInput, "Allow Bash?", "", "", false)
+        .unwrap();
+    env.daemon
+        .handle_hook_event(&token, HookKind::TurnEnded, "", "", "", false)
+        .unwrap();
+    assert_eq!(state_of(&env, id), (SessionState::Idle, String::new()));
+}
+
+#[tokio::test]
+async fn an_approval_the_terminal_raised_ends_with_the_turn() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    env.daemon
+        .handle_hook_event(&token, HookKind::PromptSubmitted, "", "", "", false)
+        .unwrap();
+
+    env.daemon.handle_pty_needs_input(id);
+    assert_eq!(state_of(&env, id).0, SessionState::NeedsInput);
+    env.daemon
+        .handle_hook_event(&token, HookKind::TurnEnded, "", "", "", false)
+        .unwrap();
+    assert_eq!(state_of(&env, id), (SessionState::Idle, String::new()));
+}
+
+#[tokio::test]
+async fn an_agent_tool_call_after_an_approval_resumes_working() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+
+    env.daemon.handle_pty_needs_input(id);
+    env.daemon.note_agent_tool_call(&token);
+    assert_eq!(state_of(&env, id), (SessionState::Working, String::new()));
+}
+
+#[tokio::test]
+async fn an_agent_tool_call_leaves_a_question_standing() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+
+    env.daemon.handle_pty_needs_input(id);
+    env.daemon
+        .apply_blocked(id, "which branch?".into())
+        .unwrap();
+    env.daemon.note_agent_tool_call(&token);
+    assert_eq!(
+        state_of(&env, id),
+        (SessionState::NeedsInput, "which branch?".into()),
+        "a supervisor keeps calling tools after flag_blocked, and its question must stand"
+    );
 }
 
 #[tokio::test]
@@ -669,9 +728,7 @@ async fn preserved_needs_input_never_gains_unseen_idle() {
     let id = spawn_test_session(&env, "p");
     let token = env.daemon.session_token(id).unwrap().unwrap();
 
-    env.daemon
-        .handle_hook_event(&token, HookKind::NeedsInput, "pick a db", "", "", false)
-        .unwrap();
+    env.daemon.apply_blocked(id, "pick a db".into()).unwrap();
     env.daemon
         .handle_hook_event(&token, HookKind::TurnEnded, "", "", "", false)
         .unwrap();

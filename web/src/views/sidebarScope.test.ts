@@ -27,6 +27,14 @@ const NOW = 10 * STALE_IDLE_MS;
 const session = (id: bigint, fields: MessageInitShape<typeof SessionSchema> = {}) =>
   create(SessionSchema, { id, projectId: 1n, state: SessionState.WORKING, ...fields });
 
+function sessionsOf(model: SidebarModel) {
+  const all = [
+    ...model.buckets.flatMap(({ supervisors, sessions }) => [...supervisors, ...sessions]),
+    ...model.orphans,
+  ];
+  return new Map(all.map((s) => [s.id.toString(), s]));
+}
+
 function model(): SidebarModel {
   return {
     buckets: [
@@ -36,6 +44,7 @@ function model(): SidebarModel {
         sessions: [
           session(11n, { state: SessionState.NEEDS_INPUT, spawnedBySessionId: 10n }),
           session(12n),
+          session(13n, { state: SessionState.NEEDS_INPUT }),
         ],
       },
       {
@@ -68,22 +77,32 @@ describe("the stored sidebar scope", () => {
 
 describe("scopeSidebar", () => {
   it("lists only the chosen bucket and drops unfiled sessions", () => {
-    const scoped = scopeSidebar(model(), { kind: "bucket", bucketId: "2" });
+    const full = model();
+    const scoped = scopeSidebar(full, { kind: "bucket", bucketId: "2" }, sessionsOf(full));
     expect(scoped.buckets.map(({ bucket }) => bucket.name)).toEqual(["bladerun"]);
     expect(scoped.orphans).toEqual([]);
   });
 
-  it("keeps sessions needing input in every bucket, with the supervisor they hang off", () => {
-    const scoped = scopeSidebar(model(), { kind: "needs" });
+  it("keeps sessions needing you in every bucket, leaving a running supervisor's worker to it", () => {
+    const full = model();
+    const scoped = scopeSidebar(full, { kind: "needs" }, sessionsOf(full));
     expect(scoped.buckets.map(({ bucket }) => bucket.name)).toEqual(["puppet-master"]);
-    expect(scoped.buckets[0].sessions.map((s) => s.id)).toEqual([11n]);
-    expect(scoped.buckets[0].supervisors.map((s) => s.id)).toEqual([10n]);
+    expect(scoped.buckets[0].sessions.map((s) => s.id)).toEqual([13n]);
+    expect(scoped.buckets[0].supervisors).toEqual([]);
     expect(scoped.orphans.map((s) => s.id)).toEqual([30n]);
+  });
+
+  it("lists a worker's question, under its supervisor, once that supervisor has ended", () => {
+    const full = model();
+    full.buckets[0].supervisors[0].state = SessionState.EXITED;
+    const scoped = scopeSidebar(full, { kind: "needs" }, sessionsOf(full));
+    expect(scoped.buckets[0].sessions.map((s) => s.id)).toEqual([11n, 13n]);
+    expect(scoped.buckets[0].supervisors.map((s) => s.id)).toEqual([10n]);
   });
 
   it("leaves the whole sidebar alone for every bucket", () => {
     const full = model();
-    expect(scopeSidebar(full, ALL_SCOPE)).toBe(full);
+    expect(scopeSidebar(full, ALL_SCOPE, sessionsOf(full))).toBe(full);
   });
 });
 
@@ -162,12 +181,13 @@ describe("bucket tallies", () => {
       ["3", session(3n, { state: SessionState.EXITED })],
       ["4", session(4n, { projectId: 2n, state: SessionState.IDLE, idleUnseen: true })],
       ["5", session(5n, { projectId: 99n })],
+      ["6", session(6n, { state: SessionState.NEEDS_INPUT, needsInputUnseen: true, spawnedBySessionId: 2n })],
     ]),
   };
 
-  it("counts live, needs-input and unseen sessions, skipping ended and unfiled ones", () => {
+  it("counts live, needs-you and unseen sessions, skipping ended and unfiled ones and supervised questions", () => {
     expect(Object.fromEntries(bucketTallies(state))).toEqual({
-      "1": { live: 2, needsInput: 1, needsInputUnseen: 1, finishedUnseen: 0 },
+      "1": { live: 3, needsInput: 1, needsInputUnseen: 1, finishedUnseen: 0 },
       "2": { live: 1, needsInput: 0, needsInputUnseen: 0, finishedUnseen: 1 },
     });
   });

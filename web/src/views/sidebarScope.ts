@@ -1,5 +1,6 @@
 import { sessionEnded, sessionLastActiveAt } from "@puppet-master/client-core/format";
 import { SessionState, type Session } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
+import { awaitsUser } from "@puppet-master/client-core/state/displayState";
 import type { AppState } from "@puppet-master/client-core/state/reducer";
 import type { SidebarModel } from "@puppet-master/client-core/state/sidebar";
 
@@ -30,8 +31,12 @@ export function effectiveScope(scope: SidebarScope, bucketIds: ReadonlySet<strin
   return scope.kind === "bucket" && !bucketIds.has(scope.bucketId) ? ALL_SCOPE : scope;
 }
 
-/** Keeps only the scoped bucket, or only sessions needing input. */
-export function scopeSidebar(model: SidebarModel, scope: SidebarScope): SidebarModel {
+/** Keeps only the scoped bucket, or only sessions needing the user. */
+export function scopeSidebar(
+  model: SidebarModel,
+  scope: SidebarScope,
+  sessions: ReadonlyMap<string, Session>,
+): SidebarModel {
   if (scope.kind === "all") return model;
   if (scope.kind === "bucket") {
     return {
@@ -40,7 +45,7 @@ export function scopeSidebar(model: SidebarModel, scope: SidebarScope): SidebarM
       order: model.order,
     };
   }
-  const needsInput = (session: Session) => session.state === SessionState.NEEDS_INPUT;
+  const needsInput = (session: Session) => awaitsUser(session, (id) => sessions.get(id));
   const buckets = model.buckets
     .map(({ bucket, supervisors, sessions }) => {
       const kept = sessions.filter(needsInput);
@@ -105,7 +110,7 @@ export interface BucketTally {
   finishedUnseen: number;
 }
 
-/** Live and needs-input counts per bucket id, over every session that has not ended. */
+/** Live and needs-you counts per bucket id, over every session that has not ended. */
 export function bucketTallies(state: Pick<AppState, "projects" | "sessions">): Map<string, BucketTally> {
   const bucketOfProject = new Map<string, string>();
   for (const project of state.projects.values()) {
@@ -118,7 +123,7 @@ export function bucketTallies(state: Pick<AppState, "projects" | "sessions">): M
     if (bucketId === undefined) continue;
     const tally = tallies.get(bucketId) ?? { live: 0, needsInput: 0, needsInputUnseen: 0, finishedUnseen: 0 };
     tally.live += 1;
-    if (session.state === SessionState.NEEDS_INPUT) {
+    if (awaitsUser(session, (id) => state.sessions.get(id))) {
       tally.needsInput += 1;
       if (session.needsInputUnseen) tally.needsInputUnseen += 1;
     }

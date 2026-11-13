@@ -939,3 +939,60 @@ async fn snooze_after_flag_blocked_delays_reminders_without_hiding_child_transit
     assert_eq!(wakes[0].sessions, vec![child]);
     assert_eq!(state_of(&env, supervisor), SessionState::NeedsInput);
 }
+
+#[tokio::test]
+async fn a_transition_seen_through_wait_sessions_does_not_wake_again() {
+    let env = daemon_env();
+    let supervisor = spawn_supervisor(&env);
+    let (child, _) = spawn_child(&env, supervisor, "wake:seen").await;
+    hook(&env, child, HookKind::TurnEnded, "");
+
+    let seen = env
+        .daemon
+        .supervisor_wait_sessions(
+            supervisor,
+            bucket_of(&env),
+            vec![child],
+            None,
+            std::time::Duration::from_millis(10),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(seen["sessions"][0]["state"], "idle");
+    end_supervisor_turn(&env, supervisor);
+    assert!(
+        env.daemon.process_supervisor_wakes().await.is_empty(),
+        "the supervisor already saw this child idle"
+    );
+
+    hook(&env, child, HookKind::PromptSubmitted, "");
+    hook(&env, child, HookKind::TurnEnded, "");
+    let wakes = env.daemon.process_supervisor_wakes().await;
+    assert_eq!(wakes.len(), 1, "a later turn end is news: {wakes:?}");
+    assert_eq!(wakes[0].sessions, vec![child]);
+}
+
+#[tokio::test]
+async fn a_child_its_supervisor_killed_does_not_wake_it() {
+    let env = daemon_env();
+    let supervisor = spawn_supervisor(&env);
+    let (child, _) = spawn_child(&env, supervisor, "wake:killed").await;
+
+    env.daemon.supervisor_kill(supervisor, child).unwrap();
+    // The gate reads the child's recorded state, so set it rather than
+    // racing a real process exit.
+    env.daemon.apply_worker_message(
+        0,
+        WorkerMsg::SessionState {
+            session_id: child,
+            state: SessionState::Exited,
+            detail: String::new(),
+        },
+    );
+    end_supervisor_turn(&env, supervisor);
+    assert!(
+        env.daemon.process_supervisor_wakes().await.is_empty(),
+        "the supervisor ended this child itself"
+    );
+}

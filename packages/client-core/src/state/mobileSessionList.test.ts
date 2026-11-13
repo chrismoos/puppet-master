@@ -69,12 +69,19 @@ describe("needsAttention", () => {
 // ---------------------------------------------------------------------------
 
 describe("groupNeedsAttention", () => {
-  it("returns true when any worker needs input", () => {
+  const running = makeSession(9n, SessionState.WORKING, { role: SessionRole.SUPERVISOR });
+  const ended = makeSession(9n, SessionState.EXITED, { role: SessionRole.SUPERVISOR });
+
+  it("leaves a worker's question to its running supervisor", () => {
     const workers = [
       makeSession(1n, SessionState.WORKING),
       makeSession(2n, SessionState.NEEDS_INPUT),
     ];
-    expect(groupNeedsAttention(workers)).toBe(true);
+    expect(groupNeedsAttention(workers, running)).toBe(false);
+  });
+
+  it("returns true for a worker's question once its supervisor has ended", () => {
+    expect(groupNeedsAttention([makeSession(2n, SessionState.NEEDS_INPUT)], ended)).toBe(true);
   });
 
   it("returns true when any worker has failed", () => {
@@ -82,7 +89,7 @@ describe("groupNeedsAttention", () => {
       makeSession(1n, SessionState.WORKING),
       makeSession(2n, SessionState.FAILED),
     ];
-    expect(groupNeedsAttention(workers)).toBe(true);
+    expect(groupNeedsAttention(workers, running)).toBe(true);
   });
 
   it("returns false when no worker needs attention", () => {
@@ -90,13 +97,14 @@ describe("groupNeedsAttention", () => {
       makeSession(1n, SessionState.WORKING),
       makeSession(2n, SessionState.IDLE),
     ];
-    expect(groupNeedsAttention(workers)).toBe(false);
+    expect(groupNeedsAttention(workers, running)).toBe(false);
   });
 
   it("returns false for empty workers array", () => {
-    expect(groupNeedsAttention([])).toBe(false);
+    expect(groupNeedsAttention([], running)).toBe(false);
   });
 });
+
 
 // ---------------------------------------------------------------------------
 // groupLastActiveAt
@@ -226,7 +234,7 @@ describe("buildMobileSessionList — grouping", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildMobileSessionList — attention propagation", () => {
-  it("propagates needs-input from a worker to the group", () => {
+  it("leaves a worker's question to its running supervisor", () => {
     const sup = makeSession(1n, SessionState.IDLE, { role: SessionRole.SUPERVISOR });
     const w = makeSession(2n, SessionState.NEEDS_INPUT, {
       role: SessionRole.WORKER,
@@ -235,6 +243,20 @@ describe("buildMobileSessionList — attention propagation", () => {
 
     const entries = buildMobileSessionList([sup, w]);
     expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe("group");
+    if (entries[0].kind === "group") {
+      expect(entries[0].needsAttention).toBe(false);
+    }
+  });
+
+  it("propagates a worker's question to the group once its supervisor has ended", () => {
+    const sup = makeSession(1n, SessionState.EXITED, { role: SessionRole.SUPERVISOR });
+    const w = makeSession(2n, SessionState.NEEDS_INPUT, {
+      role: SessionRole.WORKER,
+      spawnedBy: 1n,
+    });
+
+    const entries = buildMobileSessionList([sup, w]);
     expect(entries[0].kind).toBe("group");
     if (entries[0].kind === "group") {
       expect(entries[0].needsAttention).toBe(true);

@@ -415,7 +415,7 @@ function Shell({
       console.error("failed to mark session attention seen", reason);
     });
   }, [client, selectedId, selectedAttentionUnseen]);
-  const unread = needsInputCount(state.sessions.values());
+  const unread = needsInputCount(state.sessions);
 
   useEffect(() => {
     if (!focusMode) return;

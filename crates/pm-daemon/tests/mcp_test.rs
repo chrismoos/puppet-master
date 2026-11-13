@@ -480,6 +480,24 @@ async fn list_items_pages_summary_rows_and_get_items_reads_the_full_text() {
 }
 
 #[tokio::test]
+async fn a_tool_call_after_an_approval_prompt_returns_the_session_to_working() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    let app = pm_daemon::http::router(Arc::clone(&env.daemon));
+
+    env.daemon.handle_pty_needs_input(id);
+    assert_eq!(session_of(&env, id).state, SessionState::NeedsInput);
+    let reported = call(&app, &token, "report", json!({"headline": "ran it"})).await;
+    assert_eq!(reported["isError"], false, "{reported}");
+    assert_eq!(
+        session_of(&env, id).state,
+        SessionState::Working,
+        "an agent cannot call tools while its approval prompt is open"
+    );
+}
+
+#[tokio::test]
 async fn a_report_moves_the_shown_activity_clock() {
     let env = daemon_env();
     let id = spawn_test_session(&env, "p");

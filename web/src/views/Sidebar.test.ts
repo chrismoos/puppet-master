@@ -9,6 +9,7 @@ import {
   DescendantAttention,
   filterSidebarByState,
   needsInputAttention,
+  needsInputCount,
   nextSupervisorFilter,
   rollupCounts,
   rollupState,
@@ -63,6 +64,8 @@ describe("sessionAccessibleLabel", () => {
     expect(sessionAccessibleLabel(session)).toBe("Choose the rollout window, needs input, viewed but unanswered");
     session.needsInputUnseen = true;
     expect(sessionAccessibleLabel(session)).toBe("Choose the rollout window, needs input, unseen attention");
+    expect(sessionAccessibleLabel(session, session.state, true))
+      .toBe("Choose the rollout window, needs input, waiting on its supervisor");
   });
 
   it("distinguishes a freshly finished idle session from a viewed one", () => {
@@ -93,6 +96,13 @@ describe("sessionAccessibleLabel", () => {
 });
 
 describe("sessionRowClass", () => {
+  it("gives a question waiting on its supervisor the quiet look instead of the amber one", () => {
+    const blocked = create(SessionSchema, { state: SessionState.NEEDS_INPUT, needsInputUnseen: true });
+    expect(sessionRowClass(blocked, { child: true, awaitingSupervisor: true }))
+      .toBe("sb-session-row sb-child is-awaiting-supervisor");
+    expect(sessionRowClass(blocked)).toBe("sb-session-row is-needs-input is-attention-unseen");
+  });
+
   it("marks a freshly finished idle session on child and top-level rows", () => {
     const fresh = create(SessionSchema, { state: SessionState.IDLE, idleUnseen: true });
     expect(sessionRowClass(fresh, { child: true })).toBe("sb-session-row sb-child is-idle-fresh");
@@ -129,13 +139,27 @@ describe("sessionRowClass", () => {
 });
 
 describe("NeedsInput attention", () => {
-  it("aggregates unseen and seen descendants separately", () => {
+  it("counts only unseen questions that are the user's to answer", () => {
+    const sessions = new Map([
+      ["1", create(SessionSchema, { id: 1n, role: SessionRole.SUPERVISOR, state: SessionState.WORKING })],
+      ["2", create(SessionSchema, { id: 2n, state: SessionState.NEEDS_INPUT, needsInputUnseen: true })],
+      ["3", create(SessionSchema, { id: 3n, state: SessionState.NEEDS_INPUT, needsInputUnseen: true, spawnedBySessionId: 1n })],
+      ["4", create(SessionSchema, { id: 4n, state: SessionState.NEEDS_INPUT, needsInputUnseen: false })],
+    ]);
+    expect(needsInputCount(sessions)).toBe(1);
+  });
+
+  it("aggregates unseen and seen descendants separately, skipping questions their supervisor holds", () => {
+    const supervisor = create(SessionSchema, { id: 1n, role: SessionRole.SUPERVISOR, state: SessionState.WORKING });
     const sessions = [
-      create(SessionSchema, { state: SessionState.NEEDS_INPUT, needsInputUnseen: true }),
-      create(SessionSchema, { state: SessionState.NEEDS_INPUT, needsInputUnseen: false }),
-      create(SessionSchema, { state: SessionState.WORKING, needsInputUnseen: true }),
+      supervisor,
+      create(SessionSchema, { id: 2n, state: SessionState.NEEDS_INPUT, needsInputUnseen: true }),
+      create(SessionSchema, { id: 3n, state: SessionState.NEEDS_INPUT, needsInputUnseen: false }),
+      create(SessionSchema, { id: 4n, state: SessionState.WORKING, needsInputUnseen: true }),
+      create(SessionSchema, { id: 5n, state: SessionState.NEEDS_INPUT, needsInputUnseen: true, spawnedBySessionId: 1n }),
     ];
-    expect(needsInputAttention(sessions)).toEqual({ unseen: 1, seen: 1 });
+    const lookup = (id: string) => sessions.find((s) => s.id.toString() === id);
+    expect(needsInputAttention(sessions, lookup)).toEqual({ unseen: 1, seen: 1 });
 
     const unseen = renderToStaticMarkup(createElement(DescendantAttention, {
       attention: { unseen: 1, seen: 1 },
@@ -308,12 +332,13 @@ describe("SupervisorNode", () => {
       ...overrides,
     }));
 
-  it("meters the workers by state and leads the brief summary with what needs the user", () => {
+  it("meters the workers by state and leads the brief summary with the blocked workers", () => {
     const markup = render();
 
     expect(markup).toContain('aria-label="2 running, 2 blocked, 1 ready, 1 failed"');
     expect(markup).toContain('class="m-needs-input"');
-    expect(markup).toContain("need you");
+    expect(briefOf(markup)).toContain("<b>2</b> blocked");
+    expect(markup).not.toContain("need you");
     expect(markup).toContain("6 workers");
     expect(markup).toContain('aria-expanded="true"');
   });
@@ -364,13 +389,22 @@ describe("SupervisorNode", () => {
     expect(brief).not.toContain("all quiet");
   });
 
-  it("still leads with what needs the user while workers are running", () => {
+  it("still leads with the blocked workers while others are running", () => {
     const brief = briefOf(render({
       workers: [worker(1n, SessionState.WORKING), worker(2n, SessionState.NEEDS_INPUT)],
     }));
 
-    expect(brief).toContain("need you");
+    expect(brief).toContain("blocked");
     expect(brief).not.toContain("running");
+  });
+
+  it("says the blocked workers need the user once their supervisor has ended", () => {
+    const brief = briefOf(render({
+      supervisorEnded: true,
+      workers: [worker(1n, SessionState.WORKING), worker(2n, SessionState.NEEDS_INPUT)],
+    }));
+
+    expect(brief).toContain("<b>1</b> need you");
   });
 
   it("shows no worker rows at all while collapsed", () => {

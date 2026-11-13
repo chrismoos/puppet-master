@@ -277,9 +277,12 @@ test("the live sidebar files spawned sessions under their supervisor and nowhere
   const supervisor = page.locator(".sb-supervisor").filter({ hasText: "tree-boss" });
   await expect(supervisor.locator(".sb-child")).toHaveCount(2);
 
-  // A restart recovers every session as idle, so the blocked one is hooked live.
+  // A restart recovers every session as idle, so the blocked one is hooked
+  // live. Its question is the running supervisor's to answer, so the row
+  // takes the quiet look rather than asking the user.
   isolatedDaemon.hookSession("tree-worker-blocked", "needs-input", "Choose the rollout window");
-  await expect(supervisor.locator(".sb-child.is-needs-input")).toHaveCount(1);
+  await expect(supervisor.locator(".sb-child.is-awaiting-supervisor")).toHaveCount(1);
+  await expect(supervisor.locator(".sb-child.is-needs-input")).toHaveCount(0);
   await expect(supervisor.locator(".sb-child .sb-session-title")).toHaveText([
     "tree-worker-blocked",
     "tree-worker-running",
@@ -288,7 +291,7 @@ test("the live sidebar files spawned sessions under their supervisor and nowhere
   await expect(page.locator(".sb-bucket > .sb-session-row .sb-session-title", { hasText: "tree-worker-" })).toHaveCount(0);
 
   const rollup = supervisor.locator(".sb-rollup");
-  await expect(rollup.locator(".sb-rollup-summary-brief")).toContainText("1 need you");
+  await expect(rollup.locator(".sb-rollup-summary-brief")).toContainText("1 blocked");
   await expect(rollup.locator(".sb-rollup-summary-brief")).toContainText("2 workers");
 
   const caret = rollup.locator(".sb-rollup-toggle");
@@ -407,9 +410,10 @@ test("an idle supervisor reads as running only while a worker it spawned is goin
   await expect(brief).not.toContainText("all quiet");
 
   // A worker that stops to ask a question is not the supervisor's own
-  // question, so the row goes back to green and the rollup says who needs you.
+  // question, and is the running supervisor's to answer, so the row goes
+  // back to green and the rollup reports the worker as blocked.
   isolatedDaemon.hookSession("wait-worker", "needs-input", "Choose the rollout window");
   await expect(dot).toHaveClass(/st-idle/);
   await expect(row.locator(".sb-session")).toHaveAttribute("aria-label", /, idle$/);
-  await expect(brief).toContainText("1 need you");
+  await expect(brief).toContainText("1 blocked");
 });

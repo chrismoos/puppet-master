@@ -285,6 +285,11 @@ pub struct Daemon {
     /// Hot-path PTY observations waiting for the periodic SQLite
     /// checkpoint. Values are maxima, so coalescing loses no recency.
     pending_session_activity: Mutex<std::collections::HashMap<u64, PendingSessionActivity>>,
+    /// Sessions whose current needs-input is a tool approval prompt rather
+    /// than a question from flag_blocked. Neither agent reports answering
+    /// an approval, so its needs-input clears on the agent's next tool call
+    /// or turn end instead of persisting like a question.
+    approval_prompts: Mutex<HashSet<u64>>,
     /// Terminal-id keyed because a session's agent terminal is stable while
     /// its generation increments on resume/recovery.
     generation_lifecycle: Mutex<std::collections::HashMap<u64, GenerationLifecycle>>,
@@ -1483,6 +1488,7 @@ impl Daemon {
             workers: crate::workers::WorkerRegistry::default(),
             terminal_workers: Mutex::new(std::collections::HashMap::new()),
             pending_session_activity: Mutex::new(std::collections::HashMap::new()),
+            approval_prompts: Mutex::new(HashSet::new()),
             generation_lifecycle: Mutex::new(std::collections::HashMap::new()),
             program_status: Default::default(),
             worker_epochs: Mutex::new(std::collections::HashMap::new()),
@@ -1625,8 +1631,9 @@ impl Daemon {
         if let Ok(updated) = self.storage.update_session_state(
             session_id,
             SessionState::NeedsInput,
-            "waiting for approval",
+            "waiting for your answer",
         ) {
+            self.approval_prompts.lock().unwrap().insert(session_id);
             info!(session = session_id, "pty needs-input signal");
             self.publish(Event::SessionChanged(updated));
         }
@@ -1641,8 +1648,35 @@ impl Daemon {
         let updated =
             self.storage
                 .update_session_state(session_id, SessionState::NeedsInput, detail)?;
+        self.approval_prompts.lock().unwrap().remove(&session_id);
         self.publish(Event::SessionChanged(updated));
         Ok(())
+    }
+
+    /// Moves a session waiting on a tool approval back to working once its
+    /// agent makes a tool call, which it cannot do while the prompt is open.
+    pub fn note_agent_tool_call(&self, session_token: &str) {
+        let Ok(Some(session_id)) = self.storage.get_session_id_by_token(session_token) else {
+            return;
+        };
+        let _guard = self.state_lock.lock().unwrap();
+        if !self.approval_prompts.lock().unwrap().remove(&session_id) {
+            return;
+        }
+        let waiting = self
+            .storage
+            .get_session(session_id)
+            .is_ok_and(|session| session.state == SessionState::NeedsInput);
+        if !waiting {
+            return;
+        }
+        if let Ok(updated) =
+            self.storage
+                .update_session_state(session_id, SessionState::Working, "")
+        {
+            info!(session = session_id, "approval answered, agent resumed");
+            self.publish(Event::SessionChanged(updated));
+        }
     }
 
     pub(crate) fn storage(&self) -> &Storage {
@@ -4490,8 +4524,19 @@ impl Daemon {
         ) {
             self.storage.record_agent_turn(session_id, now_unix_ms())?;
         }
+        let approval_prompt = {
+            let mut prompts = self.approval_prompts.lock().unwrap();
+            match kind {
+                HookKind::NeedsInput => {
+                    prompts.insert(session_id);
+                    true
+                }
+                _ => prompts.remove(&session_id),
+            }
+        };
         let preserves_needs_input = matches!(kind, HookKind::TurnEnded | HookKind::TurnFailed)
-            && previous_state == SessionState::NeedsInput;
+            && previous_state == SessionState::NeedsInput
+            && !approval_prompt;
         let (hook_state, hook_detail) = if preserves_needs_input {
             (previous_state, previous_detail)
         } else {
@@ -6294,6 +6339,7 @@ impl Daemon {
                 ts_unix_ms: now_unix_ms(),
             },
         )?;
+        self.approval_prompts.lock().unwrap().remove(&session_id);
         info!(session = session_id, "agent blocked");
         self.publish(Event::SessionChanged(updated));
         Ok(None)
@@ -7842,6 +7888,7 @@ impl Daemon {
 
     pub fn supervisor_kill(&self, supervisor_id: u64, session_id: u64) -> Result<(), DaemonError> {
         self.supervised(supervisor_id, session_id)?;
+        self.supervisor_wake().note_supervisor_kill(session_id);
         self.kill_session(session_id)?;
         self.supervised_item_note(
             supervisor_id,
@@ -8008,6 +8055,27 @@ impl Daemon {
         // State mutation + lifecycle publication use this same lock, making
         // the snapshots and cursor one atomic observation.
         let _guard = self.state_lock.lock().unwrap();
+        let response = self.ready_wait_response_locked(
+            supervisor_id,
+            bucket_id,
+            session_ids,
+            after_cursor,
+            states,
+        )?;
+        if response.is_some() {
+            self.note_children_observed(supervisor_id, session_ids);
+        }
+        Ok(response)
+    }
+
+    fn ready_wait_response_locked(
+        &self,
+        supervisor_id: u64,
+        bucket_id: u64,
+        session_ids: &[u64],
+        after_cursor: Option<u64>,
+        states: &HashSet<SessionState>,
+    ) -> Result<Option<serde_json::Value>, DaemonError> {
         let (latest_cursor, snapshots, unavailable) =
             self.supervisor_wait_scope(supervisor_id, bucket_id, session_ids)?;
         if let Some((reason, session_id)) = unavailable {
@@ -8094,6 +8162,7 @@ impl Daemon {
         let _guard = self.state_lock.lock().unwrap();
         let (cursor, snapshots, unavailable) =
             self.supervisor_wait_scope(supervisor_id, bucket_id, session_ids)?;
+        self.note_children_observed(supervisor_id, session_ids);
         if let Some((reason, session_id)) = unavailable {
             return Ok(Self::wait_response(
                 reason,

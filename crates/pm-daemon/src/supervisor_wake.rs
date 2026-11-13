@@ -200,6 +200,9 @@ pub(crate) struct SupervisorWakeRuntime {
     /// runs on a timer, so a reason is logged when it changes rather than
     /// on every pass.
     quiet_reason: Mutex<HashMap<u64, &'static str>>,
+    /// Children their supervisor killed. Their exit is the supervisor's own
+    /// doing, so it is never announced back to it.
+    killed_by_supervisor: Mutex<std::collections::HashSet<u64>>,
     wakeup: tokio::sync::Notify,
 }
 
@@ -212,6 +215,7 @@ impl Default for SupervisorWakeRuntime {
             idle_nudges: Mutex::new(HashMap::new()),
             pending_notices: Mutex::new(HashMap::new()),
             quiet_reason: Mutex::new(HashMap::new()),
+            killed_by_supervisor: Mutex::new(std::collections::HashSet::new()),
             wakeup: tokio::sync::Notify::new(),
         }
     }
@@ -261,6 +265,21 @@ impl SupervisorWakeRuntime {
         self.last_wake_unix_ms.lock().unwrap().remove(&session_id);
         self.idle_nudges.lock().unwrap().remove(&session_id);
         self.pending_notices.lock().unwrap().remove(&session_id);
+        self.killed_by_supervisor
+            .lock()
+            .unwrap()
+            .remove(&session_id);
+    }
+
+    pub(crate) fn note_supervisor_kill(&self, session_id: u64) {
+        self.killed_by_supervisor.lock().unwrap().insert(session_id);
+    }
+
+    fn killed_by_supervisor(&self, session_id: u64) -> bool {
+        self.killed_by_supervisor
+            .lock()
+            .unwrap()
+            .contains(&session_id)
     }
 
     fn throttle_allows(&self, supervisor_id: u64, now: i64) -> bool {
@@ -454,6 +473,24 @@ impl Daemon {
         };
         if let Some(key) = self.child_wake_key(&child) {
             self.announce_child(session_id, key);
+        }
+    }
+
+    /// Marks the current transition of every listed child this supervisor
+    /// spawned as announced, because a wait_sessions result just showed it.
+    /// The caller holds the state lock so no transition lands between the
+    /// snapshot and the mark.
+    pub(crate) fn note_children_observed(&self, supervisor_id: u64, session_ids: &[u64]) {
+        for &session_id in session_ids {
+            let Ok(child) = self.storage().get_session(session_id) else {
+                continue;
+            };
+            if child.spawned_by_session_id != Some(supervisor_id) {
+                continue;
+            }
+            if let Some(key) = self.child_wake_key(&child) {
+                self.announce_child(session_id, key);
+            }
         }
     }
 
@@ -799,6 +836,12 @@ impl Daemon {
                 continue;
             };
             if self.supervisor_wake().announced_already(child.id, &key) {
+                continue;
+            }
+            if child.state == SessionState::Exited
+                && self.supervisor_wake().killed_by_supervisor(child.id)
+            {
+                self.announce_child(child.id, key);
                 continue;
             }
             pending.push((child.id, child.state, key));

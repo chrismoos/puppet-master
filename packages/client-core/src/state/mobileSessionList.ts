@@ -1,4 +1,4 @@
-import { sessionLastActiveAt } from "../format";
+import { sessionEnded, sessionLastActiveAt } from "../format";
 import { SessionRole, SessionState, type Project, type Session } from "../gen/pm/v1/pm_pb";
 
 // ---------------------------------------------------------------------------
@@ -104,9 +104,16 @@ export function needsAttention(session: Session): boolean {
   return session.state === SessionState.NEEDS_INPUT || session.state === SessionState.FAILED;
 }
 
-/** Whether any worker in the list needs attention. */
-export function groupNeedsAttention(workers: Session[]): boolean {
-  return workers.some(needsAttention);
+/**
+ * Whether any worker under a supervisor needs the user. A worker's question
+ * is its running supervisor's to answer, so it counts only once the
+ * supervisor has ended.
+ */
+export function groupNeedsAttention(workers: Session[], supervisor: Session): boolean {
+  const supervisorRunning = !sessionEnded(supervisor);
+  return workers.some(
+    (worker) => needsAttention(worker) && !(supervisorRunning && worker.state === SessionState.NEEDS_INPUT),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +173,7 @@ export function buildMobileSessionList(sessions: Iterable<Session>): MobileListE
       kind: "group",
       supervisor,
       workers,
-      needsAttention: needsAttention(supervisor) || groupNeedsAttention(workers),
+      needsAttention: needsAttention(supervisor) || groupNeedsAttention(workers, supervisor),
     });
   }
 

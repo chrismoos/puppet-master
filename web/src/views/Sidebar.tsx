@@ -32,7 +32,12 @@ import {
 } from "@puppet-master/client-core/state/permission";
 import { notifyUnsupportedLabel, notifyUnsupportedMessage, type NotifySupport } from "@puppet-master/client-core/state/notify";
 import { needsYouCount } from "@puppet-master/client-core/state/board";
-import { displaySessionState } from "@puppet-master/client-core/state/displayState";
+import {
+  awaitsSupervisor,
+  awaitsUser,
+  displaySessionState,
+  type SessionLookup,
+} from "@puppet-master/client-core/state/displayState";
 import {
   buildSidebar,
   type SidebarBucket,
@@ -87,9 +92,12 @@ export interface NotifyControls {
 export function sessionAccessibleLabel(
   session: Session,
   display: SessionState = session.state,
+  awaitingSupervisor = false,
 ): string {
   const attention = display === SessionState.NEEDS_INPUT
-    ? session.needsInputUnseen ? ", unseen attention" : ", viewed but unanswered"
+    ? awaitingSupervisor
+      ? ", waiting on its supervisor"
+      : session.needsInputUnseen ? ", unseen attention" : ", viewed but unanswered"
     : display === SessionState.IDLE && session.idleUnseen
       ? ", freshly finished"
       : "";
@@ -99,14 +107,15 @@ export function sessionAccessibleLabel(
 /** The row container's state classes, shared by top-level and child rows. */
 export function sessionRowClass(
   session: Session,
-  options: { child?: boolean; selected?: boolean; display?: SessionState } = {},
+  options: { child?: boolean; selected?: boolean; display?: SessionState; awaitingSupervisor?: boolean } = {},
 ): string {
   const display = options.display ?? session.state;
-  const needsInput = display === SessionState.NEEDS_INPUT;
+  const needsInput = display === SessionState.NEEDS_INPUT && !options.awaitingSupervisor;
   return [
     "sb-session-row",
     options.child ? "sb-child" : "",
     options.selected ? "is-selected" : "",
+    options.awaitingSupervisor ? "is-awaiting-supervisor" : "",
     needsInput
       ? `is-needs-input ${session.needsInputUnseen ? "is-attention-unseen" : "is-attention-seen"}`
       : "",
@@ -116,10 +125,10 @@ export function sessionRowClass(
 
 export interface NeedsInputAttention { unseen: number; seen: number }
 
-export function needsInputAttention(sessions: Iterable<Session>): NeedsInputAttention {
+export function needsInputAttention(sessions: Iterable<Session>, lookup: SessionLookup): NeedsInputAttention {
   const attention = { unseen: 0, seen: 0 };
   for (const session of sessions) {
-    if (session.state !== SessionState.NEEDS_INPUT) continue;
+    if (!awaitsUser(session, lookup)) continue;
     if (session.needsInputUnseen) attention.unseen += 1;
     else attention.seen += 1;
   }
@@ -372,6 +381,7 @@ export function SupervisorNode({
   row,
   workers,
   label,
+  supervisorEnded = false,
   collapsed,
   filter,
   emptyNote,
@@ -383,6 +393,8 @@ export function SupervisorNode({
   row: ReactNode;
   workers: Session[];
   label: string;
+  /** Workers' questions are the user's only once their supervisor has ended. */
+  supervisorEnded?: boolean;
   collapsed: boolean;
   filter: RollupState | null;
   /** Why the list is empty, when a state filter is the reason. A supervisor
@@ -453,7 +465,7 @@ export function SupervisorNode({
           <span className="sb-rollup-summary-brief">
             {lead ? (
               <>
-                {tally(lead, lead === "needs-input" ? "need you" : ROLLUP_LABEL[lead])}
+                {tally(lead, lead === "needs-input" && supervisorEnded ? "need you" : ROLLUP_LABEL[lead])}
                 <span className="sb-rollup-sep">·</span>
                 <span className="sb-rollup-quiet">{total} {plural}</span>
               </>
@@ -889,11 +901,12 @@ export function Sidebar({
     : undefined;
   const listedIds = listingResults ? searchIds : null;
   const fullModel = buildSidebar(state, listedIds ? true : showEnded, selectedId, listedIds, searchOrder);
-  const scopedModel = listingResults ? fullModel : scopeSidebar(fullModel, scope);
+  const scopedModel = listingResults ? fullModel : scopeSidebar(fullModel, scope, state.sessions);
   const model = stateFilter ? filterSidebarByState(scopedModel, stateFilter) : scopedModel;
   const singleBucket = !listingResults && scope.kind === "bucket";
   const sidebarStyle = parseSidebarStyle(state.userSettings.get(USER_SIDEBAR_STYLE_KEY));
   const tallies = bucketTallies(state);
+  const lookupSession = (sessionId: string) => state.sessions.get(sessionId);
   const switcherBuckets = fullModel.buckets.map(({ bucket }) => {
     const tally = tallies.get(bucket.id.toString());
     return {
@@ -927,7 +940,7 @@ export function Sidebar({
   const sessionToReopen = (bucketId: string): string | null => {
     const remembered = rememberedSessions().get(bucketId);
     if (remembered && bucketOfSession(state, remembered) === bucketId) return remembered;
-    const listed = scopeSidebar(fullModel, { kind: "bucket", bucketId }).buckets[0];
+    const listed = scopeSidebar(fullModel, { kind: "bucket", bucketId }, state.sessions).buckets[0];
     if (!listed) return null;
     const entries = supervisorTree(listed, model.order).entries;
     const older = new Set(olderRows(entries, rowMembers, now, null));
@@ -1084,7 +1097,8 @@ export function Sidebar({
     const linkedItem = linkedItemSummary(state, session);
     const selected = id === selectedId;
     const display = displaySessionState(session, nesting.workers ?? []);
-    const needsInput = display === SessionState.NEEDS_INPUT;
+    const awaitingSupervisor = awaitsSupervisor(session, lookupSession);
+    const needsInput = display === SessionState.NEEDS_INPUT && !awaitingSupervisor;
     const unseen = needsInput && session.needsInputUnseen;
     const ended = sessionEnded(session);
     const activity = ended
@@ -1092,13 +1106,13 @@ export function Sidebar({
       : sessionLastActivity(session, now);
     const activityTitle = ended ? activity : sessionLastActivityTitle(session, now);
     return (
-      <div className={sessionRowClass(session, { child: nesting.child, selected, display })} key={id}>
+      <div className={sessionRowClass(session, { child: nesting.child, selected, display, awaitingSupervisor })} key={id}>
         <div className="sb-session-main">
           <button
             type="button"
             draggable
             className={`sb-session ${selected ? "is-selected" : ""} ${needsInput ? "is-needs-input" : ""}`}
-            aria-label={sessionAccessibleLabel(session, display)}
+            aria-label={sessionAccessibleLabel(session, display, awaitingSupervisor)}
             aria-current={selected ? "page" : undefined}
             title="Open session home. Shift-click to add its agent to the active workspace."
             onPointerDown={(event) => {
@@ -1122,7 +1136,7 @@ export function Sidebar({
             }}
           >
             <span className="sb-session-gutter">
-              <StateBadge state={display} dot seen={needsInput && !unseen} />
+              <StateBadge state={display} dot seen={awaitingSupervisor || (needsInput && !unseen)} />
             </span>
             <span className="sb-session-content">
               <SessionRowText session={session} />
@@ -1300,7 +1314,7 @@ export function Sidebar({
         {model.buckets.map(({ bucket, supervisors, sessions }) => {
           const bid = bucket.id.toString();
           const bucketCollapsed = !singleBucket && collapsedBuckets.has(bid);
-          const bucketAttention = needsInputAttention([...supervisors, ...sessions]);
+          const bucketAttention = needsInputAttention([...supervisors, ...sessions], lookupSession);
           const tree = supervisorTree({ bucket, supervisors, sessions }, model.order);
           const stale = singleBucket ? olderRows(tree.entries, rowMembers, now, selectedId) : [];
           const fresh = stale.length > 0 ? tree.entries.filter((entry) => !stale.includes(entry)) : tree.entries;
@@ -1314,6 +1328,7 @@ export function Sidebar({
                 row={renderRow(supervisor, { workers })}
                 workers={workers}
                 label={sessionDisplayName(supervisor)}
+                supervisorEnded={sessionEnded(supervisor)}
                 collapsed={collapsedSupervisors.has(sid)}
                 filter={supervisorFilters.get(sid) ?? null}
                 emptyNote={stateFilter ? `no ${ROLLUP_LABEL[stateFilter]} workers` : undefined}
@@ -1548,8 +1563,10 @@ function NotifyToggle({ notify }: { notify: NotifyControls }) {
   );
 }
 
-export function needsInputCount(sessions: Iterable<Session>): number {
+/** Unseen questions that are the user's to answer. */
+export function needsInputCount(sessions: ReadonlyMap<string, Session>): number {
   let count = 0;
-  for (const s of sessions) if (s.needsInputUnseen) count += 1;
+  const lookup = (id: string) => sessions.get(id);
+  for (const s of sessions.values()) if (s.needsInputUnseen && awaitsUser(s, lookup)) count += 1;
   return count;
 }
