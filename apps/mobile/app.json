@@ -48,6 +48,7 @@
         }
       ],
       "./plugins/push-crypto",
+      "./plugins/pod-deployment-target",
       "./plugins/ui-tests",
       "./plugins/voice"
     ]
