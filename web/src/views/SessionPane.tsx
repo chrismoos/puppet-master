@@ -314,7 +314,17 @@ export function SessionPane({
   // spawn; wait for it rather than opening a terminal the client does
   // not know yet.
   const agentTerminal = terminals.find((terminal) => terminal.kind === TerminalKind.AGENT);
-  useNativeTerminal(sessionId, agentTerminal, hostRef, active && !ended && selectedTerminal === "agent", stage);
+  const hostedTerminal = selected?.kind === TerminalKind.SHELL ? selected : selectedTerminal === "agent" ? agentTerminal : undefined;
+  useNativeTerminal({
+    terminal: hostedTerminal,
+    hostRef,
+    active: active && !ended,
+    stage,
+    onLink: (href) => stage.openLink(sessionId, href),
+    onCommand: (command) => {
+      if (hostedTerminal?.kind === TerminalKind.SHELL) stage.reportTerminalCommand(hostedTerminal.id, command);
+    },
+  });
   // A dropped file goes to the terminal on screen, which is the agent's
   // unless another tab is open on one of its shells.
   const shownTerminal = selected ?? agentTerminal;

@@ -22,14 +22,15 @@ export interface NativeRect {
 export type NativeTerminalEvent =
   | { type: "closed" | "failed"; id: string; reason: string }
   | { type: "link"; id: string; href: string }
-  | { type: "contextmenu"; id: string; x: number; y: number };
+  | { type: "contextmenu"; id: string; x: number; y: number }
+  | { type: "command"; id: string; command: string };
 
 /** Terminals the desktop app draws natively over the page. */
 export interface NativeTerminals {
   supported(): Promise<boolean>;
   open(
     id: string,
-    attach: { url: string; generation: number; viewer: number },
+    attach: { url: string; generation: number; viewer: number; readOnly: boolean },
     placement: NativePlacement,
     onEvent: (event: NativeTerminalEvent) => void,
   ): Promise<void>;

@@ -50,7 +50,8 @@ pub fn run() {
             native::native_terminal_place,
             native::native_terminal_focus,
             native::native_terminal_close,
-            native::native_terminal_regions
+            native::native_terminal_regions,
+            native::native_terminal_close_all
         ])
         .menu(|app| {
             let menu = Menu::default(app)?;

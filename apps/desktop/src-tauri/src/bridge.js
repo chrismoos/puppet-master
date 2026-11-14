@@ -98,6 +98,10 @@
     return `__CHANNEL__:${id}`;
   };
 
+  // Native terminals outlive a page load. The new page opened none of them,
+  // so any still drawn belong to the page before it.
+  if (window.__PM_NATIVE_TERMINALS__) invoke("native_terminal_close_all").catch(() => {});
+
   window.__pmNative = {
     notify: (title, body) => invoke("native_notify", { title: String(title), body: body == null ? null : String(body) }),
     setBadge: (count) => invoke("native_badge", { count: Math.max(0, Math.floor(Number(count) || 0)) }),

@@ -127,7 +127,7 @@ export class TerminalStage {
   private root: HTMLDivElement;
   private layers = new Map<string, Layer>();
   private observer: ResizeObserver;
-  private nativeAgents = false;
+  private nativeTerminals = false;
   private resizeFrame = 0;
   private visibleId: string | null = null;
   private visibilityDispose: (() => void) | null = null;
@@ -231,18 +231,18 @@ export class TerminalStage {
     this.parkHiddenLayers();
   }
 
-  /** Starts attaching a session's terminal off screen, so the press that
-   * comes before a click to open it hides the attach rather than adding to it. */
-  /** Agent terminals the desktop app draws natively. Their layers still
+  /** Set when the desktop app draws terminals natively. Layers still
    * measure and lay out, but never open a socket: the native terminal holds
    * the only one. */
-  setNativeAgentTerminals(native: boolean): void {
-    this.nativeAgents = native;
+  setNativeTerminals(native: boolean): void {
+    this.nativeTerminals = native;
   }
 
+  /** Starts attaching a session's terminal off screen, so the press that
+   * comes before a click to open it hides the attach rather than adding to it. */
   prepare(sessionId: bigint): void {
     const key = `s:${sessionId}`;
-    if (!this.root.isConnected || this.layers.has(key) || this.nativeAgents) return;
+    if (!this.root.isConnected || this.layers.has(key) || this.nativeTerminals) return;
     this.tryBindLayerSocket(this.createLayer(sessionId, false));
   }
 
@@ -871,7 +871,7 @@ export class TerminalStage {
 
   private tryBindLayerSocket(layer: Layer): boolean {
     if (layer.handle) return true;
-    if (this.nativeAgents && !layer.addressedTerminal) return false;
+    if (this.nativeTerminals) return false;
     const measured = measureFit(layer.term);
     if (!measured || !isRealPaneFit(layer.el.clientWidth, measured.cols)) return false;
     applyMeasuredFit(layer.term, measured, false);
@@ -1092,6 +1092,12 @@ export class TerminalStage {
     layer.term.dispose();
     layer.el.remove();
     if (this.visibleId === key) this.visibleId = null;
+  }
+
+  /** Records the program running in a shell drawn natively, as its own
+   * terminal reports it. */
+  reportTerminalCommand(terminalId: bigint, command: string): void {
+    this.updateTerminalCommand(terminalId, command);
   }
 
   private updateTerminalCommand(terminalId: bigint, command: string): void {

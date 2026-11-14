@@ -6,6 +6,9 @@ import { useAppState, useClient } from "../state/hooks";
 import { AGENT_TERMINAL_DRAG_TYPE, agentTerminalForSession, assignTerminal, closePane, dropTerminal, movePane, paneDropPositionForRatios, paneDropRegionRect, paneIds, parseWorkspaceLayout, removeTerminalFromLayout, SESSION_DRAG_TYPE, setSplitRatio, splitPane, workspaceTerminalEntries, workspaceTerminalLabel, WORKSPACE_PANE_DRAG_TYPE, type PaneDropPosition, type WorkspaceLayout, type WorkspacePane, type WorkspaceSplit, type WorkspaceTerminalEntry } from "@puppet-master/client-core/state/workspace";
 import type { TerminalStage } from "../ws/terminal";
 import { WorkspaceTerminal } from "../ws/workspaceTerminal";
+import { activateTerminalLink } from "../ws/terminalLinks";
+import { nativeTerminalsAvailable } from "../native";
+import { useNativeTerminal } from "../nativeTerminal";
 import type { GhosttyRendererIssue } from "../ws/ghostty/terminalAdapter";
 import type { TerminalStreamStatus } from "@puppet-master/client-core/ws/terminalSocket";
 import { useTerminalThemeController } from "../theme/context";
@@ -58,7 +61,9 @@ function createPaneDragGhost(label: string): HTMLElement {
   return ghost;
 }
 
-export function TerminalViewport({ terminal, focused, active, onIssue, onCommand, onFirstPaint }: { terminal: Terminal; focused: boolean; active: boolean; onIssue: (reason: GhosttyRendererIssue | null) => void; onCommand: (terminalId: bigint, command: string) => void; onFirstPaint?: () => void }) {
+const NO_CELL_LAYOUT = { visibleCellLayout: () => null };
+
+export function TerminalViewport({ terminal, focused, active, onIssue, onCommand, onFirstPaint, stage, readOnly = false }: { terminal: Terminal; focused: boolean; active: boolean; onIssue: (reason: GhosttyRendererIssue | null) => void; onCommand: (terminalId: bigint, command: string) => void; onFirstPaint?: () => void; stage?: TerminalStage; readOnly?: boolean }) {
   const firstPaint = useRef(onFirstPaint);
   firstPaint.current = onFirstPaint;
   const client = useClient();
@@ -66,9 +71,20 @@ export function TerminalViewport({ terminal, focused, active, onIssue, onCommand
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<WorkspaceTerminal | null>(null);
   const [streamStatus, setStreamStatus] = useState<TerminalStreamStatus | null>(null);
+  const native = Boolean(stage) && nativeTerminalsAvailable();
+  useNativeTerminal({
+    terminal: native ? terminal : undefined,
+    hostRef,
+    active,
+    stage: stage ?? NO_CELL_LAYOUT,
+    readOnly,
+    onLink: (href) => activateTerminalLink(client.getState, { kind: "terminal", id: terminal.id.toString() }, href, () => {}),
+    onCommand: (command) => onCommand(terminal.id, command),
+    onOpened: () => firstPaint.current?.(),
+  });
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
+    if (!host || native) return;
     onIssue(null);
     const view = new WorkspaceTerminal(client, host, terminal.id, themeController, onIssue, setStreamStatus, (command) => onCommand(terminal.id, command), () => firstPaint.current?.());
     viewRef.current = view;
@@ -79,7 +95,7 @@ export function TerminalViewport({ terminal, focused, active, onIssue, onCommand
       onIssue(null);
       setStreamStatus(null);
     };
-  }, [client, onCommand, onIssue, terminal.id, themeController]);
+  }, [client, native, onCommand, onIssue, terminal.id, themeController]);
   useEffect(() => viewRef.current?.setActive(active), [active]);
   useEffect(() => {
     if (focused && active) viewRef.current?.focus();

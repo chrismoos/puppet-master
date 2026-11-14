@@ -252,7 +252,7 @@ function ConnectedApp({
   const stageRef = useRef<TerminalStage | null>(null);
   if (!review && !stageRef.current) {
     stageRef.current = new TerminalStage(client, themeController);
-    stageRef.current.setNativeAgentTerminals(nativeTerminalsAvailable());
+    stageRef.current.setNativeTerminals(nativeTerminalsAvailable());
   }
   const stage = stageRef.current;
 

@@ -43,3 +43,12 @@ describe("native terminal placement", () => {
     expect(samePlacement(a, { ...a, visible: false })).toBe(false);
   });
 });
+
+describe("warm native terminals", () => {
+  it("closes the longest hidden first, keeping the limit", async () => {
+    const { warmEvictions } = await import("./nativeTerminal");
+    const hidden = new Map([["a", 30], ["b", 10], ["c", 20], ["d", 40]]);
+    expect(warmEvictions(hidden, 2)).toEqual(["b", "c"]);
+    expect(warmEvictions(hidden, 8)).toEqual([]);
+  });
+});

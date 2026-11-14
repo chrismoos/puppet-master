@@ -123,8 +123,10 @@ impl Frame {
         let row = &self.cells[start..start + usize::from(self.cols)];
         let text: String = row
             .iter()
-            .map(|cell| {
-                if cell.text.is_empty() && !cell.wide {
+            .enumerate()
+            .filter(|&(x, cell)| !(cell.text.is_empty() && x > 0 && row[x - 1].wide))
+            .map(|(_, cell)| {
+                if cell.text.is_empty() {
                     " "
                 } else {
                     &cell.text
@@ -581,6 +583,7 @@ mod tests {
         assert_eq!(frame.cell(1, 0).text, "界");
         assert_eq!(frame.cell(2, 0).text, "");
         assert_eq!(frame.cell(3, 0).text, "b");
+        assert_eq!(frame.row_text(0), "a界b");
     }
 
     #[test]

@@ -566,6 +566,7 @@ export function AgentPanes({
             key={id}
             meta={layout.panes[id]}
             sessionId={sessionId}
+            stage={stage}
             rect={isZoomed && full ? full : placed.rect}
             axis={isZoomed ? null : placed.axis}
             active={active}
@@ -768,6 +769,7 @@ export function programName(command: string): string {
 function PaneView({
   meta,
   sessionId,
+  stage,
   rect,
   axis,
   active,
@@ -783,6 +785,7 @@ function PaneView({
 }: {
   meta: PaneMeta;
   sessionId: string;
+  stage: TerminalStage;
   rect: Rect;
   axis: "row" | "column" | null;
   active: boolean;
@@ -942,7 +945,7 @@ function PaneView({
           <EndedOutput sessionId={sessionId} paneId={meta.id} terminalId={meta.terminal_id} exitCode={meta.exit_code} />
         ) : terminal ? (
           <ReadOnlyGuard enabled={!meta.user_input}>
-            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={active && !collapsed} onIssue={NO_ISSUE} onCommand={reportCommand} onFirstPaint={() => setReady(true)} />
+            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={active && !collapsed} onIssue={NO_ISSUE} onCommand={reportCommand} onFirstPaint={() => setReady(true)} stage={stage} readOnly={!meta.user_input} />
           </ReadOnlyGuard>
         ) : (
           <div className="ap-wait">starting…</div>

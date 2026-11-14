@@ -25,6 +25,8 @@ pub enum Event {
     Ownership { local: bool, cols: u16, rows: u16 },
     /// A program copied text to the clipboard (OSC 52).
     Clipboard(String),
+    /// The shell reported the program now in the foreground.
+    Command(String),
     /// The socket closed; a new ticket is needed to attach again.
     Closed { reason: String },
 }
@@ -142,7 +144,7 @@ async fn session(
     let (mut writer, mut reader) = socket.split();
     let generation = attach.generation;
     let mut replay = Replay::default();
-    let mut clipboard = crate::osc::Osc52::default();
+    let mut clipboard = crate::osc::OscWatch::default();
     let mut request_id: u64 = if attach.claim.is_some() { URL_CLAIM } else { 0 };
     loop {
         tokio::select! {
@@ -185,7 +187,7 @@ fn handle(
     frame: &[u8],
     screen: &Mutex<Option<Vt>>,
     replay: &mut Replay,
-    clipboard: &mut crate::osc::Osc52,
+    clipboard: &mut crate::osc::OscWatch,
     on_event: &(dyn Fn(Event) + Send + Sync),
 ) -> Result<u32, String> {
     match protocol::decode(frame) {
@@ -218,8 +220,11 @@ fn handle(
             };
             vt.write(&data);
             drop(guard);
-            for text in clipboard.push(&data) {
-                on_event(Event::Clipboard(text));
+            for found in clipboard.push(&data) {
+                on_event(match found {
+                    crate::osc::Osc::Copy(text) => Event::Clipboard(text),
+                    crate::osc::Osc::Command(command) => Event::Command(command),
+                });
             }
             on_event(Event::Changed);
             Ok(u32::try_from(data.len()).unwrap_or(u32::MAX))

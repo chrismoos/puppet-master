@@ -18,8 +18,9 @@ What the app adds over a browser tab:
 
 ## Native terminals
 
-On macOS the agent's terminal is drawn natively: a Metal view laid over the
-place the page keeps for it, with libghostty-vt holding the screen and the
+On macOS every terminal is drawn natively, the agent's as well as shell
+tabs and pane terminals: a Metal view laid over the place the page keeps
+for it, with libghostty-vt holding the screen and the
 GPU drawing it, so heavy output never waits on the page. The view uses the
 page's own cell size, so the grid matches the browser's, and it follows the
 page's layout as panes move or the session list collapses.
@@ -28,6 +29,10 @@ page's layout as panes move or the session list collapses.
   encoder, so application cursor keys and the kitty keyboard protocol work.
   ⌘V pastes, bracketed when the program asks. Other ⌘ shortcuts go to the
   app's menus.
+- Input methods work: composing text (such as Japanese or accented
+  letters) is drawn underlined at the cursor, with the candidate window
+  beside it, and is sent once committed.
+- Read-only panes take no typing, but still select and copy.
 - Drag to select, double-click for a word, triple-click for a line, and ⌘C
   to copy. Text a program copies with OSC 52 lands on the clipboard.
 - ⌘-click a link to open it: an OSC 8 hyperlink, or a URL or `pm:` link
@@ -40,13 +45,16 @@ page's layout as panes move or the session list collapses.
 - Drop files on the terminal to upload them, as in a browser.
 - Page menus, dialogs, alerts and the pane's hover header show over the
   terminal.
+- Recently viewed terminals stay attached while hidden, up to eight, so
+  switching back to one is instant.
+- A shell's tab follows the program running in it, as in a browser.
 - It holds the page's only socket to the terminal, opened with a one-use
   ticket the page mints. It claims the terminal's size when it connects,
   when its area changes, and when you type into it after another viewer
   took the size.
 
-Not yet: input methods for composed text (such as Japanese), and shell tabs
-or pane terminals, which still draw in the page.
+The page's own terminal still runs underneath, without a socket, to give
+the native view its cell size.
 
 The terminal crate is `apps/desktop/terminal`. Its tests run on any host
 with a GPU, including a software Vulkan driver:

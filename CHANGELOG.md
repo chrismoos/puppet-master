@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- [macOS] A desktop app opens your controller in its own window, with no title bar or native window buttons, desktop notifications, a Dock badge for sessions waiting on you, and new windows for pages that would open in a new tab. The window has its own buttons on the top bar. The agent's terminal is drawn natively with Metal, with selection, copy, ⌘-click links, mouse support for programs that ask for it, and file drops. Build it with `make desktop-build`.
+- [macOS] A desktop app opens your controller in its own window, with no title bar or native window buttons, desktop notifications, a Dock badge for sessions waiting on you, and new windows for pages that would open in a new tab. The window has its own buttons on the top bar. Every terminal is drawn natively with Metal, with selection, copy, ⌘-click links, input methods, mouse support for programs that ask for it, file drops, and instant switching back to recent terminals. Build it with `make desktop-build`.
 
 - [Web] While you are looking at Puppet Master, alerts show as a slim pill at the top right instead of a desktop notification. Click it to open the session, or dismiss it, and it hides on its own. Alerts still go to the desktop while the tab is in the background.
 

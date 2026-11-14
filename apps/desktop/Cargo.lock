@@ -3143,6 +3143,7 @@ dependencies = [
  "swash",
  "tokio",
  "tokio-tungstenite",
+ "unicode-width",
  "wgpu",
 ]
 

@@ -16,6 +16,7 @@ pollster = "1.0.1"
 swash = "0.2.10"
 tokio = { version = "1.54.1", features = ["rt", "sync", "macros", "net", "time"] }
 tokio-tungstenite = { version = "0.30.0", features = ["native-tls"] }
+unicode-width = "0.2"
 wgpu = "30.0.2"
 
 [dev-dependencies]

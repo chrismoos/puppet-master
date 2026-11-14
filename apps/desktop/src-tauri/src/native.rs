@@ -39,6 +39,8 @@ pub struct OpenRequest {
     url: String,
     generation: u64,
     viewer: u64,
+    #[serde(default)]
+    read_only: bool,
     placement: PlacementArg,
 }
 
@@ -100,6 +102,7 @@ mod platform {
                             claim: None,
                         },
                         request.placement.into(),
+                        request.read_only,
                         move |event| {
                             let message = match event {
                                 TerminalEvent::Closed(reason) => {
@@ -110,6 +113,9 @@ mod platform {
                                 }
                                 TerminalEvent::ContextMenu { x, y } => {
                                     json!({ "type": "contextmenu", "id": id, "x": x, "y": y })
+                                }
+                                TerminalEvent::Command(command) => {
+                                    json!({ "type": "command", "id": id, "command": command })
                                 }
                             };
                             let _ = sink.send(message);
@@ -182,6 +188,19 @@ mod platform {
             })
             .map_err(|error| error.to_string())
     }
+
+    pub fn close_all(window: WebviewWindow) -> Result<(), String> {
+        let label = window.label().to_string();
+        window
+            .run_on_main_thread(move || {
+                TERMINALS.with(|terminals| {
+                    terminals
+                        .borrow_mut()
+                        .retain(|(owner, _), _| *owner != label)
+                });
+            })
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -217,6 +236,10 @@ mod platform {
 
     pub fn close(_: WebviewWindow, _: String) -> Result<(), String> {
         Err(UNSUPPORTED.into())
+    }
+
+    pub fn close_all(_: WebviewWindow) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -264,4 +287,11 @@ pub fn native_terminal_regions(
     passthrough: Vec<RectArg>,
 ) -> Result<(), String> {
     platform::regions(window, id, holes, passthrough)
+}
+
+/// Closes every native terminal in the window, for a page that just loaded
+/// and has opened none of them.
+#[tauri::command]
+pub fn native_terminal_close_all(window: WebviewWindow) -> Result<(), String> {
+    platform::close_all(window)
 }

@@ -21,10 +21,15 @@ pub struct Layout {
     pub visible: bool,
 }
 
+/// One frame's work: the layout, new holes if they changed, and composing text.
+type Work = (Layout, Option<Vec<[f32; 4]>>, String);
+
 struct State {
     layout: Layout,
     /// Transparent rectangles in physical pixels, taken by the next frame.
     holes: Option<Vec<[f32; 4]>>,
+    /// Text an input method is composing, drawn at the cursor.
+    preedit: String,
     dirty: bool,
     alive: bool,
 }
@@ -58,13 +63,22 @@ impl Painter {
         self.wake.notify_one();
     }
 
+    pub fn set_preedit(&self, text: &str) {
+        let mut state = self.state.lock().unwrap();
+        if state.preedit != text {
+            state.preedit = text.to_string();
+            state.dirty = true;
+            self.wake.notify_one();
+        }
+    }
+
     fn stop(&self) {
         self.state.lock().unwrap().alive = false;
         self.wake.notify_one();
     }
 
     /// Waits for work and returns the layout to draw at, or `None` once stopped.
-    fn next(&self) -> Option<(Layout, Option<Vec<[f32; 4]>>)> {
+    fn next(&self) -> Option<Work> {
         let mut state = self.state.lock().unwrap();
         while state.alive && !state.dirty {
             state = self.wake.wait(state).unwrap();
@@ -73,7 +87,7 @@ impl Painter {
             return None;
         }
         state.dirty = false;
-        Some((state.layout, state.holes.take()))
+        Some((state.layout, state.holes.take(), state.preedit.clone()))
     }
 }
 
@@ -97,6 +111,7 @@ impl Paint {
             state: Mutex::new(State {
                 layout,
                 holes: None,
+                preedit: String::new(),
                 dirty: true,
                 alive: true,
             }),
@@ -108,7 +123,7 @@ impl Paint {
             .spawn(move || {
                 let mut font_px = 0.0;
                 let mut cell = (0.0, 0.0);
-                while let Some((layout, holes)) = shared.next() {
+                while let Some((layout, holes, preedit)) = shared.next() {
                     if let Some(holes) = holes {
                         renderer.set_holes(&holes);
                     }
@@ -149,6 +164,13 @@ impl Paint {
                     {
                         let mut guard = screen.lock().unwrap();
                         match guard.as_mut().map(Vt::update) {
+                            Some(Ok(frame)) if !preedit.is_empty() => renderer.render(
+                                &crate::preedit::overlay(frame, &preedit),
+                                &view,
+                                config.width,
+                                config.height,
+                                layout.padding,
+                            ),
                             Some(Ok(frame)) => renderer.render(
                                 frame,
                                 &view,

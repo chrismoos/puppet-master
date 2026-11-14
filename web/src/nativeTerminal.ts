@@ -1,6 +1,6 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import type { Terminal } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
-import { nativeBridge, nativeTerminalsAvailable, type NativePlacement, type NativeRect } from "./native";
+import { nativeBridge, nativeTerminalsAvailable, type NativePlacement, type NativeRect, type NativeTerminalEvent, type NativeTerminals } from "./native";
 import { mintSocketTicket, withTicket } from "./ws/socketTicket";
 import type { TerminalStage } from "./ws/terminal";
 
@@ -87,37 +87,95 @@ export function samePlacement(a: NativePlacement, b: NativePlacement): boolean {
   return (Object.keys(a) as (keyof NativePlacement)[]).every((key) => a[key] === b[key]);
 }
 
+interface Handlers {
+  onLink(href: string): void;
+  onCommand?(command: string): void;
+  onContextMenu(x: number, y: number): void;
+  onClosed(): void;
+}
+
+/** A native terminal that is open, shown or kept warm while hidden. */
+interface Entry {
+  handlers: Handlers | null;
+  /** The last placement sent, so a hidden one can be shown again as it was. */
+  placement: NativePlacement | null;
+  hiddenAt: number | null;
+}
+
+/** Hidden native terminals kept attached so switching back is instant. */
+export const MAX_WARM_NATIVE_TERMINALS = 8;
+const entries = new Map<string, Entry>();
+
+function routeEvent(id: string, event: NativeTerminalEvent): void {
+  const entry = entries.get(id);
+  if (!entry) return;
+  if (event.type === "closed" || event.type === "failed") {
+    if (entry.handlers) entry.handlers.onClosed();
+    else entries.delete(id);
+  } else if (event.type === "link") entry.handlers?.onLink(event.href);
+  else if (event.type === "contextmenu") entry.handlers?.onContextMenu(event.x, event.y);
+  else if (event.type === "command") entry.handlers?.onCommand?.(event.command);
+}
+
+/** The hidden terminals to close so at most `limit` stay warm, oldest first. */
+export function warmEvictions(hidden: ReadonlyMap<string, number>, limit: number): string[] {
+  const order = [...hidden].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+  return order.slice(0, Math.max(0, order.length - limit));
+}
+
+function evictWarm(native: NativeTerminals): void {
+  const hidden = new Map<string, number>();
+  for (const [id, entry] of entries) if (entry.hiddenAt !== null) hidden.set(id, entry.hiddenAt);
+  for (const id of warmEvictions(hidden, MAX_WARM_NATIVE_TERMINALS)) {
+    entries.delete(id);
+    void native.close(id).catch(() => {});
+  }
+}
+
+export interface NativeTerminalOptions {
+  terminal: Terminal | undefined;
+  hostRef: RefObject<HTMLElement | null>;
+  active: boolean;
+  /** The page's cell size, font and inset, which the native grid matches. */
+  stage: Pick<TerminalStage, "visibleCellLayout">;
+  onLink(href: string): void;
+  onCommand?(command: string): void;
+  /** Takes no keyboard input, as a read-only pane. */
+  readOnly?: boolean;
+  onOpened?(): void;
+}
+
 /**
- * In the desktop app, draws the agent's terminal natively over the place the
- * page keeps for it, following that place and the page content over it as
- * the layout moves. The native terminal is the page's only viewer of it.
+ * In the desktop app, draws a terminal natively over the place the page
+ * keeps for it, following that place and the page content over it as the
+ * layout moves. The native terminal is the page's only viewer of it, and it
+ * stays attached for a while once hidden.
  */
-export function useNativeTerminal(
-  sessionId: string,
-  terminal: Terminal | undefined,
-  hostRef: RefObject<HTMLElement | null>,
-  active: boolean,
-  stage: TerminalStage,
-): void {
+export function useNativeTerminal(options: NativeTerminalOptions): void {
+  const { terminal, hostRef, active, stage, readOnly = false } = options;
   const terminalId = terminal?.id;
   const generation = terminal?.generation;
+  const callbacks = useRef(options);
+  callbacks.current = options;
   useEffect(() => {
     const native = nativeBridge()?.terminal;
     if (!native || !nativeTerminalsAvailable() || !active || terminalId === undefined || generation === undefined) return;
-    const id = `s:${sessionId}`;
-    const viewer = 1 + Math.floor(Math.random() * VIEWER_ID_SPAN);
+    const id = `t:${terminalId}:${generation}:${readOnly ? "r" : "w"}`;
     let disposed = false;
     let frame = 0;
     let reattach = 0;
-    let shown: NativePlacement | null = null;
     let regions: NativeRegions = { holes: [], passthrough: [] };
+    const entry: Entry = entries.get(id) ?? { handlers: null, placement: null, hiddenAt: null };
+    const warm = entries.has(id) && entry.placement !== null;
+    entries.set(id, entry);
+    entry.hiddenAt = null;
 
     const follow = () => {
       if (disposed) return;
       const host = hostRef.current;
       const next = host ? placementOf(host, stage) : null;
-      if (next && (!shown || !samePlacement(shown, next))) {
-        shown = next;
+      if (next && (!entry.placement || !samePlacement(entry.placement, next))) {
+        entry.placement = next;
         void native.place(id, next).catch(() => {});
       }
       const over = host ? overlayRegions(host) : { holes: [], passthrough: [] };
@@ -129,6 +187,7 @@ export function useNativeTerminal(
     };
 
     const attach = async () => {
+      const viewer = 1 + Math.floor(Math.random() * VIEWER_ID_SPAN);
       const path = `/ws/terminal/${terminalId}?generation=${generation}&viewer=${viewer}`;
       const ticket = await mintSocketTicket(path).catch(() => null);
       if (disposed || !ticket) return;
@@ -142,33 +201,54 @@ export function useNativeTerminal(
       const scheme = location.protocol === "https:" ? "wss://" : "ws://";
       await native.open(
         id,
-        { url: `${scheme}${location.host}${withTicket(path, ticket)}`, generation: Number(generation), viewer },
+        { url: `${scheme}${location.host}${withTicket(path, ticket)}`, generation: Number(generation), viewer, readOnly },
         placement,
-        (event) => {
-          if (disposed) return;
-          if (event.type === "closed") {
-            reattach = window.setTimeout(() => void attach(), REATTACH_MS);
-          } else if (event.type === "link") {
-            stage.openLink(sessionId, event.href);
-          } else if (event.type === "contextmenu" && hostRef.current) {
-            dispatchContextMenu(event.x, event.y, hostRef.current);
-          }
-        },
+        (event) => routeEvent(id, event),
       );
       if (disposed) return;
-      shown = placement;
+      entry.placement = placement;
       regions = { holes: [], passthrough: [] };
-      void native.focus(id).catch(() => {});
+      callbacks.current.onOpened?.();
+      if (!readOnly) void native.focus(id).catch(() => {});
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(follow);
     };
 
-    void attach();
+    entry.handlers = {
+      onLink: (href) => callbacks.current.onLink(href),
+      onCommand: (command) => callbacks.current.onCommand?.(command),
+      onContextMenu: (x, y) => {
+        if (hostRef.current) dispatchContextMenu(x, y, hostRef.current);
+      },
+      onClosed: () => {
+        if (disposed) return;
+        cancelAnimationFrame(frame);
+        entry.placement = null;
+        reattach = window.setTimeout(() => void attach(), REATTACH_MS);
+      },
+    };
+
+    if (warm) {
+      callbacks.current.onOpened?.();
+      if (!readOnly) void native.focus(id).catch(() => {});
+      frame = requestAnimationFrame(follow);
+    } else {
+      void attach();
+    }
     return () => {
       disposed = true;
       cancelAnimationFrame(frame);
       window.clearTimeout(reattach);
-      void native.close(id).catch(() => {});
+      entry.handlers = null;
+      if (!entry.placement) {
+        entries.delete(id);
+        void native.close(id).catch(() => {});
+        return;
+      }
+      entry.placement = { ...entry.placement, visible: false };
+      entry.hiddenAt = Date.now();
+      void native.place(id, entry.placement).catch(() => {});
+      evictWarm(native);
     };
-  }, [sessionId, terminalId, generation, hostRef, active, stage]);
+  }, [terminalId, generation, hostRef, active, stage, readOnly]);
 }

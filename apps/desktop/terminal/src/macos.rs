@@ -9,12 +9,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Bool};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
+use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
-    NSEvent, NSEventModifierFlags, NSPasteboard, NSPasteboardTypeString, NSResponder, NSView,
+    NSEvent, NSEventModifierFlags, NSPasteboard, NSPasteboardTypeString, NSResponder,
+    NSTextInputClient, NSView,
 };
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSArray, NSAttributedString, NSAttributedStringKey, NSObjectProtocol, NSPoint, NSRange, NSRect,
+    NSSize, NSString,
+};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
@@ -33,6 +37,10 @@ const WHEEL_LINES: f64 = 3.0;
 /// What the view hands to its terminal.
 enum ViewInput {
     Key(KeyPress),
+    /// Text an input method committed.
+    Text(String),
+    /// Text an input method is composing, empty once it ends.
+    Preedit(String),
     Paste(String),
     /// ⌘C, handled only when there is a selection to copy.
     Copy,
@@ -65,10 +73,19 @@ pub enum TerminalEvent {
     Link(String),
     /// A right click the program did not take, in page coordinates.
     ContextMenu { x: f64, y: f64 },
+    /// The shell reported the program now in the foreground.
+    Command(String),
 }
 
 pub struct ViewIvars {
     sink: RefCell<Option<InputSink>>,
+    /// The cursor's cell in view coordinates, for the input method's window.
+    caret: RefCell<Option<Box<dyn Fn() -> NSRect>>>,
+    /// Text the input method is composing.
+    marked: RefCell<String>,
+    /// Text the input method committed during the current key press.
+    inserted: RefCell<Option<String>>,
+    in_key_down: Cell<bool>,
     /// Page content over the terminal, in view coordinates: holes are drawn
     /// transparent, and the mouse goes to the page in both.
     holes: RefCell<Vec<NSRect>>,
@@ -96,6 +113,20 @@ fn mods_of(flags: NSEventModifierFlags) -> u16 {
         bits |= mods::ALT;
     }
     bits
+}
+
+/// `NSNotFound`, which an input method reads as "no range".
+const NOT_FOUND: usize = isize::MAX as usize;
+
+/// The text of an `NSString` or `NSAttributedString` an input method passes.
+fn text_of(string: &AnyObject) -> String {
+    if let Some(attributed) = string.downcast_ref::<NSAttributedString>() {
+        return attributed.string().to_string();
+    }
+    string
+        .downcast_ref::<NSString>()
+        .map(|text| text.to_string())
+        .unwrap_or_default()
 }
 
 /// The value AppKit takes as "no drag operation".
@@ -206,7 +237,36 @@ define_class!(
 
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            if let Some(press) = key_press(event) {
+            let ivars = self.ivars();
+            let flags = event.modifierFlags();
+            if flags.contains(NSEventModifierFlags::Command) {
+                return;
+            }
+            let composing_before = !ivars.marked.borrow().is_empty();
+            // Control chords are terminal keys, never input method text.
+            if !flags.contains(NSEventModifierFlags::Control) {
+                ivars.inserted.replace(None);
+                ivars.in_key_down.set(true);
+                self.interpretKeyEvents(&NSArray::from_retained_slice(&[event.retain()]));
+                ivars.in_key_down.set(false);
+            }
+            let inserted = ivars.inserted.take();
+            let composing = !ivars.marked.borrow().is_empty();
+            if composing || (composing_before && inserted.is_none()) {
+                return;
+            }
+            if composing_before {
+                if let Some(text) = inserted {
+                    self.emit(ViewInput::Text(text));
+                }
+                return;
+            }
+            if let Some(mut press) = key_press(event) {
+                if let Some(text) = inserted {
+                    if press.mods & mods::CTRL == 0 {
+                        press.text = text;
+                    }
+                }
                 self.emit(ViewInput::Key(press));
             }
         }
@@ -248,12 +308,97 @@ define_class!(
             });
         }
     }
+
+    unsafe impl NSObjectProtocol for TerminalView {}
+
+    unsafe impl NSTextInputClient for TerminalView {
+        #[unsafe(method(insertText:replacementRange:))]
+        fn insert_text(&self, string: &AnyObject, _replacement: NSRange) {
+            let text = text_of(string);
+            let ivars = self.ivars();
+            if !ivars.marked.borrow().is_empty() {
+                self.set_marked(String::new());
+            }
+            if ivars.in_key_down.get() {
+                *ivars.inserted.borrow_mut() = Some(text);
+            } else {
+                self.emit(ViewInput::Text(text));
+            }
+        }
+
+        #[unsafe(method(doCommandBySelector:))]
+        fn do_command_by_selector(&self, _selector: Sel) {}
+
+        #[unsafe(method(setMarkedText:selectedRange:replacementRange:))]
+        fn set_marked_text(&self, string: &AnyObject, _selected: NSRange, _replacement: NSRange) {
+            self.set_marked(text_of(string));
+        }
+
+        #[unsafe(method(unmarkText))]
+        fn unmark_text(&self) {
+            self.set_marked(String::new());
+        }
+
+        #[unsafe(method(selectedRange))]
+        fn selected_range(&self) -> NSRange {
+            NSRange::new(NOT_FOUND, 0)
+        }
+
+        #[unsafe(method(markedRange))]
+        fn marked_range(&self) -> NSRange {
+            match self.marked_length() {
+                0 => NSRange::new(NOT_FOUND, 0),
+                length => NSRange::new(0, length),
+            }
+        }
+
+        #[unsafe(method(hasMarkedText))]
+        fn has_marked_text(&self) -> bool {
+            !self.ivars().marked.borrow().is_empty()
+        }
+
+        #[unsafe(method(attributedSubstringForProposedRange:actualRange:))]
+        fn attributed_substring(&self, _range: NSRange, _actual: *mut NSRange) -> *mut NSAttributedString {
+            std::ptr::null_mut()
+        }
+
+        #[unsafe(method(validAttributesForMarkedText))]
+        fn valid_attributes_for_marked_text(&self) -> *mut NSArray<NSAttributedStringKey> {
+            Retained::autorelease_return(NSArray::new())
+        }
+
+        #[unsafe(method(firstRectForCharacterRange:actualRange:))]
+        fn first_rect_for_character_range(&self, _range: NSRange, _actual: *mut NSRange) -> NSRect {
+            let local = self.ivars().caret.borrow().as_ref().map_or(NSRect::ZERO, |caret| caret());
+            let in_window = self.convertRect_toView(local, None);
+            self.window().map_or(in_window, |window| window.convertRectToScreen(in_window))
+        }
+
+        #[unsafe(method(characterIndexForPoint:))]
+        fn character_index_for_point(&self, _point: NSPoint) -> usize {
+            NOT_FOUND
+        }
+
+    }
 );
 
 impl TerminalView {
+    fn set_marked(&self, text: String) {
+        *self.ivars().marked.borrow_mut() = text.clone();
+        self.emit(ViewInput::Preedit(text));
+    }
+
+    fn marked_length(&self) -> usize {
+        self.ivars().marked.borrow().encode_utf16().count()
+    }
+
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(ViewIvars {
             sink: RefCell::new(None),
+            caret: RefCell::new(None),
+            marked: RefCell::default(),
+            inserted: RefCell::new(None),
+            in_key_down: Cell::new(false),
             holes: RefCell::default(),
             passthrough: RefCell::default(),
             webview: RefCell::new(None),
@@ -448,6 +593,10 @@ pub struct NativeTerminal {
     /// Whether this viewer owns the terminal's size.
     owner: Arc<AtomicBool>,
     placement: Rc<Cell<Placement>>,
+    /// Takes no keyboard input, as a read-only pane.
+    read_only: bool,
+    /// Whether the view was shown at the last placement.
+    shown: Cell<bool>,
 }
 
 /// The grid a placement holds, at the page's cell size inside its padding.
@@ -485,6 +634,7 @@ impl NativeTerminal {
         runtime: &tokio::runtime::Handle,
         attach: Attach,
         placement: Placement,
+        read_only: bool,
         on_event: impl Fn(TerminalEvent) + Send + Sync + 'static,
     ) -> Result<NativeTerminal, String> {
         let mtm = MainThreadMarker::new().ok_or("a native terminal opens on the main thread")?;
@@ -549,7 +699,7 @@ impl NativeTerminal {
         let painter_slot: Arc<Mutex<Option<Arc<Painter>>>> = Arc::default();
         let signal = painter_slot.clone();
         let on_event: Arc<dyn Fn(TerminalEvent) + Send + Sync> = Arc::new(on_event);
-        let closed = on_event.clone();
+        let notify = on_event.clone();
         let owner = Arc::new(AtomicBool::new(true));
         let ownership = owner.clone();
         let grid = grid_of(placement);
@@ -558,9 +708,10 @@ impl NativeTerminal {
             ..attach
         };
         let stream = Arc::new(Stream::open_on(runtime, attach, move |event| match event {
-            Event::Closed { reason } => closed(TerminalEvent::Closed(reason)),
+            Event::Closed { reason } => notify(TerminalEvent::Closed(reason)),
             Event::Clipboard(text) => copy_to_pasteboard(text),
             Event::Ownership { local, .. } => ownership.store(local, Ordering::Relaxed),
+            Event::Command(command) => notify(TerminalEvent::Command(command)),
             Event::Changed | Event::PtySize { .. } => {
                 if let Some(painter) = signal.lock().unwrap().as_ref() {
                     painter.redraw();
@@ -581,6 +732,8 @@ impl NativeTerminal {
             claimed: Arc::new(Mutex::new(grid)),
             owner,
             placement: Rc::new(Cell::new(placement)),
+            read_only,
+            shown: Cell::new(false),
         };
         terminal.place(placement);
         terminal.connect_input(on_event);
@@ -594,27 +747,75 @@ impl NativeTerminal {
         let claimed = self.claimed.clone();
         let owner = self.owner.clone();
         let placement = self.placement.clone();
+        let read_only = self.read_only;
+        // Typing here takes the size back from another viewer, as the browser does.
+        let reclaim = {
+            let stream = stream.clone();
+            move || {
+                if !owner.load(Ordering::Relaxed) {
+                    let (cols, rows) = *claimed.lock().unwrap();
+                    stream.claim(cols, rows);
+                    stream.resync();
+                }
+            }
+        };
+        *self.view.ivars().caret.borrow_mut() = Some(Box::new({
+            let screen = screen.clone();
+            let placement = placement.clone();
+            move || {
+                let at = placement.get();
+                let cursor = screen
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|vt| vt.frame().cursor);
+                let (x, y) = cursor.map_or((0.0, 0.0), |c| (f64::from(c.x), f64::from(c.y)));
+                NSRect::new(
+                    NSPoint::new(
+                        at.padding + x * at.cell_width,
+                        at.padding + y * at.cell_height,
+                    ),
+                    NSSize::new(at.cell_width, at.cell_height),
+                )
+            }
+        }));
         // Where a drag that selects text started.
         let anchor: Cell<Option<(u16, u16)>> = Cell::new(None);
         *self.view.ivars().sink.borrow_mut() = Some(Box::new(move |input| {
+            if let ViewInput::Preedit(text) = &input {
+                painter.set_preedit(if read_only { "" } else { text });
+                return true;
+            }
+            let typing = matches!(
+                input,
+                ViewInput::Key(_) | ViewInput::Text(_) | ViewInput::Paste(_)
+            );
+            if read_only && typing {
+                return false;
+            }
             let mut guard = screen.lock().unwrap();
             let Some(vt) = guard.as_mut() else {
                 return false;
             };
             let at = placement.get();
             match input {
+                ViewInput::Preedit(_) => true,
+                ViewInput::Text(text) => {
+                    vt.clear_selection();
+                    let _ = vt.scroll(isize::MAX);
+                    drop(guard);
+                    reclaim();
+                    stream.input(text.into_bytes(), false);
+                    painter.redraw();
+                    true
+                }
                 ViewInput::Key(press) => {
                     let bytes = vt.encode_key(&press);
                     if bytes.is_empty() {
                         return false;
                     }
                     vt.clear_selection();
-                    // Typing here takes the size back from another viewer, as the browser does.
-                    if !owner.load(Ordering::Relaxed) {
-                        let (cols, rows) = *claimed.lock().unwrap();
-                        stream.claim(cols, rows);
-                        stream.resync();
-                    }
+                    reclaim();
                     let submitted = press.key == keys::ENTER || press.key == keys::NUMPAD_ENTER;
                     let _ = vt.scroll(isize::MAX);
                     drop(guard);
@@ -650,7 +851,7 @@ impl NativeTerminal {
                     if rows == 0.0 {
                         return true;
                     }
-                    if vt.mouse_tracking() && bits & mods::SHIFT == 0 {
+                    if vt.mouse_tracking() && bits & mods::SHIFT == 0 && !read_only {
                         let button = if rows < 0.0 {
                             MouseButton::WheelUp
                         } else {
@@ -685,7 +886,7 @@ impl NativeTerminal {
                     mods: bits,
                     command,
                 } => {
-                    if vt.mouse_tracking() && bits & mods::SHIFT == 0 && !command {
+                    if vt.mouse_tracking() && bits & mods::SHIFT == 0 && !command && !read_only {
                         let bytes = vt.encode_mouse(
                             action,
                             Some(button),
@@ -798,10 +999,14 @@ impl NativeTerminal {
         self.view.setHidden(!placement.visible);
         self.painter.set_layout(layout_for(placement, self.scale));
         self.placement.set(placement);
+        let was_shown = self.shown.replace(placement.visible);
+        let showing = placement.visible && !was_shown;
         if placement.visible {
             let grid = grid_of(placement);
             let mut claimed = self.claimed.lock().unwrap();
-            if *claimed != grid {
+            // A warm terminal shown again takes the size back if another viewer took it.
+            let lost = showing && !self.owner.load(Ordering::Relaxed);
+            if *claimed != grid || lost {
                 *claimed = grid;
                 self.stream.claim(grid.0, grid.1);
                 self.stream.resync();
