@@ -280,6 +280,22 @@ async fn with_the_setting_off_the_probe_goes_unanswered_and_reports_change_nothi
 }
 
 #[tokio::test]
+async fn an_answer_typed_into_the_terminal_clears_a_question_under_a_live_record() {
+    let env = program_status_env(true);
+    let (id, agent) = Agent::start(&env).await;
+    agent.report(&env, "state=working");
+    root_becomes(&env, id, ProgramStatusState::Working).await;
+
+    env.daemon
+        .apply_blocked(id, "Which branch?".into())
+        .unwrap();
+    assert_eq!(session(&env, id).state, SessionState::NeedsInput);
+
+    agent.send(&env, "main");
+    state_becomes(&env, id, SessionState::Working, "").await;
+}
+
+#[tokio::test]
 async fn hooks_never_override_a_live_root_record_and_resume_once_it_is_gone() {
     let env = program_status_env(true);
     let (id, agent) = Agent::start(&env).await;

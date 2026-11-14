@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPaneForward, layoutHasPanes, measure, paneTerminalIds, parseSessionLayout, type Gutter, type Placed, type SessionPaneLayout } from "./AgentPanes";
+import { AGENT_ONLY_LAYOUT, isPaneForward, layoutHasPanes, measure, paneTerminalIds, parseSessionLayout, programName, type Gutter, type Placed, type SessionPaneLayout } from "./AgentPanes";
 
 function layout(tree: SessionPaneLayout["tree"], collapsed: string[] = []): SessionPaneLayout {
   const ids = ["a", "b", "c"];
@@ -71,5 +71,21 @@ describe("pane layout helpers", () => {
     expect(isPaneForward("pane-7-live", "7")).toBe(true);
     expect(isPaneForward("pane-70-live", "7")).toBe(false);
     expect(isPaneForward("docs", "7")).toBe(false);
+  });
+});
+
+describe("programName", () => {
+  it("names the program a foreground command runs, as a terminal tab does", () => {
+    expect(programName("cargo build --release")).toBe("cargo");
+    expect(programName("  vim  notes.md ")).toBe("vim");
+    expect(programName("-bash")).toBe("bash");
+    expect(programName("")).toBe("");
+  });
+});
+
+describe("AGENT_ONLY_LAYOUT", () => {
+  it("is the agent alone, with nothing else placed", () => {
+    expect(layoutHasPanes(AGENT_ONLY_LAYOUT)).toBe(false);
+    expect(AGENT_ONLY_LAYOUT.tree).toEqual({ pane: "agent" });
   });
 });

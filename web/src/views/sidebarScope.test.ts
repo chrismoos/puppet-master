@@ -187,8 +187,8 @@ describe("bucket tallies", () => {
 
   it("counts live, needs-you and unseen sessions, skipping ended and unfiled ones and supervised questions", () => {
     expect(Object.fromEntries(bucketTallies(state))).toEqual({
-      "1": { live: 3, needsInput: 1, needsInputUnseen: 1, finishedUnseen: 0 },
-      "2": { live: 1, needsInput: 0, needsInputUnseen: 0, finishedUnseen: 1 },
+      "1": { live: 3, needsInput: 1, needsInputUnseen: 1, finishedUnseen: 0, working: 1 },
+      "2": { live: 1, needsInput: 0, needsInputUnseen: 0, finishedUnseen: 1, working: 0 },
     });
   });
 

@@ -58,10 +58,36 @@ describe("BucketRail", () => {
     <BucketRail scope={scope} buckets={buckets} searchOpen={searchOpen} onPickScope={() => {}} onOpenSearch={() => {}} />,
   );
 
-  it("offers every bucket, the needs-you total, search, then each bucket with its badge", () => {
+  it("offers search, every bucket, then each bucket with its badge", () => {
     const html = markup({ kind: "all" });
     const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((match) => match[1]);
-    expect(labels).toEqual(["buckets", "All buckets", "Needs you, 2 need input", "Search sessions", "puppet-master, 2 need input", "infra"]);
+    expect(labels).toEqual(["buckets", "Search sessions", "All buckets", "puppet-master, 2 need input", "infra"]);
+  });
+
+  it("puts its header above every button", () => {
+    const html = renderToStaticMarkup(
+      <BucketRail scope={{ kind: "all" }} buckets={buckets} searchOpen={false} onPickScope={() => {}} onOpenSearch={() => {}} header={<button type="button" aria-label="Hide session list" />} />,
+    );
+    const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((match) => match[1]);
+    expect(labels.slice(0, 3)).toEqual(["buckets", "Hide session list", "Search sessions"]);
+  });
+
+  it("marks a bucket with a session mid-turn", () => {
+    const html = renderToStaticMarkup(
+      <BucketRail
+        scope={{ kind: "all" }}
+        buckets={[
+          { id: "1", name: "puppet-master", live: 2, needsInput: 0, working: 2 },
+          { id: "2", name: "infra", live: 1, needsInput: 0, working: 0 },
+        ]}
+        searchOpen={false}
+        onPickScope={() => {}}
+        onOpenSearch={() => {}}
+      />,
+    );
+    expect(html.match(/sb-rail-working/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="puppet-master, 2 working"');
+    expect(html).toContain('aria-label="infra"');
   });
 
   it("presses only the scoped button and tints a bucket with its own color", () => {

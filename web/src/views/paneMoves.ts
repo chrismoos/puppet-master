@@ -102,8 +102,13 @@ export function insertPaneInTree(tree: LayoutNode, id: string, target: string, p
 }
 
 /** The tree with `source` moved beside `target`, or the two exchanged. */
+function holds(node: LayoutNode, id: string): boolean {
+  const parts = split(node);
+  return parts ? parts.items.some((item) => holds(item, id)) : node.pane === id;
+}
+
 export function movePaneInTree(tree: LayoutNode, source: string, target: string, position: MovePosition): LayoutNode {
-  if (source === target) return tree;
+  if (source === target || !holds(tree, source) || !holds(tree, target)) return tree;
   if (position === "swap") return swapLeaves(tree, source, target);
   const removed = removeLeaf(tree, source);
   if (!removed) return tree;

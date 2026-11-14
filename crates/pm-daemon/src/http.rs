@@ -2259,7 +2259,15 @@ async fn set_session_layout(
     if authed_user(&daemon, &headers).is_none() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match crate::panes::user_set_layout(&daemon, id, body.base_rev, body.layout, body.tab.as_deref()).await {
+    match crate::panes::user_set_layout(
+        &daemon,
+        id,
+        body.base_rev,
+        body.layout,
+        body.tab.as_deref(),
+    )
+    .await
+    {
         Ok(value) => Json(value).into_response(),
         Err(error) => pane_error(error),
     }
@@ -2283,7 +2291,16 @@ async fn open_session_shell(
     if authed_user(&daemon, &headers).is_none() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match crate::panes::user_open_shell(&daemon, id, &body.id, body.base_rev, body.layout, body.tab.as_deref()).await {
+    match crate::panes::user_open_shell(
+        &daemon,
+        id,
+        &body.id,
+        body.base_rev,
+        body.layout,
+        body.tab.as_deref(),
+    )
+    .await
+    {
         Ok(value) => Json(value).into_response(),
         Err(error) => pane_error(error),
     }

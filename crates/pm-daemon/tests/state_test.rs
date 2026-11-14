@@ -247,6 +247,20 @@ fn spawn_supervisor(env: &TestEnv, project_id: u64) -> u64 {
         .unwrap()
 }
 
+/// A report that only sets a headline.
+fn headline_report(text: &str) -> pm_daemon::daemon::AgentReport {
+    pm_daemon::daemon::AgentReport::Report {
+        goal: String::new(),
+        headline: text.into(),
+        summary: None,
+        note: String::new(),
+        glance: None,
+        context: None,
+        clear: Vec::new(),
+        git: Default::default(),
+    }
+}
+
 fn seed_blocked_question(env: &TestEnv) -> u64 {
     let bucket_id = bucket_of(env);
     env.daemon
@@ -497,7 +511,7 @@ async fn an_agent_tool_call_after_an_approval_resumes_working() {
 }
 
 #[tokio::test]
-async fn an_agent_tool_call_leaves_a_question_standing() {
+async fn waiting_tool_calls_leave_a_question_standing() {
     let env = daemon_env();
     let id = spawn_test_session(&env, "p");
     let token = env.daemon.session_token(id).unwrap().unwrap();
@@ -506,12 +520,79 @@ async fn an_agent_tool_call_leaves_a_question_standing() {
     env.daemon
         .apply_blocked(id, "which branch?".into())
         .unwrap();
-    env.daemon.note_agent_tool_call(&token, "report");
+    for tool in ["flag_blocked", "report", "await_reply"] {
+        env.daemon.note_agent_tool_call(&token, tool);
+        assert_eq!(
+            state_of(&env, id),
+            (SessionState::NeedsInput, "which branch?".into()),
+            "{tool} is what an agent calls while it waits"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_worker_calling_another_tool_after_its_question_is_working_again() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+
+    env.daemon
+        .apply_blocked(id, "which branch?".into())
+        .unwrap();
+    env.daemon.note_agent_tool_call(&token, "list_panes");
+    assert_eq!(state_of(&env, id), (SessionState::Working, String::new()));
+}
+
+#[tokio::test]
+async fn a_supervisor_keeps_its_question_while_it_works() {
+    let env = daemon_env();
+    let id = spawn_supervisor(&env, env.project_id);
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    env.daemon.set_question_settle_ms(0);
+
+    env.daemon.apply_blocked(id, "ship it?".into()).unwrap();
+    env.daemon.note_agent_tool_call(&token, "wait_sessions");
+    env.daemon
+        .handle_agent_report(&token, headline_report("watching the workers"))
+        .unwrap();
     assert_eq!(
         state_of(&env, id),
-        (SessionState::NeedsInput, "which branch?".into()),
-        "a supervisor keeps calling tools after flag_blocked, and its question must stand"
+        (SessionState::NeedsInput, "ship it?".into())
     );
+}
+
+#[tokio::test]
+async fn a_new_headline_right_after_a_question_leaves_it_standing() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+
+    env.daemon
+        .apply_blocked(id, "which branch?".into())
+        .unwrap();
+    env.daemon
+        .handle_agent_report(&token, headline_report("waiting on your answer"))
+        .unwrap();
+    assert_eq!(
+        state_of(&env, id),
+        (SessionState::NeedsInput, "which branch?".into())
+    );
+}
+
+#[tokio::test]
+async fn a_new_headline_after_the_question_settled_is_working_again() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    env.daemon.set_question_settle_ms(0);
+
+    env.daemon
+        .apply_blocked(id, "which branch?".into())
+        .unwrap();
+    env.daemon
+        .handle_agent_report(&token, headline_report("rebasing onto main"))
+        .unwrap();
+    assert_eq!(state_of(&env, id), (SessionState::Working, String::new()));
 }
 
 #[tokio::test]

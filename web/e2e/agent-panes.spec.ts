@@ -86,6 +86,36 @@ test("an agent's panes sit beside it and the user resizes, collapses, hides, res
   await expect(shortPane.locator(".ap-output")).toContainText("[exited with status 4]");
 });
 
+test("the user opens a shell beside the agent from its menu and drags it to the other side", async ({ page, isolatedDaemon }) => {
+  await logIn(page);
+  await openSession(page);
+  const host = page.locator(".term-host");
+  await expect(host).toBeVisible();
+  const area = (await host.boundingBox())!;
+  await page.mouse.click(area.x + area.width / 2, area.y + area.height / 2, { button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem")).toHaveText(["New shell right", "New shell below", "New shell left", "New shell above"]);
+  await menu.getByRole("menuitem", { name: "New shell right" }).click();
+  await expect(menu).toHaveCount(0);
+
+  const shell = page.locator(".ap-root:not(.is-warm) .ap-pane.ap-shell");
+  await expect(shell).toHaveCount(1);
+  await expect.poll(async () => JSON.stringify(layoutOf(await isolatedDaemon.callAgentTool(SESSION, "get_layout", {})).layout))
+    .toMatch(/"row":\[\{"pane":"agent"[^\]]*\{"pane":"shell-1"/);
+
+  const head = (await shell.locator(".ap-title").boundingBox())!;
+  const agent = (await host.boundingBox())!;
+  await page.mouse.move(head.x + 4, head.y + head.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(head.x + 40, head.y + head.height / 2, { steps: 4 });
+  await page.mouse.move(agent.x + agent.width * 0.08, agent.y + agent.height / 2, { steps: 8 });
+  await expect(page.locator(".ap-drop-target .pane-drop-region.drop-left")).toBeVisible();
+  await page.mouse.up();
+  await expect.poll(async () => JSON.stringify(layoutOf(await isolatedDaemon.callAgentTool(SESSION, "get_layout", {})).layout))
+    .toMatch(/"row":\[\{"pane":"shell-1"[^\]]*\{"pane":"agent"/);
+  await expect.poll(async () => (await shell.boundingBox())!.x).toBeLessThan((await host.boundingBox())!.x);
+});
+
 test("terminal panes need bypass permissions while page panes do not", async ({ page, isolatedDaemon }) => {
   await logIn(page);
   isolatedDaemon.setSessionPermission(SESSION, "default");

@@ -221,7 +221,7 @@ describe("GhosttyTerminalAdapter", () => {
     expect(adapter.cols).toBe(80);
     expect(stub.events).toEqual(["dispose"]);
   });
-  it("draws a preview grid no narrower than the committed screen while reporting the committed size", async () => {
+  it("draws a preview grid no narrower or taller than the committed screen while reporting the committed size", async () => {
     const stub = surfaceDouble();
     vi.mocked(GhosttyTerminalSurface.create).mockResolvedValueOnce(stub.surface);
     const adapter = new GhosttyTerminalAdapter(mount(), theme, () => {}, () => {}, () => {}, () => {}, () => true);
@@ -230,11 +230,11 @@ describe("GhosttyTerminalAdapter", () => {
 
     adapter.previewResize(100, 30);
     adapter.previewResize(110, 32);
-    expect(stub.surface.cols).toBe(110);
+    expect({ cols: stub.surface.cols, rows: stub.surface.rows }).toEqual({ cols: 110, rows: 24 });
     expect({ cols: adapter.cols, rows: adapter.rows }).toEqual({ cols: 80, rows: 24 });
 
     adapter.previewResize(110, 32);
-    expect(stub.events.filter((event) => event.startsWith("preview"))).toEqual(["preview:100x30", "preview:110x32"]);
+    expect(stub.events.filter((event) => event.startsWith("preview"))).toEqual(["preview:100x24", "preview:110x24"]);
 
     adapter.resize(110, 32);
     expect({ cols: adapter.cols, rows: adapter.rows }).toEqual({ cols: 110, rows: 32 });

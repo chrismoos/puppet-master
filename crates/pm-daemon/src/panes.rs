@@ -321,11 +321,17 @@ fn validate(tree: &Value, panes: &BTreeMap<String, Pane>) -> Result<Vec<String>,
     validate_rooted(tree, panes, AGENT_PANE)
 }
 
-fn validate_rooted(tree: &Value, panes: &BTreeMap<String, Pane>, root: &str) -> Result<Vec<String>, String> {
+fn validate_rooted(
+    tree: &Value,
+    panes: &BTreeMap<String, Pane>,
+    root: &str,
+) -> Result<Vec<String>, String> {
     let mut leaves = Vec::new();
     collect_leaves(tree, &mut leaves)?;
     if leaves.iter().filter(|id| *id == root).count() != 1 {
-        return Err(format!("the layout must contain the {root:?} pane exactly once"));
+        return Err(format!(
+            "the layout must contain the {root:?} pane exactly once"
+        ));
     }
     let mut seen = std::collections::HashSet::new();
     for id in &leaves {
@@ -1229,7 +1235,12 @@ fn spawn_watcher(daemon: Arc<Daemon>, session_id: u64, id: String) {
                 if let Ok((layout, pane)) = remove_pane(&daemon, session_id, &id) {
                     release(&daemon, &pane);
                     publish(&daemon, session_id, &layout);
-                    notify(&daemon, session_id, format!("Shell pane \"{id}\" exited and was closed.")).await;
+                    notify(
+                        &daemon,
+                        session_id,
+                        format!("Shell pane \"{id}\" exited and was closed."),
+                    )
+                    .await;
                 }
                 return;
             }
@@ -1270,7 +1281,10 @@ pub async fn user_set_layout(
             if leaves.iter().any(|id| layout.unplaced.contains(id)) {
                 return Err("hidden panes cannot be placed by a resize".into());
             }
-            if leaves.iter().any(|id| id != root && layout.tab_of(id).as_deref() != tab) {
+            if leaves
+                .iter()
+                .any(|id| id != root && layout.tab_of(id).as_deref() != tab)
+            {
                 return Err("a pane can only be arranged in the view it is in".into());
             }
             match tab {
@@ -1301,7 +1315,9 @@ pub async fn user_open_shell(
             .parse::<u64>()
             .ok()
             .and_then(|terminal_id| daemon.storage().get_terminal(terminal_id).ok())
-            .is_some_and(|terminal| terminal.session_id == session_id && terminal_exit(daemon, terminal.id).is_none());
+            .is_some_and(|terminal| {
+                terminal.session_id == session_id && terminal_exit(daemon, terminal.id).is_none()
+            });
         if !owned {
             return Err("that shell tab is not open in this session".into());
         }
@@ -1320,7 +1336,8 @@ pub async fn user_open_shell(
         }
     }
     let title = format!("shell {}", id.trim_start_matches("shell-"));
-    let (terminal_id, _) = start_terminal(daemon, session_id, &title, None, None, &BTreeMap::new())?;
+    let (terminal_id, _) =
+        start_terminal(daemon, session_id, &title, None, None, &BTreeMap::new())?;
     let pane = Pane {
         id: id.to_string(),
         kind: "shell".into(),
@@ -1345,15 +1362,25 @@ pub async fn user_open_shell(
         panes.insert(id.to_string(), pane.clone());
         let root = if tab.is_some() { TAB_PANE } else { AGENT_PANE };
         let current = match tab {
-            Some(tab) => layout.tabs.get(tab).cloned().unwrap_or_else(|| json!({ "pane": TAB_PANE })),
+            Some(tab) => layout
+                .tabs
+                .get(tab)
+                .cloned()
+                .unwrap_or_else(|| json!({ "pane": TAB_PANE })),
             None => layout.tree.clone(),
         };
         let fits = layout.rev == base_rev
             && validate_rooted(&tree, &panes, root).is_ok_and(|leaves| {
                 leaves.iter().any(|leaf| leaf == id)
-                    && leaves.iter().all(|leaf| leaf == root || leaf == id || layout.tab_of(leaf).as_deref() == tab)
+                    && leaves.iter().all(|leaf| {
+                        leaf == root || leaf == id || layout.tab_of(leaf).as_deref() == tab
+                    })
             });
-        let next = if fits { tree.clone() } else { place_rooted(&current, id, root) };
+        let next = if fits {
+            tree.clone()
+        } else {
+            place_rooted(&current, id, root)
+        };
         match tab {
             Some(tab) => {
                 layout.tabs.insert(tab.to_string(), next);
@@ -1514,6 +1541,68 @@ mod tests {
 
     fn panes(ids: &[&str]) -> BTreeMap<String, Pane> {
         ids.iter().map(|id| (id.to_string(), pane(id))).collect()
+    }
+
+    #[test]
+    fn a_shell_tab_layout_is_rooted_at_its_tab_and_new_panes_join_it() {
+        let known = panes(&["a"]);
+        assert!(validate_rooted(
+            &json!({ "row": [{ "pane": "tab" }, { "pane": "a" }] }),
+            &known,
+            TAB_PANE
+        )
+        .is_ok());
+        assert!(validate_rooted(
+            &json!({ "row": [{ "pane": "agent" }, { "pane": "a" }] }),
+            &known,
+            TAB_PANE
+        )
+        .unwrap_err()
+        .contains("\"tab\""));
+        assert_eq!(
+            place_rooted(&json!({ "pane": "tab" }), "a", TAB_PANE),
+            json!({ "row": [
+                { "pane": "tab", "size": 100 - DEFAULT_NEW_PANE_SIZE },
+                { "pane": "a", "size": DEFAULT_NEW_PANE_SIZE }
+            ]})
+        );
+    }
+
+    #[test]
+    fn a_pane_is_found_in_the_tab_that_holds_it() {
+        let mut layout = Layout {
+            rev: 1,
+            tree: json!({ "row": [{ "pane": "agent" }, { "pane": "a" }] }),
+            panes: panes(&["a", "b", "c"]),
+            unplaced: vec![],
+            tabs: BTreeMap::new(),
+        };
+        layout.tabs.insert(
+            "27".into(),
+            json!({ "column": [{ "pane": "tab" }, { "pane": "b" }, { "pane": "c" }] }),
+        );
+        assert_eq!(layout.tab_of("b").as_deref(), Some("27"));
+        assert_eq!(layout.tab_of("a"), None);
+        assert_eq!(
+            layout.tab_panes(),
+            ["b".to_string(), "c".to_string()].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn records_stored_before_tabs_and_titles_load_with_their_titles_kept() {
+        let stored = json!({
+            "rev": 3,
+            "tree": { "row": [{ "pane": "agent" }, { "pane": "log" }] },
+            "panes": { "log": { "id": "log", "kind": "shell", "title": "Build log", "version": 0, "user_input": true } },
+            "unplaced": []
+        });
+        let layout: Layout = serde_json::from_value(stored).unwrap();
+        assert!(layout.tabs.is_empty());
+        assert!(
+            layout.panes["log"].titled,
+            "a stored pane keeps showing the title it had"
+        );
     }
 
     #[test]

@@ -301,6 +301,7 @@ pub struct Daemon {
     /// When each session last raised a flag_blocked question, so a report
     /// sent right after the question does not read as the agent moving on.
     questions_asked_at: Mutex<std::collections::HashMap<u64, i64>>,
+    question_settle_ms: std::sync::atomic::AtomicI64,
     /// Terminal-id keyed because a session's agent terminal is stable while
     /// its generation increments on resume/recovery.
     generation_lifecycle: Mutex<std::collections::HashMap<u64, GenerationLifecycle>>,
@@ -1514,6 +1515,7 @@ impl Daemon {
             pending_session_activity: Mutex::new(std::collections::HashMap::new()),
             approval_prompts: Mutex::new(HashSet::new()),
             questions_asked_at: Mutex::new(std::collections::HashMap::new()),
+            question_settle_ms: std::sync::atomic::AtomicI64::new(QUESTION_SETTLE_MS),
             generation_lifecycle: Mutex::new(std::collections::HashMap::new()),
             program_status: Default::default(),
             worker_epochs: Mutex::new(std::collections::HashMap::new()),
@@ -1698,8 +1700,8 @@ impl Daemon {
         if session.state != SessionState::NeedsInput {
             return;
         }
-        let moved_on = approval
-            || (!WAITING_TOOLS.contains(&tool) && session.role != SessionRole::Supervisor);
+        let moved_on =
+            approval || (!WAITING_TOOLS.contains(&tool) && session.role != SessionRole::Supervisor);
         if !moved_on {
             return;
         }
@@ -6257,7 +6259,19 @@ impl Daemon {
             .lock()
             .unwrap()
             .get(&session.id)
-            .is_none_or(|asked| now - asked >= QUESTION_SETTLE_MS)
+            .is_none_or(|asked| {
+                now - asked
+                    >= self
+                        .question_settle_ms
+                        .load(std::sync::atomic::Ordering::Relaxed)
+            })
+    }
+
+    /// Public so a test can shorten how long after a question a new headline
+    /// still counts as part of asking it.
+    pub fn set_question_settle_ms(&self, ms: i64) {
+        self.question_settle_ms
+            .store(ms, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6309,7 +6323,10 @@ impl Daemon {
             updated = self
                 .storage
                 .update_session_state(session_id, SessionState::Working, "")?;
-            info!(session = session_id, "agent reported progress past its question");
+            info!(
+                session = session_id,
+                "agent reported progress past its question"
+            );
         }
         notes.extend(self.report_freshness.observe(
             session_id,
@@ -8881,7 +8898,9 @@ impl Daemon {
         // An agent reporting through Program Status says when its turn
         // starts, and a guess from input would only be overwritten. An
         // answer to its question is not a guess, so that still counts.
-        if self.program_status_decides(terminal.session_id) && input_state != SessionState::NeedsInput {
+        if self.program_status_decides(terminal.session_id)
+            && input_state != SessionState::NeedsInput
+        {
             return;
         }
         let Ok(session) = self.storage.get_session(terminal.session_id) else {
