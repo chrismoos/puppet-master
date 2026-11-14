@@ -7,4 +7,11 @@ description = "A Puppet Master terminal drawn natively with libghostty"
 publish = false
 
 [dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+fontdb = "0.24.0"
 pm-ghostty = { path = "../../../crates/pm-ghostty" }
+swash = "0.2.10"
+wgpu = "30.0.2"
+
+[dev-dependencies]
+pollster = "1.0.1"

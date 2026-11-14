@@ -13,6 +13,9 @@ mod ffi {
     include!("ffi_generated.rs");
 }
 
+pub mod atlas;
+pub mod font;
+pub mod renderer;
 pub mod vt;
 
 // Links the pinned libghostty-vt archive the bindings call into.
