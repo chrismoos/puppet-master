@@ -658,6 +658,7 @@ export class GhosttyTerminalSurface {
   private disposed = false;
   private resizeNotifyTimer: number | null = null;
   private originHoldTimer: number | null = null;
+  private lastHeightChangeAt = Number.NEGATIVE_INFINITY;
   private originY = CONTENT_PADDING;
   private mountHeight = 0;
   private selectionEnd: { x: number; y: number } | null = null;
@@ -981,6 +982,11 @@ export class GhosttyTerminalSurface {
     return { cols: this.measuredCols, rows: this.measuredRows };
   }
 
+  /** The grid a mount of this many CSS pixels would hold. */
+  gridFor(width: number, height: number): { cols: number; rows: number } {
+    return terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
+  }
+
   measuredCellSize(): Pick<GhosttyCellMetrics, "width" | "height"> {
     return { width: this.metrics.width, height: this.metrics.height };
   }
@@ -1145,7 +1151,13 @@ export class GhosttyTerminalSurface {
       this.pendingCanvasConfiguration = null;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
-    if (this.canvasConfigured && height !== this.mountHeight) this.holdOrigin();
+    if (this.canvasConfigured && height !== this.mountHeight) {
+      // Only a drag holds the origin: a single change, such as a pane
+      // collapsing, anchors at once instead of moving after the hold.
+      const now = performance.now();
+      if (now - this.lastHeightChangeAt < RESIZE_SETTLE_MS) this.holdOrigin();
+      this.lastHeightChangeAt = now;
+    }
     this.mountHeight = height;
     // onResize is the only PTY resize channel, so the first successful fit must
     // notify even when the measured grid equals the 1x1 construction sentinel.

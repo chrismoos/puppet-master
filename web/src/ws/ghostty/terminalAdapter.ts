@@ -126,6 +126,9 @@ export class GhosttyTerminalAdapter {
   get cols(): number { return this.committedSize?.cols ?? this.surface?.cols ?? this.currentCols; }
   get rows(): number { return this.committedSize?.rows ?? this.surface?.rows ?? this.currentRows; }
   get cellSize(): { cols: number; rows: number } | null { return this.surface?.measuredGrid() ?? null; }
+  gridFor(width: number, height: number): { cols: number; rows: number } | null {
+    return this.surface?.gridFor(width, height) ?? null;
+  }
   get cellMetrics(): Pick<GhosttyCellMetrics, "width" | "height"> | null {
     return this.surface?.measuredCellSize() ?? null;
   }
@@ -209,14 +212,17 @@ export class GhosttyTerminalAdapter {
 
   /** Reflows the drawn grid locally until the next resize or restore replaces it. The
    * preview never narrows below the committed width, because a narrowing reflow wraps
-   * every full-width row, such as an input box border, onto a second row. */
+   * every full-width row, such as an input box border, onto a second row. It never
+   * adds rows either: added rows are blank below the cursor, so bottom-anchored
+   * content keeps its rows and position until the program redraws at the new size. */
   previewResize(cols: number, rows: number): void {
     const surface = this.surface;
     if (!surface || this.disposed) return;
     const committed = this.committedSize ?? { cols: surface.cols, rows: surface.rows };
     const drawnCols = Math.max(cols, committed.cols);
-    this.committedSize = drawnCols === committed.cols && rows === committed.rows ? null : committed;
-    if (surface.cols !== drawnCols || surface.rows !== rows) surface.previewResize(drawnCols, rows);
+    const drawnRows = Math.min(rows, committed.rows);
+    this.committedSize = drawnCols === committed.cols && drawnRows === committed.rows ? null : committed;
+    if (surface.cols !== drawnCols || surface.rows !== drawnRows) surface.previewResize(drawnCols, drawnRows);
   }
 
   fit(): boolean {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [Web] The session list collapses to the bucket rail with the button at the top of the rail, or with ⌘\ (Ctrl+Shift+\ elsewhere), and stays collapsed across reloads. The rail no longer has a Needs you button, All buckets shows a grid icon, and search is a quiet magnifier under the collapse button.
+
+- [Web] A terminal changes size in the same frame as the layout around it when you collapse the session list, collapse or expand a pane, or resize the window, and an agent's redraw at the new size lands with the change instead of jumping in afterwards.
+
 - [Web] Agents can open panes beside their terminal, showing a live program, a shell, an HTML page from their working directory or a dev server, and arrange them in splits. You can resize, collapse, hide and restore them, or stop a program, and the agent is told. Starting programs requires bypass permissions.
 
 - [Web] Connections, connection calls and approvals update as soon as they change instead of every few seconds, and an open tab no longer polls for them. The iOS approvals list and badge do the same. A pending approval that runs out shows as expired without a reload.

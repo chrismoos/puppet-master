@@ -71,16 +71,16 @@ export function BucketRail({
   searchOpen,
   onPickScope,
   onOpenSearch,
+  header,
 }: {
   scope: SidebarScope;
   buckets: readonly SwitcherBucket[];
   searchOpen: boolean;
   onPickScope: (scope: SidebarScope) => void;
   onOpenSearch: () => void;
+  /** Above the rail's buttons. */
+  header?: ReactNode;
 }) {
-  const sum = (count: (bucket: SwitcherBucket) => number) => buckets.reduce((total, bucket) => total + count(bucket), 0);
-  const needsTotal = sum((bucket) => bucket.needsInput);
-  const needsUnseenTotal = sum((bucket) => bucket.needsInputUnseen ?? 0);
   const current = scopeKey(scope);
   const monograms = railMonograms(buckets);
   const button = (
@@ -124,27 +124,32 @@ export function BucketRail({
   const none = { needs: 0, needsUnseen: 0, finished: 0 };
   return (
     <nav className="sb-rail" aria-label="buckets">
-      {button(ALL_SCOPE, "All buckets", <span className="sb-rail-glyph" aria-hidden="true">All</span>, none)}
-      {button(
-        { kind: "needs" },
-        "Needs you",
-        <span className="sb-rail-glyph" aria-hidden="true">!</span>,
-        { ...none, needs: needsTotal, needsUnseen: needsUnseenTotal },
-      )}
+      {header && <div className="sb-rail-header">{header}</div>}
       <button
         type="button"
-        className={`sb-rail-btn ${searchOpen ? "is-current" : ""}`}
+        className={`sb-rail-btn sb-rail-quiet ${searchOpen ? "is-current" : ""}`}
         aria-label="Search sessions"
         aria-expanded={searchOpen}
         data-switcher-toggle
         title="Find a bucket or session (/)"
         onClick={onOpenSearch}
       >
-        <svg className="sb-rail-glyph" viewBox="0 0 16 16" aria-hidden="true">
+        <svg className="sb-rail-quiet-glyph" viewBox="0 0 16 16" aria-hidden="true">
           <circle cx="7" cy="7" r="4.5" />
           <path d="M10.5 10.5 14 14" />
         </svg>
       </button>
+      {button(
+        ALL_SCOPE,
+        "All buckets",
+        <svg className="sb-rail-glyph sb-rail-all-glyph" viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
+          <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
+          <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
+          <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
+        </svg>,
+        none,
+      )}
       <span className="sb-rail-sep" aria-hidden="true" />
       {buckets.map((bucket) => button(
         { kind: "bucket", bucketId: bucket.id },

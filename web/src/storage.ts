@@ -1,5 +1,6 @@
 export const SELECTED_SESSION_KEY = "pm.selectedSession";
 export const SHOW_ENDED_KEY = "pm.showEnded";
+export const SESSION_LIST_COLLAPSED_KEY = "pm.sessionListCollapsed";
 export const NOTIFY_ENABLED_KEY = "pm.notify.enabled";
 export const NOTIFY_SOUND_KEY = "pm.notify.sound";
 /// Set once notification permission has been auto-requested, so the

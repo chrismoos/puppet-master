@@ -8660,3 +8660,59 @@ body.ap-resizing iframe { pointer-events: none; }
   overflow-wrap: anywhere;
 }
 .ap-hidden-chip { font-size: 11px; padding: 1px 7px; border-style: dashed; }
+
+/* The session list folded down to the bucket rail. */
+.workspace.is-list-collapsed {
+  grid-template-columns: max-content 1fr;
+}
+.sidebar.is-collapsed > .sb-column {
+  display: none;
+}
+.sb-rail-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.sb-rail-btn.sb-list-toggle,
+.sb-rail-btn.sb-rail-quiet {
+  width: 38px;
+  height: 22px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+.sb-rail-btn.sb-rail-quiet {
+  height: 26px;
+}
+.sb-rail-btn.sb-list-toggle:hover,
+.sb-rail-btn.sb-rail-quiet:hover,
+.sb-rail-btn.sb-rail-quiet.is-current {
+  color: var(--bright);
+  background: var(--panel-2);
+  border-color: transparent;
+}
+.sb-rail-quiet-glyph {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+svg.sb-rail-glyph.sb-rail-all-glyph {
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.5;
+}
+.sb-list-toggle-glyph {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.sb-rail-mini {
+  width: 40px;
+}

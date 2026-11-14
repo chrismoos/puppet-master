@@ -82,6 +82,11 @@ interface Layer {
   pendingFit: TerminalSize | null;
   /** The pending size came from another viewer, which this one follows. */
   pendingFollow: boolean;
+  /** A size the host is about to take. Its snapshot and the output after it
+   * are held until the host has that size, so the layout change and the
+   * program's redraw at the new size are painted in the same frame. */
+  anticipated: TerminalSize | null;
+  anticipatedFrames: PtyFrame[];
   /** Typed before the terminal was attached, delivered once it is. */
   heldInput: HeldInput[];
   /** The latest size measured while a width change was in flight, sent once
@@ -192,6 +197,7 @@ export class TerminalStage {
     }
     if (this.visibleId) {
       const layer = this.layers.get(this.visibleId);
+      this.releaseAnticipation(layer);
       if (layer) {
         layer.el.style.visibility = "hidden";
         layer.el.style.pointerEvents = "none";
@@ -212,6 +218,7 @@ export class TerminalStage {
   hide(): void {
     const shown = this.visibleId ? this.layers.get(this.visibleId) : undefined;
     if (shown && this.visibleId) this.rememberViewport(this.visibleId, shown);
+    this.releaseAnticipation(shown);
     this.visibleId = null;
     for (const layer of this.layers.values()) {
       layer.el.style.visibility = "hidden";
@@ -232,6 +239,75 @@ export class TerminalStage {
 
   disposeTerminal(terminalId: bigint): void {
     this.disposeLayer(`t:${terminalId}`);
+  }
+
+  /** Asks the PTY now for the size a session's shown terminal is about to
+   * take, such as on pointerdown before a click that resizes its host. */
+  anticipate(sessionId: bigint, width: number, height: number): void {
+    const layer = this.layers.get(`s:${sessionId}`);
+    if (!layer?.handle || this.visibleId !== layer.key) return;
+    if (!layer.replayPainted || layer.initialReplayPending) return;
+    const grid = layer.term.gridFor(width, height);
+    if (!grid || grid.cols < 1 || grid.rows < 1) return;
+    if (grid.cols === layer.term.cols && grid.rows === layer.term.rows) return;
+    this.dropAnticipation(layer);
+    this.stopFollowing(layer);
+    layer.anticipated = grid;
+    layer.pendingFit = grid;
+    layer.lastResize = grid;
+    layer.sizePrompt.requested(grid);
+    layer.handle.resize(grid.cols, grid.rows);
+    layer.handle.refreshSnapshot();
+  }
+
+  /** The anticipated resize did not happen: the size on screen is asked for again. */
+  cancelAnticipation(sessionId: bigint): void {
+    const layer = this.layers.get(`s:${sessionId}`);
+    if (!layer?.anticipated) return;
+    this.dropAnticipation(layer);
+    if (this.visibleId === layer.key) this.layoutVisibleLayer(layer);
+  }
+
+  /** A layer leaving the screen writes what it held, since no host change will settle it. */
+  private releaseAnticipation(layer: Layer | undefined): void {
+    if (!layer?.anticipated) return;
+    const frames = layer.anticipatedFrames;
+    this.dropAnticipation(layer);
+    for (const frame of frames) this.writeFrame(layer, frame);
+  }
+
+  /** This viewer's own layout change takes the size back from another viewer. */
+  private stopFollowing(layer: Layer): void {
+    if (!layer.pendingFollow) return;
+    layer.pendingFollow = false;
+    layer.pendingFit = null;
+  }
+
+  private dropAnticipation(layer: Layer): void {
+    layer.anticipated = null;
+    layer.anticipatedFrames = [];
+  }
+
+  /** Paints the held snapshot once the host has the anticipated size. A host
+   * that ended at another size drops it, and the usual resize asks again. */
+  private settleAnticipation(layer: Layer): void {
+    const anticipated = layer.anticipated;
+    if (!anticipated) return;
+    const measured = measureFit(layer.term);
+    if (!measured || (measured.cols === layer.term.cols && measured.rows === layer.term.rows)) return;
+    const frames = layer.anticipatedFrames;
+    this.dropAnticipation(layer);
+    if (measured.cols !== anticipated.cols || measured.rows !== anticipated.rows) return;
+    for (const frame of frames) this.writeFrame(layer, frame);
+    if (frames.length > 0) layer.term.paintNow();
+  }
+
+  /** Fits and reflows the shown terminal now. For a caller that just resized
+   * the host itself: a resize observer would only report that a frame later
+   * when the change was made from inside another observer's callback. */
+  fitVisibleNow(): void {
+    this.previewVisibleFit();
+    this.scheduleRefitVisible();
   }
 
   disposeSession(sessionId: bigint): void {
@@ -283,6 +359,7 @@ export class TerminalStage {
     const existing = this.layers.get(key);
     const layer = existing ?? this.createLayer(id, terminal);
     const wasVisibleId = this.visibleId;
+    if (wasVisibleId && wasVisibleId !== key) this.releaseAnticipation(this.layers.get(wasVisibleId));
     this.visibleId = key;
     // Enforce the warm-layer limit before attaching this surface.
     this.evict();
@@ -462,6 +539,8 @@ export class TerminalStage {
       heldSnapshot: null,
       pendingFit: null,
       pendingFollow: false,
+      anticipated: null,
+      anticipatedFrames: [],
       settlingFit: null,
       settleTimer: null,
       revealTimeout: null,
@@ -529,6 +608,10 @@ export class TerminalStage {
   }
 
   private writeFrame(layer: Layer, frame: PtyFrame): void {
+    if (layer.anticipated && (layer.anticipatedFrames.length > 0 || (frame.replay && layer.pendingFit))) {
+      layer.anticipatedFrames.push(frame);
+      return;
+    }
     const viewport = layer.viewport;
     const revision = layer.viewportRevision;
     const paint = () => {
@@ -668,6 +751,10 @@ export class TerminalStage {
   /** Runs inside the resize observer so the reflow lands in the frame that changed size. */
   private previewVisibleFit(): void {
     const layer = this.visibleId ? this.layers.get(this.visibleId) : undefined;
+    // Claimed here rather than at the next frame's refit, so a viewer
+    // following another one still reflows in the frame its host changed.
+    if (layer?.sizePrompt.blocked() && layer.sizePrompt.localChanged()) this.stopFollowing(layer);
+    if (layer?.anticipated) this.settleAnticipation(layer);
     if (!layer?.handle || !layer.replayPainted || layer.initialReplayPending || layer.pendingFollow) return;
     measureFit(layer.term);
     this.previewMeasuredFit(layer);

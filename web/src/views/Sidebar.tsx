@@ -64,6 +64,7 @@ import { BucketSwitcher, type SwitcherSession } from "./BucketSwitcher";
 import { parseSidebarStyle, USER_SIDEBAR_STYLE_KEY } from "../sidebarStyle";
 import { SessionInfoDialog } from "./SessionInfoDialog";
 import {
+  ALL_SCOPE,
   bucketOfSession,
   bucketTallies,
   effectiveScope,
@@ -683,6 +684,27 @@ export function SessionRoleIcon({ role }: { role: SessionRole }) {
   );
 }
 
+/** Folds the session list down to the bucket rail, or opens it again. */
+function ListToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const shortcut = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘\\" : "Ctrl+Shift+\\";
+  return (
+    <button
+      type="button"
+      className="sb-rail-btn sb-list-toggle"
+      aria-label={collapsed ? "Show session list" : "Hide session list"}
+      aria-pressed={collapsed}
+      title={`${collapsed ? "Show" : "Hide"} the session list (${shortcut})`}
+      onClick={onToggle}
+    >
+      <svg className="sb-list-toggle-glyph" viewBox="0 0 16 16" aria-hidden="true">
+        {collapsed
+          ? <path d="M3.5 3.5 8 8l-4.5 4.5M8.5 3.5 13 8l-4.5 4.5" />
+          : <path d="M12.5 3.5 8 8l4.5 4.5M7.5 3.5 3 8l4.5 4.5" />}
+      </svg>
+    </button>
+  );
+}
+
 export function Sidebar({
   selectedId,
   onSelect,
@@ -699,6 +721,8 @@ export function Sidebar({
   stateFilter,
   onClearStateFilter,
   notify,
+  collapsed = false,
+  onToggleCollapsed,
 }: {
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -717,6 +741,9 @@ export function Sidebar({
   stateFilter: RollupState | null;
   onClearStateFilter: () => void;
   notify: NotifyControls;
+  /** Only the bucket rail shows; the session list is folded away. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
   const state = useAppState();
   const client = useClient();
@@ -763,7 +790,10 @@ export function Sidebar({
   }, []);
 
   const bucketIds = new Set([...state.buckets.keys()]);
-  const scope = state.hydrated ? effectiveScope(storedScope, bucketIds) : storedScope;
+  // The rail has no Needs you button, so a saved Needs you scope shows all buckets there.
+  const railStyle = parseSidebarStyle(state.userSettings.get(USER_SIDEBAR_STYLE_KEY)) === "rail";
+  const reachableScope = railStyle && storedScope.kind === "needs" ? ALL_SCOPE : storedScope;
+  const scope = state.hydrated ? effectiveScope(reachableScope, bucketIds) : reachableScope;
 
   const pickScope = useCallback((next: SidebarScope) => {
     writeString(SIDEBAR_SCOPE_KEY, scopeKey(next));
@@ -1228,12 +1258,18 @@ export function Sidebar({
 
 
   return (
-    <div className={`sidebar ${sidebarStyle === "rail" ? "has-rail" : ""}`}>
+    <div className={`sidebar ${sidebarStyle === "rail" ? "has-rail" : ""} ${collapsed ? "is-collapsed" : ""}`}>
+      {sidebarStyle !== "rail" && collapsed && onToggleCollapsed && (
+        <div className="sb-rail sb-rail-mini">
+          <ListToggle collapsed onToggle={onToggleCollapsed} />
+        </div>
+      )}
       {sidebarStyle === "rail" && (
         <BucketRail
           scope={scope}
           buckets={switcherBuckets}
           searchOpen={switcherOpen}
+          header={onToggleCollapsed && <ListToggle collapsed={collapsed} onToggle={onToggleCollapsed} />}
           onPickScope={(next) => {
             const switched = next.kind === "bucket" && scopeKey(next) !== scopeKey(scope);
             pickScope(next);
@@ -1243,6 +1279,7 @@ export function Sidebar({
             if (reopen && reopen !== selectedId) onSelect(reopen);
           }}
           onOpenSearch={() => {
+            if (collapsed) onToggleCollapsed?.();
             if (switcherOpen) {
               closeSwitcher(false);
               return;

@@ -80,6 +80,7 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_WIDTH_KEY,
+  SESSION_LIST_COLLAPSED_KEY,
   writeBool,
   writeSessionString,
   writeString,
@@ -352,6 +353,26 @@ function Shell({
     notifier.permission,
   );
   const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
+  const [listCollapsed, setListCollapsed] = useState(() => readBool(SESSION_LIST_COLLAPSED_KEY, false));
+  const toggleListCollapsed = useCallback(() => {
+    setListCollapsed((current) => {
+      writeBool(SESSION_LIST_COLLAPSED_KEY, !current);
+      return !current;
+    });
+  }, []);
+  // Captured before the terminal sees it. Ctrl+\ alone is the terminal's quit
+  // signal, so other platforms add Shift.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "\\" && event.code !== "Backslash") return;
+      if (!(event.metaKey || (event.ctrlKey && event.shiftKey))) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleListCollapsed();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [toggleListCollapsed]);
   const [resizing, setResizing] = useState(false);
   const [workspaces, setWorkspaces] = useState<SavedWorkspace[]>([]);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -1095,7 +1116,7 @@ function Shell({
         </div>
       ))}
       <div
-        className="workspace"
+        className={`workspace ${listCollapsed ? "is-list-collapsed" : ""}`}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
       >
         <div className="sidebar-shell">
@@ -1115,15 +1136,17 @@ function Shell({
             stateFilter={activeStateFilter}
             onClearStateFilter={() => setStateFilter(null)}
             notify={notify}
+            collapsed={listCollapsed}
+            onToggleCollapsed={toggleListCollapsed}
           />
         </div>
-        <div
+        {!listCollapsed && <div
           className={`sidebar-resizer ${resizing ? "is-dragging" : ""}`}
           role="separator"
           aria-orientation="vertical"
           aria-label="resize sidebar"
           onPointerDown={startResize}
-        />
+        />}
         <main className="main-pane">
           {displayedView && (
             <div

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { authedFetch } from "../api/token";
 import { useAppState } from "../state/hooks";
+import type { TerminalStage } from "../ws/terminal";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TerminalViewport } from "./WorkspacePage";
 
@@ -169,6 +170,14 @@ export interface Gutter {
   lengths: number[];
 }
 
+function withCollapsed(layout: SessionPaneLayout, collapsed: Record<string, boolean>): SessionPaneLayout {
+  const ids = Object.keys(collapsed).filter((id) => layout.panes[id] && (layout.panes[id].collapsed === true) !== collapsed[id]);
+  if (ids.length === 0) return layout;
+  const panes = { ...layout.panes };
+  for (const id of ids) panes[id] = { ...panes[id], collapsed: collapsed[id] };
+  return { ...layout, panes };
+}
+
 function isCollapsed(node: LayoutNode, layout: SessionPaneLayout): boolean {
   return Boolean(node.pane && node.pane !== AGENT && layout.panes[node.pane]?.collapsed);
 }
@@ -231,13 +240,15 @@ function rectStyle(rect: Rect): React.CSSProperties {
  */
 export function AgentPanes({
   sessionId,
-  layout,
+  layout: servedLayout,
   hostRef,
   active,
+  stage,
 }: {
   sessionId: string;
   layout: SessionPaneLayout;
   hostRef: RefObject<HTMLDivElement | null>;
+  stage: TerminalStage;
   /** Shown and placing the agent's terminal. An inactive layout stays mounted
    * and connected but hidden, so returning to its session shows it at once. */
   active: boolean;
@@ -245,8 +256,37 @@ export function AgentPanes({
   const rootRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [draft, setDraft] = useState<LayoutNode | null>(null);
-  const tree = draft ?? layout.tree;
-  useEffect(() => setDraft(null), [layout.rev]);
+  const tree = draft ?? servedLayout.tree;
+  // Collapse and expand apply locally on click rather than after the daemon answers.
+  const [collapseDraft, setCollapseDraft] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    setDraft(null);
+    setCollapseDraft({});
+  }, [servedLayout.rev]);
+  const layout = withCollapsed(servedLayout, collapseDraft);
+  const sessionKey = BigInt(sessionId);
+
+  const agentRectIf = (pane: string, collapsed: boolean) => {
+    const root = rootRef.current;
+    if (!root) return undefined;
+    const placed = new Map<string, Placed>();
+    measure(tree, { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight }, null, [], withCollapsed(layout, { [pane]: collapsed }), placed, []);
+    return placed.get(AGENT)?.rect;
+  };
+  const pressCollapse = (pane: string, collapsed: boolean) => {
+    const rect = agentRectIf(pane, collapsed);
+    if (rect) stage.anticipate(sessionKey, rect.w, rect.h);
+  };
+  const toggleCollapse = (pane: string, collapsed: boolean) => {
+    setCollapseDraft((current) => ({ ...current, [pane]: collapsed }));
+    paneAction(sessionId, pane, collapsed ? "collapse" : "expand").catch(() => {
+      setCollapseDraft((current) => {
+        const { [pane]: _reverted, ...rest } = current;
+        return rest;
+      });
+    });
+  };
+  const abandonPress = () => stage.cancelAnticipation(sessionKey);
 
   // Measured again whenever the layout becomes active: its area can differ
   // from the session shown while it was hidden, such as one without a
@@ -262,7 +302,9 @@ export function AgentPanes({
           : { w: root.clientWidth, h: root.clientHeight },
       );
     read();
-    const observer = new ResizeObserver(read);
+    // Laid out inside the observer callback, so panes move in the same frame
+    // as the area that changed size instead of the frame after.
+    const observer = new ResizeObserver(() => flushSync(read));
     observer.observe(root);
     return () => observer.disconnect();
   }, [active]);
@@ -288,6 +330,7 @@ export function AgentPanes({
       && host.style.width === next.width && host.style.height === next.height
     ) return;
     Object.assign(host.style, { position: "absolute", flex: "none", ...next });
+    stage.fitVisibleNow();
   });
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -377,6 +420,9 @@ export function AgentPanes({
             rect={placed.rect}
             axis={placed.axis}
             active={active}
+            onPressCollapse={pressCollapse}
+            onToggleCollapse={toggleCollapse}
+            onAbandonPress={abandonPress}
           />
         );
       })}
@@ -403,12 +449,20 @@ function PaneView({
   rect,
   axis,
   active,
+  onPressCollapse,
+  onToggleCollapse,
+  onAbandonPress,
 }: {
   meta: PaneMeta;
   sessionId: string;
   rect: Rect;
   axis: "row" | "column" | null;
   active: boolean;
+  /** Pointerdown on the collapse toggle, with the state a click would set. */
+  onPressCollapse: (pane: string, collapsed: boolean) => void;
+  onToggleCollapse: (pane: string, collapsed: boolean) => void;
+  /** The press ended without a click. */
+  onAbandonPress: () => void;
 }) {
   const state = useAppState();
   const collapsed = meta.collapsed === true;
@@ -416,6 +470,7 @@ function PaneView({
   if (!collapsed) expanded.current = { w: rect.w, h: rect.h - HEAD_PX };
   const sideways = collapsed && axis === "row";
   const [localReload, setLocalReload] = useState(0);
+  const pressed = useRef<object | null>(null);
   const [confirmingStop, setConfirmingStop] = useState(false);
   // The body stays behind the pane's own background until its content has
   // painted, so a pane appears whole instead of building up on screen.
@@ -449,7 +504,21 @@ function PaneView({
           title={collapsed ? "Expand" : "Collapse to its header"}
           aria-label={collapsed ? "Expand pane" : "Collapse pane"}
           aria-expanded={!collapsed}
-          onClick={() => void paneAction(sessionId, meta.id, collapsed ? "expand" : "collapse")}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            const press = pressed.current = {};
+            onPressCollapse(meta.id, !collapsed);
+            window.addEventListener("pointerup", () => window.setTimeout(() => {
+              if (pressed.current === press) {
+                pressed.current = null;
+                onAbandonPress();
+              }
+            }), { once: true, capture: true });
+          }}
+          onClick={() => {
+            pressed.current = null;
+            onToggleCollapse(meta.id, !collapsed);
+          }}
         >
           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" className="ap-glyph-chevron">
             <path d="M5.5 3.5 10 8l-4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />

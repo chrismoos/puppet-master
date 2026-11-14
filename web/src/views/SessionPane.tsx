@@ -609,7 +609,7 @@ export function SessionPane({
               const layout = parseSessionLayout(state.sessionLayouts.get(id));
               if (!layout || !layoutHasPanes(layout)) return null;
               const shown = id === sessionId && selectedTerminal === "agent" && !ended;
-              return <AgentPanes key={id} sessionId={id} layout={layout} hostRef={hostRef} active={shown} />;
+              return <AgentPanes key={id} sessionId={id} layout={layout} hostRef={hostRef} active={shown} stage={stage} />;
             })}
             <SessionDropOverlay state={fileDrop.state} />
             {session && ended && selectedTerminal === "agent" && (
