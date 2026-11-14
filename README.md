@@ -32,7 +32,8 @@ containers. Your agents use their existing CLIs, accounts, and model settings.
   from a session and open it from another device.
 - **Watch it work beside the agent.** Agents can open panes next to their
   terminal: a program running live, a dashboard page, or the app they are
-  building. Resize, collapse, hide or stop them, and the agent is told.
+  building. Resize, collapse, hide or stop them. The agent is told when you
+  stop a pane it opened or start typing in one.
 - **Hear when it matters.** Alerts stack as cards in the dashboard while you
   watch it, and reach your desktop or phone when you are away. Ask an agent to
   let you know when something finishes and it notifies you the same way.

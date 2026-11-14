@@ -94,6 +94,9 @@ pub struct Pane {
     pub titled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// Opened by the user for their own use, so the agent is not told what happens to it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub user_opened: bool,
 }
 
 /// A pane stored before titles were tracked keeps showing the title it had.
@@ -738,6 +741,7 @@ pub async fn call_tool(
                 collapsed: false,
                 titled,
                 exit_code: None,
+                user_opened: false,
             };
             let (layout, ()) = panes.update(daemon.storage(), session_id, |layout| {
                 layout.tree = place(&layout.tree, &id);
@@ -834,6 +838,7 @@ pub async fn call_tool(
                         collapsed: false,
                         titled: true,
                         exit_code: None,
+                        user_opened: false,
                     },
                 );
                 Ok(())
@@ -1235,12 +1240,9 @@ fn spawn_watcher(daemon: Arc<Daemon>, session_id: u64, id: String) {
                 if let Ok((layout, pane)) = remove_pane(&daemon, session_id, &id) {
                     release(&daemon, &pane);
                     publish(&daemon, session_id, &layout);
-                    notify(
-                        &daemon,
-                        session_id,
-                        format!("Shell pane \"{id}\" exited and was closed."),
-                    )
-                    .await;
+                    if let Some(notice) = shell_exit_notice(&pane) {
+                        notify(&daemon, session_id, notice).await;
+                    }
                 }
                 return;
             }
@@ -1356,6 +1358,7 @@ pub async fn user_open_shell(
         collapsed: false,
         titled: false,
         exit_code: None,
+        user_opened: true,
     };
     let placed = daemon.panes.update(daemon.storage(), session_id, |layout| {
         let mut panes = layout.panes.clone();
@@ -1399,11 +1402,6 @@ pub async fn user_open_shell(
     };
     publish(daemon, session_id, &layout);
     spawn_watcher(daemon.clone(), session_id, id.to_string());
-    if tab.is_none() {
-        let notice = format!("The user opened a shell in pane \"{id}\" for their own use.");
-        let notifier = daemon.clone();
-        tokio::spawn(async move { notify(&notifier, session_id, notice).await });
-    }
     Ok(json!({ "ok": true, "id": id, "rev": layout.rev }))
 }
 
@@ -1431,7 +1429,7 @@ pub async fn user_pane_action(
                 Ok(())
             })?;
             publish(daemon, session_id, &layout);
-            format!("The user hid pane \"{id}\". It keeps running and get_layout lists it under unplaced. Do not place it back unless the user asks.")
+            None
         }
         "restore" => {
             let (layout, ()) = panes.update(daemon.storage(), session_id, |layout| {
@@ -1443,13 +1441,13 @@ pub async fn user_pane_action(
                 Ok(())
             })?;
             publish(daemon, session_id, &layout);
-            format!("The user brought back pane \"{id}\".")
+            None
         }
         "stop" => {
             let (layout, pane) = remove_pane(daemon, session_id, id)?;
             release(daemon, &pane);
             publish(daemon, session_id, &layout);
-            format!("The user stopped pane \"{id}\" and its program. Do not start it again unless the user asks.")
+            stop_notice(&pane)
         }
         "collapse" | "expand" => {
             let collapsed = action == "collapse";
@@ -1466,25 +1464,50 @@ pub async fn user_pane_action(
         }
         "input-on" | "input-off" => {
             let enabled = action == "input-on";
-            let (layout, ()) = panes.update(daemon.storage(), session_id, |layout| {
+            let (layout, pane) = panes.update(daemon.storage(), session_id, |layout| {
                 let entry = layout
                     .panes
                     .get_mut(id)
                     .ok_or_else(|| format!("no pane named {id:?}"))?;
                 entry.user_input = enabled;
-                Ok(())
+                Ok(entry.clone())
             })?;
             publish(daemon, session_id, &layout);
-            if !enabled {
-                return Ok(json!({ "ok": true }));
+            if enabled {
+                typing_notice(&pane)
+            } else {
+                None
             }
-            format!("The user enabled typing in pane \"{id}\"; avoid sending keys there while they work in it.")
         }
         _ => return Err(format!("unknown action {action}")),
     };
-    let daemon = daemon.clone();
-    tokio::spawn(async move { notify(&daemon, session_id, notice).await });
+    if let Some(notice) = notice {
+        let daemon = daemon.clone();
+        tokio::spawn(async move { notify(&daemon, session_id, notice).await });
+    }
     Ok(json!({ "ok": true }))
+}
+
+fn shell_exit_notice(pane: &Pane) -> Option<String> {
+    (!pane.user_opened).then(|| format!("Shell pane \"{}\" exited and was closed.", pane.id))
+}
+
+fn stop_notice(pane: &Pane) -> Option<String> {
+    (!pane.user_opened).then(|| {
+        format!(
+            "The user stopped pane \"{}\" and its program. Do not start it again unless the user asks.",
+            pane.id
+        )
+    })
+}
+
+fn typing_notice(pane: &Pane) -> Option<String> {
+    (!pane.user_opened).then(|| {
+        format!(
+            "The user enabled typing in pane \"{}\"; avoid sending keys there while they work in it.",
+            pane.id
+        )
+    })
 }
 
 /// What an ended pane program printed, for the pane to show once there is no
@@ -1517,6 +1540,39 @@ mod tests {
     use super::*;
     use pm_protocol::domain::{AgentKind, PermissionMode};
 
+    #[test]
+    fn a_shell_the_user_opened_tells_the_agent_nothing() {
+        let mut own = pane("shell-1");
+        own.kind = "shell".into();
+        own.user_opened = true;
+        assert_eq!(shell_exit_notice(&own), None);
+        assert_eq!(stop_notice(&own), None);
+        assert_eq!(typing_notice(&own), None);
+    }
+
+    #[test]
+    fn a_pane_the_agent_opened_still_reports_exits_stops_and_typing() {
+        let mut agents = pane("build");
+        agents.kind = "shell".into();
+        assert!(shell_exit_notice(&agents).is_some_and(|n| n.contains("\"build\" exited")));
+        assert!(stop_notice(&agents).is_some_and(|n| n.contains("stopped pane \"build\"")));
+        assert!(typing_notice(&agents).is_some_and(|n| n.contains("enabled typing")));
+    }
+
+    #[test]
+    fn a_stored_pane_without_the_flag_reads_as_opened_by_the_agent() {
+        let stored = r#"{"id":"log","kind":"shell","title":"log","version":0,"user_input":true}"#;
+        let pane: Pane = serde_json::from_str(stored).unwrap();
+        assert!(!pane.user_opened);
+        let mut own = pane.clone();
+        own.user_opened = true;
+        let round: Pane = serde_json::from_str(&serde_json::to_string(&own).unwrap()).unwrap();
+        assert!(round.user_opened);
+        assert!(!serde_json::to_string(&pane)
+            .unwrap()
+            .contains("user_opened"));
+    }
+
     fn pane(id: &str) -> Pane {
         Pane {
             id: id.into(),
@@ -1536,6 +1592,7 @@ mod tests {
             collapsed: false,
             titled: true,
             exit_code: None,
+            user_opened: false,
         }
     }
 
