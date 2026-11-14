@@ -3,6 +3,7 @@ import type { GhosttyTheme } from "./ghostty/core";
 import { GhosttyTerminalAdapter } from "./ghostty/terminalAdapter";
 import { ghosttyColorToCss } from "./ghostty/terminalAdapter";
 import { measureGhosttyCell, terminalGridSize } from "./ghostty/renderer";
+import { CONTENT_PADDING } from "./ghostty/surface";
 import type { PmClient, PtyHandle } from "@puppet-master/client-core/ws/client";
 import type { PtyFrame, TerminalSize } from "@puppet-master/client-core/ws/pty";
 import { terminalEvictionPriority } from "@puppet-master/client-core/ws/terminalCache";
@@ -239,6 +240,16 @@ export class TerminalStage {
 
   disposeTerminal(terminalId: bigint): void {
     this.disposeLayer(`t:${terminalId}`);
+  }
+
+  /** The shown terminal's cell size, font size and inset in CSS pixels, so a
+   * native view can draw the same grid. `null` until it has measured. */
+  visibleCellLayout(): { cellWidth: number; cellHeight: number; fontSize: number; padding: number } | null {
+    const layer = this.visibleId ? this.layers.get(this.visibleId) : undefined;
+    const cell = layer?.term.cellMetrics;
+    const fontSize = layer?.term.fontPx;
+    if (!cell || !fontSize) return null;
+    return { cellWidth: cell.width, cellHeight: cell.height, fontSize, padding: CONTENT_PADDING };
   }
 
   /** True when the program in a terminal takes mouse clicks itself. Layer

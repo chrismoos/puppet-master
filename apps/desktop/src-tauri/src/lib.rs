@@ -3,6 +3,7 @@
 //! in a browser, and a small bridge adds what a browser tab cannot do.
 
 mod controller;
+mod native;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -39,7 +40,12 @@ pub fn run() {
             saved_controller,
             native_notify,
             native_badge,
-            open_window
+            open_window,
+            native::native_terminal_supported,
+            native::native_terminal_open,
+            native::native_terminal_place,
+            native::native_terminal_focus,
+            native::native_terminal_close
         ])
         .menu(|app| {
             let menu = Menu::default(app)?;

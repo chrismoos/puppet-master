@@ -25,10 +25,25 @@
     invoke("plugin:window|toggle_maximize", { label: windowLabel() }).catch(() => {});
   });
 
+  // A Tauri IPC channel: the app sends events to the callback this registers.
+  const channel = (onMessage) => {
+    const internals = window.__TAURI_INTERNALS__;
+    const id = internals.transformCallback((raw) => onMessage(raw && typeof raw === "object" && "message" in raw ? raw.message : raw));
+    return `__CHANNEL__:${id}`;
+  };
+
   window.__pmNative = {
     notify: (title, body) => invoke("native_notify", { title: String(title), body: body == null ? null : String(body) }),
     setBadge: (count) => invoke("native_badge", { count: Math.max(0, Math.floor(Number(count) || 0)) }),
     openWindow,
+    terminal: {
+      supported: () => invoke("native_terminal_supported").catch(() => false),
+      open: (id, attach, placement, onEvent) =>
+        invoke("native_terminal_open", { request: { id, ...attach, placement }, onEvent: channel(onEvent) }),
+      place: (id, placement) => invoke("native_terminal_place", { id, placement }),
+      focus: (id) => invoke("native_terminal_focus", { id }),
+      close: (id) => invoke("native_terminal_close", { id }),
+    },
   };
 
   // A web view opens nothing for a new tab on its own. window.open answers

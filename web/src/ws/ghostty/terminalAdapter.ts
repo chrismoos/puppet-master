@@ -129,6 +129,9 @@ export class GhosttyTerminalAdapter {
   gridFor(width: number, height: number): { cols: number; rows: number } | null {
     return this.surface?.gridFor(width, height) ?? null;
   }
+  get fontPx(): number | null {
+    return this.surface?.fontPx() ?? null;
+  }
   get cellMetrics(): Pick<GhosttyCellMetrics, "width" | "height"> | null {
     return this.surface?.measuredCellSize() ?? null;
   }

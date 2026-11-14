@@ -20,6 +20,7 @@ import { browserJsonFetch } from "../api/http";
 import { browserWindowOpener, openForward } from "./forwardLink";
 import { SessionDropOverlay, useSessionDrop } from "./SessionDropZone";
 import { REVIEW_TAB_PREFIX, opensOwnWindow } from "./reviewWindow";
+import { useNativeTerminal } from "../nativeTerminal";
 
 /// Distinguishes a plan tab from a terminal id in the same selection.
 const PLAN_TAB_PREFIX = "plan:";
@@ -313,6 +314,7 @@ export function SessionPane({
   // spawn; wait for it rather than opening a terminal the client does
   // not know yet.
   const agentTerminal = terminals.find((terminal) => terminal.kind === TerminalKind.AGENT);
+  useNativeTerminal(sessionId, agentTerminal, hostRef, active && !ended && selectedTerminal === "agent", stage);
   // A dropped file goes to the terminal on screen, which is the agent's
   // unless another tab is open on one of its shells.
   const shownTerminal = selected ?? agentTerminal;

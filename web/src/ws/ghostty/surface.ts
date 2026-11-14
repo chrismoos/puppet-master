@@ -35,7 +35,7 @@ const TERMINAL_GLYPH_FALLBACKS =
 // reject the whole string.
 const DEFAULT_TERMINAL_FONT_FAMILY =
   '"SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", ' + TERMINAL_GLYPH_FALLBACKS;
-const CONTENT_PADDING = 4;
+export const CONTENT_PADDING = 4;
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 const CURSOR_BLINK_INTERVAL_MS = 500;
 /** End an unterminated synchronized update instead of freezing the last frame. */
@@ -984,6 +984,11 @@ export class GhosttyTerminalSurface {
   /** The grid a mount of this many CSS pixels would hold. */
   gridFor(width: number, height: number): { cols: number; rows: number } {
     return terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
+  }
+
+  /** The font size in CSS pixels. */
+  fontPx(): number {
+    return this.fontSize;
   }
 
   measuredCellSize(): Pick<GhosttyCellMetrics, "width" | "height"> {

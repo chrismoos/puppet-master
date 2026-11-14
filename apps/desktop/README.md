@@ -16,7 +16,34 @@ What the app adds over a browser tab:
   sites open in your default browser.
 - **Standard Edit shortcuts** (copy, paste, select all) inside the app.
 
-Terminals render the same way they do in the browser for now.
+## Native terminals
+
+On macOS the agent's terminal is drawn natively: a Metal view laid over the
+place the page keeps for it, with libghostty-vt holding the screen and the
+GPU drawing it, so heavy output never waits on the page. The view uses the
+page's own cell size, so the grid matches the browser's, and it follows the
+page's layout as panes move or the session list collapses.
+
+- Click the terminal to type into it. Keys go through libghostty's key
+  encoder, so application cursor keys and the kitty keyboard protocol work.
+  ⌘V pastes, bracketed when the program asks. Other ⌘ shortcuts go to the
+  app's menus.
+- The scroll wheel and trackpad scroll back through history.
+- It opens its own socket to the controller with a ticket the page mints,
+  as a second viewer that follows the terminal's size. The page's terminal
+  stays underneath and keeps owning the size.
+
+Not yet: mouse selection and copy, input methods for composed text (such as
+Japanese), mouse reporting to programs that use the mouse, and shell tabs
+or pane terminals, which still draw in the page. Page menus and dialogs that
+open over the terminal area are hidden behind it.
+
+The terminal crate is `apps/desktop/terminal`. Its tests run on any host
+with a GPU, including a software Vulkan driver:
+
+```sh
+cd apps/desktop && cargo test -p pm-native-terminal
+```
 
 ## First launch
 
