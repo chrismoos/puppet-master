@@ -30,6 +30,9 @@ containers. Your agents use their existing CLIs, accounts, and model settings.
   comments, have it make changes, and follow the updated diff in your browser.
 - **Share what they build.** Publish a running preview or a directory of files
   from a session and open it from another device.
+- **Watch it work beside the agent.** Agents can open panes next to their
+  terminal: a program running live, a dashboard page, or the app they are
+  building. Resize, collapse, hide or stop them, and the agent is told.
 - **Choose your models.** Configure model profiles and project defaults for
   supported agents, including custom provider endpoints.
 

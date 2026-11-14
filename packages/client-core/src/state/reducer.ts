@@ -40,6 +40,8 @@ export interface AppState {
   /** Open reviews. Threads and diffs are fetched over HTTP, not here. */
   reviews: ReadonlyMap<string, Review>;
   plans: ReadonlyMap<string, Plan>;
+  /** Pane layout JSON per session id, as the daemon publishes it. */
+  sessionLayouts: ReadonlyMap<string, string>;
   /** This user's own place in each review, including what they have
    * seen. Per-user, so it arrives with the snapshot rather than on the
    * broadcast event bus. */
@@ -84,6 +86,7 @@ export const initialState: AppState = {
   forwards: new Map(),
   reviews: new Map(),
   plans: new Map(),
+  sessionLayouts: new Map(),
   reviewViewerStates: new Map(),
   items: new Map(),
   briefings: new Map(),
@@ -143,6 +146,7 @@ export function reduce(state: AppState, action: Action): AppState {
         forwards: byId(action.snapshot.forwards),
         reviews: byId(action.snapshot.reviews),
         plans: byId(action.snapshot.plans),
+        sessionLayouts: new Map(action.snapshot.sessionLayouts.map((layout) => [layout.sessionId.toString(), layout.json])),
         reviewViewerStates: new Map(
           action.snapshot.reviewViewerStates.map((s) => [s.reviewId.toString(), s]),
         ),
@@ -195,6 +199,11 @@ function applyEvent(state: AppState, event: Event): AppState {
       return { ...state, reviews: remove(state.reviews, ev.value.toString()) };
     case "planChanged":
       return { ...state, plans: upsert(state.plans, ev.value.id.toString(), ev.value) };
+    case "sessionLayoutChanged":
+      return {
+        ...state,
+        sessionLayouts: upsert(state.sessionLayouts, ev.value.sessionId.toString(), ev.value.json),
+      };
     case "planRemoved":
       return { ...state, plans: remove(state.plans, ev.value.toString()) };
     // Carries no state: the daemon raised it so a connected client can

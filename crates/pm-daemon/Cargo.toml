@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+regex = "1"
 socket2 = "0.6"
 url = "2.5"
 pm-push = { path = "../pm-push" }

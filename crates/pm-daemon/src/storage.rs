@@ -2739,6 +2739,7 @@ impl Storage {
         conn.execute_batch(crate::connections::SCHEMA)?;
         crate::connections::migrate(&conn)?;
         conn.execute_batch(SUPERVISOR_SNOOZE_SCHEMA)?;
+        conn.execute_batch(crate::panes::SCHEMA)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         conn.execute_batch(BACKFILL_SESSION_ACTIVITY)?;
         // Blank-keyed or blank-valued fields predate ingestion dropping them
@@ -8359,6 +8360,7 @@ impl Storage {
             review_viewer_states: Vec::new(),
             reviews,
             plans,
+            session_layouts: Vec::new(),
             buckets,
             projects,
             sessions,

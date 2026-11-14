@@ -105,6 +105,7 @@ pub(crate) mod testutil {
             reviews: Vec::new(),
             review_viewer_states: Vec::new(),
             plans: Vec::new(),
+            session_layouts: Vec::new(),
             buckets,
             projects,
             sessions,

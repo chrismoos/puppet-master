@@ -58,7 +58,7 @@ function createPaneDragGhost(label: string): HTMLElement {
   return ghost;
 }
 
-function TerminalViewport({ terminal, focused, active, onIssue, onCommand }: { terminal: Terminal; focused: boolean; active: boolean; onIssue: (reason: GhosttyRendererIssue | null) => void; onCommand: (terminalId: bigint, command: string) => void }) {
+export function TerminalViewport({ terminal, focused, active, onIssue, onCommand }: { terminal: Terminal; focused: boolean; active: boolean; onIssue: (reason: GhosttyRendererIssue | null) => void; onCommand: (terminalId: bigint, command: string) => void }) {
   const client = useClient();
   const themeController = useTerminalThemeController();
   const hostRef = useRef<HTMLDivElement>(null);

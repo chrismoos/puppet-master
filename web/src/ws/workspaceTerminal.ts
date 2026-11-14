@@ -213,7 +213,10 @@ export class WorkspaceTerminal {
       viewer.setVisible(visible && this.active);
       this.terminal.setVisible(visible && this.active);
     });
-    this.observer = new ResizeObserver(() => this.scheduleResize());
+    this.observer = new ResizeObserver(() => {
+      this.previewFit();
+      this.scheduleResize();
+    });
     this.observer.observe(host);
     const unregisterTheme = themeController.register(this);
     const returnDispose = onUserReturn(() => {
@@ -308,6 +311,14 @@ export class WorkspaceTerminal {
       this.resizeFrame = 0;
     }
     this.resize();
+  }
+
+  /** Runs inside the resize observer: reflows and paints in the frame that changed size, before the PTY answers. */
+  private previewFit(): void {
+    if (!this.initialSnapshotParsed || this.sizePrompt.blocked()) return;
+    const measured = measureFit(this.terminal);
+    if (measured) this.terminal.previewResize(measured.cols, measured.rows);
+    this.terminal.paintNow();
   }
 
   private scheduleResize(): void {

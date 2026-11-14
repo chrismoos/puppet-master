@@ -1774,18 +1774,14 @@ async fn handle_command(
             truecolor,
             initial_cols,
             initial_rows,
+            command,
+            env,
         } => {
             let initial_size = match (initial_cols, initial_rows) {
                 (Some(cols), Some(rows)) => Some((cols, rows)),
                 _ => None,
             };
-            let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            let spec = pm_adapters::CommandSpec {
-                program,
-                args: Vec::new(),
-                env: Vec::new(),
-                cwd: PathBuf::from(cwd),
-            };
+            let spec = pm_adapters::shell_command_spec(PathBuf::from(cwd), command.as_deref(), env);
             if mux
                 .spawn(
                     terminal_id,

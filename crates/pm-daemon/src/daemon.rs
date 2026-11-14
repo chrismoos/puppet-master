@@ -251,6 +251,14 @@ pub(crate) enum ShareHost {
     Unknown,
 }
 
+/// What a pane's terminal runs instead of an interactive shell.
+pub(crate) struct ShellLaunch {
+    pub command: String,
+    pub env: Vec<(String, String)>,
+    /// Relative to the session's working directory.
+    pub cwd: Option<String>,
+}
+
 pub struct Daemon {
     pub(crate) storage: Storage,
     pub(crate) connection_locks: Mutex<HashMap<u64, std::sync::Arc<tokio::sync::Mutex<()>>>>,
@@ -310,6 +318,7 @@ pub struct Daemon {
     wait_events_tx: broadcast::Sender<()>,
     /// A submitted user prompt cancels a pending wait owned by that session.
     wait_cancel_tx: broadcast::Sender<u64>,
+    pub(crate) panes: crate::panes::Panes,
     /// User preferences travel on a separate channel and are filtered by
     /// authenticated user id before they enter any client socket.
     user_setting_channels:
@@ -1466,6 +1475,7 @@ impl Daemon {
         let (mux, channels) = Mux::new();
         let mux = std::sync::Arc::new(mux);
         let local_worker = crate::workers::WorkerLink::local(mux.clone());
+        let panes = crate::panes::Panes::load(&storage);
         let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let (wait_events_tx, _) = broadcast::channel(WAIT_EVENT_CHANNEL_CAPACITY);
         let (wait_cancel_tx, _) = broadcast::channel(WAIT_EVENT_CHANNEL_CAPACITY);
@@ -1502,6 +1512,7 @@ impl Daemon {
             session_wait_journal: Mutex::new(SessionWaitJournal::default()),
             wait_events_tx,
             wait_cancel_tx,
+            panes,
             user_setting_channels: Mutex::new(std::collections::HashMap::new()),
             scrollback_dir: config.scrollback_dir,
             session_files_dir,
@@ -1957,6 +1968,7 @@ impl Daemon {
 
     fn subscription_snapshot(&self) -> Snapshot {
         let mut snapshot = self.storage.snapshot(now_unix_ms()).unwrap_or_default();
+        snapshot.session_layouts = self.panes.records();
         let activity = self.pending_session_activity.lock().unwrap();
         for session in &mut snapshot.sessions {
             if let Some(pending) = activity.get(&session.id) {
@@ -9055,6 +9067,49 @@ impl Daemon {
         terminal: &pm_protocol::domain::Terminal,
         worker_id: u64,
     ) -> Result<(), DaemonError> {
+        self.spawn_shell_run_with(terminal, worker_id, None)
+            .map(|_| ())
+    }
+
+    /// Creates a session terminal for a pane. Returns its id and whether the
+    /// command runs as the terminal's process; an older remote worker gets an
+    /// interactive shell instead, and the caller types the command into it.
+    pub(crate) fn create_pane_terminal(
+        &self,
+        session_id: u64,
+        title: &str,
+        launch: Option<&ShellLaunch>,
+    ) -> Result<(u64, bool), DaemonError> {
+        let session = self.storage.get_session(session_id)?;
+        self.ensure_local_worker_enabled(session.worker_id)?;
+        if session.worker_id != LOCAL_WORKER_ID {
+            self.worker_link(session.worker_id)?;
+        }
+        let terminal = self
+            .storage
+            .create_shell(session_id, title, now_unix_ms())?;
+        self.remember_terminal_worker(terminal.id, session.worker_id);
+        match self.spawn_shell_run_with(&terminal, session.worker_id, launch) {
+            Ok(direct) => Ok((terminal.id, direct)),
+            Err(error) => {
+                let _ = self.storage.delete_terminal(terminal.id);
+                self.forget_terminal_worker(terminal.id);
+                Err(error)
+            }
+        }
+    }
+
+    fn spawn_shell_run_with(
+        &self,
+        terminal: &pm_protocol::domain::Terminal,
+        worker_id: u64,
+        launch: Option<&ShellLaunch>,
+    ) -> Result<bool, DaemonError> {
+        let cwd = match launch.and_then(|launch| launch.cwd.as_deref()) {
+            Some(relative) => PathBuf::from(&terminal.cwd).join(relative),
+            None => PathBuf::from(&terminal.cwd),
+        };
+        let mut direct = launch.is_some();
         let initial_size = self
             .storage
             .agent_terminal(terminal.session_id)
@@ -9070,13 +9125,11 @@ impl Daemon {
             });
         if worker_id == LOCAL_WORKER_ID {
             self.ensure_local_worker_enabled(worker_id)?;
-            let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            let spec = pm_adapters::CommandSpec {
-                program,
-                args: Vec::new(),
-                env: Vec::new(),
-                cwd: PathBuf::from(&terminal.cwd),
-            };
+            let spec = pm_adapters::shell_command_spec(
+                cwd,
+                launch.map(|launch| launch.command.as_str()),
+                launch.map(|launch| launch.env.clone()).unwrap_or_default(),
+            );
             self.mux.spawn(
                 terminal.id,
                 terminal.generation,
@@ -9096,13 +9149,27 @@ impl Daemon {
                 } else {
                     (None, None)
                 };
+            let carries_command =
+                link.protocol_version() >= pm_protocol::WORKER_PROTOCOL_SPAWN_COMMAND;
+            direct &= carries_command;
             link.send(ControllerMsg::SpawnShell {
                 terminal_id: terminal.id,
                 generation: terminal.generation,
-                cwd: terminal.cwd.clone(),
+                cwd: if carries_command {
+                    cwd.to_string_lossy().into_owned()
+                } else {
+                    terminal.cwd.clone()
+                },
                 truecolor: self.spawn_truecolor(),
                 initial_cols,
                 initial_rows,
+                command: launch
+                    .filter(|_| carries_command)
+                    .map(|launch| launch.command.clone()),
+                env: launch
+                    .filter(|_| carries_command)
+                    .map(|launch| launch.env.clone())
+                    .unwrap_or_default(),
             })?;
         }
         let updated = self.storage.update_terminal_run(
@@ -9114,7 +9181,7 @@ impl Daemon {
             now_unix_ms(),
         )?;
         self.publish(Event::TerminalChanged(updated));
-        Ok(())
+        Ok(direct)
     }
 
     fn recover_shell(
@@ -9278,7 +9345,10 @@ impl Daemon {
         }
         if terminal.kind != pm_protocol::domain::TerminalKind::Agent {
             self.mux.remove(exit.terminal_id);
-            if !paused_for_shutdown && exit.exit_code == Some(0) {
+            if !paused_for_shutdown
+                && exit.exit_code == Some(0)
+                && !self.panes.owns_terminal(exit.terminal_id)
+            {
                 if let Err(error) = self.remove_shell_terminal(exit.terminal_id) {
                     error!(terminal = exit.terminal_id, error = %error, "failed to remove exited shell");
                 }
@@ -10412,7 +10482,10 @@ impl Daemon {
             link.remove_session(terminal_id);
         }
         if !is_agent {
-            if state == pm_protocol::domain::TerminalRunState::Exited && exit_code == Some(0) {
+            if state == pm_protocol::domain::TerminalRunState::Exited
+                && exit_code == Some(0)
+                && !self.panes.owns_terminal(terminal_id)
+            {
                 if let Err(error) = self.remove_shell_terminal(terminal_id) {
                     error!(terminal = terminal_id, error = %error, "failed to remove exited remote shell");
                 }
@@ -10494,6 +10567,7 @@ impl Daemon {
                 // something else must not be what swallows it.
                 Event::AgentReplyArrived(_) => true,
                 Event::ConnectionsChanged => true,
+                Event::SessionLayoutChanged(layout) => layout.session_id == sid,
                 _ => false,
             },
             Scope::Project(pid) => match event {
@@ -10534,6 +10608,11 @@ impl Daemon {
                 Event::SecurityNotice(_) => true,
                 Event::AgentReplyArrived(_) => true,
                 Event::ConnectionsChanged => true,
+                Event::SessionLayoutChanged(layout) => self
+                    .storage
+                    .get_session(layout.session_id)
+                    .map(|s| s.project_id == pid)
+                    .unwrap_or(false),
                 _ => false,
             },
             Scope::Bucket(bid) => match event {
@@ -10607,6 +10686,12 @@ impl Daemon {
                 Event::SecurityNotice(_) => true,
                 Event::AgentReplyArrived(_) => true,
                 Event::ConnectionsChanged => true,
+                Event::SessionLayoutChanged(layout) => self
+                    .storage
+                    .get_session(layout.session_id)
+                    .and_then(|s| self.storage.get_project(s.project_id))
+                    .map(|p| p.bucket_id == bid)
+                    .unwrap_or(false),
             },
         }
     }

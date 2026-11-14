@@ -456,6 +456,13 @@ fn dashboard_router(daemon: Arc<Daemon>) -> Router {
         .route("/api/workers/{id}/reenroll", post(reenroll_worker))
         .route("/api/workers/{id}/update", post(update_worker))
         .route("/api/buckets/{id}/worker", post(set_bucket_worker))
+        .route("/api/sessions/{id}/layout", post(set_session_layout))
+        .route(
+            "/api/sessions/{id}/panes/{pane}/{action}",
+            post(session_pane_action),
+        )
+        .route("/pane-pages/{token}/", any(pane_page_index))
+        .route("/pane-pages/{token}/{*path}", any(pane_page_file))
         .route("/api/buckets/{id}/default", post(set_default_bucket))
         .route("/api/projects/{id}/worker", post(set_project_worker))
         .route(
@@ -2218,6 +2225,145 @@ async fn set_bucket_worker(
             Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LayoutChange {
+    base_rev: u64,
+    layout: serde_json::Value,
+}
+
+fn pane_error(error: String) -> Response {
+    let status = if error == "conflict" {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    (status, Json(serde_json::json!({ "error": error }))).into_response()
+}
+
+async fn set_session_layout(
+    State(daemon): State<Arc<Daemon>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+    Json(body): Json<LayoutChange>,
+) -> Response {
+    if authed_user(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match crate::panes::user_set_layout(&daemon, id, body.base_rev, body.layout).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => pane_error(error),
+    }
+}
+
+async fn session_pane_action(
+    State(daemon): State<Arc<Daemon>>,
+    headers: HeaderMap,
+    Path((id, pane, action)): Path<(u64, String, String)>,
+) -> Response {
+    if authed_user(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match crate::panes::user_pane_action(&daemon, id, &pane, &action).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => pane_error(error),
+    }
+}
+
+async fn pane_page_index(
+    State(daemon): State<Arc<Daemon>>,
+    Path(token): Path<String>,
+    request: Request,
+) -> Response {
+    serve_pane_page(&daemon, &token, "", request).await
+}
+
+async fn pane_page_file(
+    State(daemon): State<Arc<Daemon>>,
+    Path((token, path)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    serve_pane_page(&daemon, &token, &path, request).await
+}
+
+/// Serves a page pane's files to anyone holding its unguessable token. The
+/// sandbox header keeps the page in an opaque origin even when opened on its
+/// own, so it can never read the dashboard's cookies or storage.
+async fn serve_pane_page(
+    daemon: &Arc<Daemon>,
+    token: &str,
+    path: &str,
+    request: Request,
+) -> Response {
+    let (session_id, dir) = match crate::panes::page_target(daemon, token) {
+        None => return StatusCode::NOT_FOUND.into_response(),
+        Some(crate::panes::PageTarget::Forward(forward)) => {
+            let mut response = crate::forward_route::proxy_trusted(
+                daemon.clone(),
+                forward,
+                path.to_string(),
+                request,
+            )
+            .await;
+            let headers = response.headers_mut();
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                HeaderValue::from_static("*"),
+            );
+            headers.insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox allow-scripts allow-forms"),
+            );
+            return response;
+        }
+        Some(crate::panes::PageTarget::Dir(session_id, dir)) => (session_id, dir),
+    };
+    if request.method() != axum::http::Method::GET && request.method() != axum::http::Method::HEAD {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+    if path
+        .split('/')
+        .any(|part| part == ".." || part.starts_with('.'))
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let file = if path.is_empty() || path.ends_with('/') {
+        format!("{path}index.html")
+    } else {
+        path.to_string()
+    };
+    let Ok(session) = daemon.storage().get_session(session_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match daemon
+        .session_file_bytes(
+            &session,
+            &format!("{dir}/{file}"),
+            "path",
+            crate::panes::PAGE_MAX_BYTES,
+        )
+        .await
+    {
+        Ok(bytes) => {
+            let mime = mime_guess::from_path(&file).first_or_octet_stream();
+            (
+                [
+                    (header::CONTENT_TYPE, mime.to_string()),
+                    (header::CACHE_CONTROL, "no-store".to_string()),
+                    (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".to_string()),
+                    (
+                        header::CONTENT_SECURITY_POLICY,
+                        "sandbox allow-scripts allow-forms".to_string(),
+                    ),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

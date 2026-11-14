@@ -1030,6 +1030,13 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   }
 
+  /** Paints now instead of on the next frame, so a resized canvas is never shown stretched or blank. */
+  paintNow(): void {
+    if (this.disposed || !this.hasSize) return;
+    this.forceFullRender = true;
+    this.renderFrame();
+  }
+
   onRender(listener: () => void): { dispose(): void } {
     this.renderListeners.add(listener);
     return { dispose: () => this.renderListeners.delete(listener) };

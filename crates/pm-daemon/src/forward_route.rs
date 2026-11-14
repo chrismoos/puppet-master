@@ -57,7 +57,18 @@ pub(crate) async fn proxy(State(daemon): State<Arc<Daemon>>, request: Request) -
     ) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    serve(daemon, id, rest, bare, request).await
+    serve(daemon, id, rest, bare, false, request).await
+}
+
+/// Proxies to a forward for a caller that already proved its right to it,
+/// such as a page pane's capability token.
+pub(crate) async fn proxy_trusted(
+    daemon: Arc<Daemon>,
+    id: u64,
+    rest: String,
+    request: Request,
+) -> Response {
+    serve(daemon, id, rest, false, true, request).await
 }
 
 /// A forward that owns its whole origin: a share-domain host, or a
@@ -65,7 +76,7 @@ pub(crate) async fn proxy(State(daemon): State<Arc<Daemon>>, request: Request) -
 /// forwarded application, so nothing is stripped but the leading slash.
 pub(crate) async fn proxy_rooted(daemon: Arc<Daemon>, id: u64, request: Request) -> Response {
     let rest = request.uri().path().trim_start_matches('/').to_string();
-    serve(daemon, id, rest, false, request).await
+    serve(daemon, id, rest, false, false, request).await
 }
 
 /// `bare` marks a request to `/forwards/{id}` with no trailing slash,
@@ -75,6 +86,7 @@ async fn serve(
     id: u64,
     rest: String,
     bare: bool,
+    trusted: bool,
     mut request: Request,
 ) -> Response {
     let Ok(forward) = daemon.storage.session_forward(id) else {
@@ -112,7 +124,8 @@ async fn serve(
     let valid_query = query_token
         .as_deref()
         .filter(|t| daemon.verify_forward_token(t, id).is_some());
-    let authenticated = crate::http::authed_identity(&daemon, request.headers()).is_some()
+    let authenticated = trusted
+        || crate::http::authed_identity(&daemon, request.headers()).is_some()
         || cookie_token.is_some_and(|t| daemon.verify_forward_token(t, id).is_some())
         || valid_query.is_some();
     // Only a page open can follow a redirect without losing something. A

@@ -1,4 +1,5 @@
 import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentPanes, HiddenPaneTray, isPaneForward, layoutHasPanes, paneTerminalIds, parseSessionLayout } from "./AgentPanes";
 import { ContextPanel } from "../components/ContextPanel";
 import { sessionRoutePath } from "@puppet-master/client-core/router";
 import { navigate } from "../router";
@@ -203,6 +204,8 @@ export function SessionPane({
   // Back actually goes back. Returning from elsewhere carries the tab
   // along instead of this second-guessing an address that omitted it.
   const selectedTerminal = routeTab ?? "agent";
+  const paneLayout = parseSessionLayout(state.sessionLayouts.get(sessionId));
+  const paneTerminals = paneTerminalIds(paneLayout);
   const setSelectedTerminal = useCallback(
     (tab: string) =>
       navigate(
@@ -243,7 +246,8 @@ export function SessionPane({
   const session = state.sessions.get(sessionId);
   const ended = session ? sessionEnded(session) : false;
   const forwards = useMemo(
-    () => forwardsNewestFirst(forwardsForSession({ sessions: state.sessions, forwards: state.forwards }, sessionId)),
+    () => forwardsNewestFirst(forwardsForSession({ sessions: state.sessions, forwards: state.forwards }, sessionId))
+      .filter((owned) => !isPaneForward(owned.forward.slug, sessionId)),
     [state.sessions, state.forwards, sessionId],
   );
   const [forwardsExpandedFor, setForwardsExpandedFor] = useState<string | null>(null);
@@ -493,7 +497,7 @@ export function SessionPane({
       <div className="term-wrap">
         <div className="terminal-tabs">
           <button type="button" className={`btn ${selectedTerminal === "agent" ? "active" : ""}`} onClick={() => setSelectedTerminal("agent")}>agent</button>
-          {terminals.filter((t) => t.kind === TerminalKind.SHELL).map((terminal) => (
+          {terminals.filter((t) => t.kind === TerminalKind.SHELL && !paneTerminals.has(t.id.toString())).map((terminal) => (
             <button
               type="button"
               className={`btn terminal-tab ${selectedTerminal === terminal.id.toString() ? "active" : ""}`}
@@ -550,6 +554,7 @@ export function SessionPane({
           <button type="button" className="btn" disabled={Boolean(unavailableReason)} title={unavailableReason ?? undefined} onClick={() => run(client.createShell(BigInt(sessionId)).then((outcome) => { if (outcome.createdId) setSelectedTerminal(outcome.createdId.toString()); }))}>+ Shell</button>
           {selected?.kind === TerminalKind.SHELL && <button type="button" className="btn btn-danger" disabled={Boolean(unavailableReason)} title={unavailableReason ?? undefined} onClick={() => run(client.closeTerminal(selected.id))}>close</button>}
           <div className="terminal-tabs-spacer" />
+          <HiddenPaneTray sessionId={sessionId} layout={paneLayout} />
           {session && (
             <button
               type="button"
@@ -582,6 +587,9 @@ export function SessionPane({
             {...fileDrop.handlers}
           >
             <div className="term-host" ref={hostRef} />
+            {selectedTerminal === "agent" && !ended && paneLayout && layoutHasPanes(paneLayout) && (
+              <AgentPanes sessionId={sessionId} layout={paneLayout} hostRef={hostRef} />
+            )}
             <SessionDropOverlay state={fileDrop.state} />
             {session && ended && selectedTerminal === "agent" && (
               <div className="term-overlay">

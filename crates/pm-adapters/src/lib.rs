@@ -166,6 +166,26 @@ pub struct CommandSpec {
     pub cwd: PathBuf,
 }
 
+/// A session terminal's process: the user's shell, interactive when no
+/// command is given, otherwise running `command` through it.
+pub fn shell_command_spec(
+    cwd: PathBuf,
+    command: Option<&str>,
+    env: Vec<(String, String)>,
+) -> CommandSpec {
+    let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    let args = match command {
+        Some(command) => vec!["-c".to_string(), command.to_string()],
+        None => Vec::new(),
+    };
+    CommandSpec {
+        program,
+        args,
+        env,
+        cwd,
+    }
+}
+
 impl CommandSpec {
     fn with_integration_env(mut self, integration: &Integration) -> Self {
         self.env.push((
@@ -470,7 +490,10 @@ host keeps serving them for you. Forwarded HTTP previews live under \
 URLs for assets, links, forms, fetch calls, and WebSockets, or configure the app's base path \
 to the returned URL's path. Do not use root-relative URLs such as `/assets/app.js`, \
 hardcoded localhost URLs, or `../` paths that escape the mount. Keep directory links \
-trailing-slashed, and configure dev-server WebSocket/HMR paths under the same prefix.";
+trailing-slashed, and configure dev-server WebSocket/HMR paths under the same prefix. When \
+the user asks to see something running, a live view, or a page beside you, open it as a pane \
+with `open_terminal` or `open_page` instead of describing it. Panes are for the user to \
+watch, not for your own background work.";
 
 /// Instructions only Claude Code needs, because only its harness offers
 /// them: it can publish pages as claude.ai artifacts, which live outside
@@ -3602,6 +3625,8 @@ console.log(JSON.stringify(sent));
             "unpublish_dir",
             "publish_port",
             "unpublish_port",
+            "open_terminal",
+            "open_page",
         ] {
             assert!(REPORTING_BRIEF.contains(tool), "brief omits {tool}");
         }
@@ -3623,6 +3648,9 @@ console.log(JSON.stringify(sent));
             "WebSockets",
             "proxy strips that prefix",
             "paths that escape the mount",
+            "open it as a pane",
+            "Panes are for the user to \
+             watch, not for your own background work",
         ] {
             assert!(
                 REPORTING_BRIEF.contains(guidance),

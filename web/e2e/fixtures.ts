@@ -40,6 +40,7 @@ type E2eFixtures = {
     seedOfflineHosts: (names: readonly string[]) => void;
     seedSessionOnOfflineHost: (title: string, hostName: string) => void;
     setProjectPath: (path: string) => void;
+    setSessionPermission: (title: string, mode: "default" | "auto" | "bypass") => void;
     seedReviewThreads: (reviewId: number, threads: readonly SeedThread[]) => void;
     agentReply: (sessionTitle: string, threadId: number, body: string) => Promise<void>;
     callAgentTool: (sessionTitle: string, name: string, args: Record<string, unknown>) => Promise<string>;
@@ -196,6 +197,17 @@ export const test = base.extend<E2eFixtures>({
           const database = openDaemonDatabase(root);
           try {
             database.prepare("UPDATE projects SET path = ? WHERE id = 1").run(path);
+          } finally {
+            database.close();
+          }
+        },
+        // The daemon reads a session's permission mode on every tool call,
+        // so changing the stored row is what a session spawned in that mode
+        // would look like.
+        setSessionPermission: (title, mode) => {
+          const database = openDaemonDatabase(root);
+          try {
+            database.prepare("UPDATE sessions SET permission_mode = ? WHERE task_title = ?").run(mode, title);
           } finally {
             database.close();
           }

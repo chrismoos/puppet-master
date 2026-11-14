@@ -1549,6 +1549,14 @@ message Snapshot {
   // user_settings, so the unseen mark is theirs and not everyone's.
   repeated ReviewViewerState review_viewer_states = 15;
   repeated Plan plans = 16;
+  repeated SessionLayout session_layouts = 17;
+}
+
+// The panes an agent arranged in its session view, as JSON so the
+// layout format can change without a protocol change.
+message SessionLayout {
+  uint64 session_id = 1;
+  string json = 2;
 }
 
 message UserSetting {
@@ -1647,6 +1655,7 @@ message Event {
     SecurityNotice security_notice = 26;
     AgentReplyArrived agent_reply_arrived = 27;
     ConnectionsChanged connections_changed = 28;
+    SessionLayout session_layout_changed = 29;
   }
 }
 
@@ -2256,6 +2265,10 @@ message ControllerSpawnShell {
   optional bool truecolor = 4;
   optional uint32 initial_cols = 5;
   optional uint32 initial_rows = 6;
+  // Runs through the user's shell as the terminal's process; absent means
+  // an interactive shell.
+  optional string command = 7;
+  map<string, string> env = 8;
 }
 
 message ControllerTranscript {

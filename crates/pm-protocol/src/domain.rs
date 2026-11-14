@@ -1981,6 +1981,7 @@ pub enum Event {
     /// A connection or connection call changed. Clients refetch over HTTP,
     /// which applies the viewer's scope.
     ConnectionsChanged,
+    SessionLayoutChanged(SessionLayout),
 }
 
 /// What happened, for a notice the user is told about rather than asked about.
@@ -2125,6 +2126,14 @@ pub struct Snapshot {
     /// This subscriber's own place in each open review.
     pub review_viewer_states: Vec<ReviewViewerState>,
     pub plans: Vec<Plan>,
+    pub session_layouts: Vec<SessionLayout>,
+}
+
+/// The panes an agent arranged in its session view, serialized as JSON.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SessionLayout {
+    pub session_id: u64,
+    pub json: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2461,6 +2470,10 @@ pub enum ControllerMsg {
         truecolor: bool,
         initial_cols: Option<u16>,
         initial_rows: Option<u16>,
+        /// Runs through the user's shell as the terminal's process; absent
+        /// means an interactive shell.
+        command: Option<String>,
+        env: Vec<(String, String)>,
     },
     Interrupt {
         session_id: u64,

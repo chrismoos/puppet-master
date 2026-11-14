@@ -13,6 +13,7 @@ import {
   ProjectSchema,
   SessionContextSchema,
   SessionForwardSchema,
+  SessionLayoutSchema,
   SessionSchema,
   SessionState,
   SnapshotSchema,
@@ -88,6 +89,22 @@ function hydrated(): AppState {
 }
 
 describe("reduce", () => {
+  it("keeps each session's pane layout from the snapshot and its changes", () => {
+    let state = reduce(initialState, {
+      type: "snapshot",
+      snapshot: create(SnapshotSchema, {
+        sessions: [session(100n, 10n)],
+        sessionLayouts: [create(SessionLayoutSchema, { sessionId: 100n, json: '{"rev":1}' })],
+      }),
+    });
+    expect(state.sessionLayouts.get("100")).toBe('{"rev":1}');
+    state = reduce(state, {
+      type: "event",
+      event: event({ case: "sessionLayoutChanged", value: create(SessionLayoutSchema, { sessionId: 100n, json: '{"rev":2}' }) }),
+    });
+    expect(state.sessionLayouts.get("100")).toBe('{"rev":2}');
+  });
+
   it("populates state from a snapshot", () => {
     const state = hydrated();
     expect(state.hydrated).toBe(true);

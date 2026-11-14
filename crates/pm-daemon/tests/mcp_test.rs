@@ -996,6 +996,18 @@ async fn mcp_endpoint_speaks_the_protocol_subset() {
             "call_connection_tool",
             "get_connection_call",
             "list_connection_calls",
+            "open_terminal",
+            "open_page",
+            "get_layout",
+            "set_layout",
+            "list_panes",
+            "read_pane",
+            "wait_pane",
+            "send_to_pane",
+            "restart_pane",
+            "set_pane_title",
+            "reload_pane",
+            "close_pane",
             "open_review",
             "next_review_event",
             "post_review_reply",
@@ -1297,6 +1309,18 @@ async fn item_tools_are_gated_by_the_spawn_toggle() {
             "call_connection_tool",
             "get_connection_call",
             "list_connection_calls",
+            "open_terminal",
+            "open_page",
+            "get_layout",
+            "set_layout",
+            "list_panes",
+            "read_pane",
+            "wait_pane",
+            "send_to_pane",
+            "restart_pane",
+            "set_pane_title",
+            "reload_pane",
+            "close_pane",
             "open_review",
             "next_review_event",
             "post_review_reply",
@@ -4881,4 +4905,119 @@ async fn open_review_leaves_a_finished_review_finished_unless_reopen_is_set() {
         .unwrap()
         .contains("only when the user asks"));
     assert!(tool["inputSchema"]["properties"]["reopen"].is_object());
+}
+
+#[tokio::test]
+async fn pane_programs_need_bypass_run_directly_and_report_their_exit_status() {
+    let mut env = daemon_env();
+    let app = pm_daemon::http::router(Arc::clone(&env.daemon));
+    let mut exits = std::mem::replace(&mut env.exit_rx, tokio::sync::mpsc::unbounded_channel().1);
+    let exit_daemon = Arc::clone(&env.daemon);
+    tokio::spawn(async move {
+        while let Some(exit) = exits.recv().await {
+            exit_daemon.handle_session_exit(exit);
+        }
+    });
+    let default_id = spawn_test_session(&env, "p");
+    let default_token = env.daemon.session_token(default_id).unwrap().unwrap();
+    let refused = call(
+        &app,
+        &default_token,
+        "open_terminal",
+        json!({"id": "job", "title": "job", "command": "true"}),
+    )
+    .await;
+    assert_eq!(refused["isError"], true);
+    assert!(call_text(&refused).contains("needs bypass permissions"));
+
+    let id = env
+        .daemon
+        .spawn_session(
+            env.project_id,
+            pm_protocol::domain::AgentKind::Test,
+            "panes",
+            "p",
+            None,
+            pm_protocol::domain::PermissionMode::Bypass,
+            None,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    let opened = call(
+        &app,
+        &token,
+        "open_terminal",
+        json!({"id": "job", "title": "short job", "command": "echo pane-says-$GREETING; exit 3", "env": {"GREETING": "hello"}}),
+    )
+    .await;
+    assert_eq!(opened["isError"], false, "{}", call_text(&opened));
+    let waited = call(
+        &app,
+        &token,
+        "wait_pane",
+        json!({"id": "job", "until": "exit", "timeout_ms": 10000}),
+    )
+    .await;
+    let waited: Value = serde_json::from_str(call_text(&waited)).unwrap();
+    assert_eq!(waited["done"], true, "{waited}");
+    assert_eq!(waited["what"], "exited with status 3");
+
+    let read = call(&app, &token, "read_pane", json!({"id": "job"})).await;
+    let read: Value = serde_json::from_str(call_text(&read)).unwrap();
+    assert!(
+        read["text"].as_str().unwrap().contains("pane-says-hello"),
+        "{read}"
+    );
+    assert!(
+        !read["text"]
+            .as_str()
+            .unwrap()
+            .contains("pane exited with status"),
+        "a direct launch prints no marker"
+    );
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let listed = call(&app, &token, "list_panes", json!({})).await;
+        let listed: Value = serde_json::from_str(call_text(&listed)).unwrap();
+        if listed[0]["state"] == "exited 3" {
+            assert_eq!(listed[0]["title"], "short job");
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "pane never showed its exit: {listed}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    let layout = call(&app, &token, "get_layout", json!({})).await;
+    let layout: Value = serde_json::from_str(call_text(&layout)).unwrap();
+    let rev = layout["rev"].as_u64().unwrap();
+    let stale = call(
+        &app,
+        &token,
+        "set_layout",
+        json!({"base_rev": rev - 1, "layout": {"column": [{"pane": "agent"}, {"pane": "job"}]}}),
+    )
+    .await;
+    assert_eq!(stale["isError"], true);
+    assert!(call_text(&stale).starts_with("conflict"));
+    let applied = call(
+        &app,
+        &token,
+        "set_layout",
+        json!({"base_rev": rev, "layout": {"column": [{"pane": "agent"}, {"pane": "job"}]}}),
+    )
+    .await;
+    assert_eq!(applied["isError"], false, "{}", call_text(&applied));
+
+    let closed = call(&app, &token, "close_pane", json!({"id": "job"})).await;
+    assert_eq!(closed["isError"], false, "{}", call_text(&closed));
+    let after = call(&app, &token, "get_layout", json!({})).await;
+    let after: Value = serde_json::from_str(call_text(&after)).unwrap();
+    assert_eq!(after["layout"], json!({"pane": "agent"}));
 }

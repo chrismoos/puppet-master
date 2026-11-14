@@ -237,6 +237,7 @@ pub async fn start(
         }
     });
 
+    crate::panes::resume(&daemon);
     let connections_daemon = daemon.clone();
     let connections_task = tokio::spawn(async move {
         let announcer = connections_daemon.clone();

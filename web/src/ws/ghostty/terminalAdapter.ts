@@ -238,6 +238,10 @@ export class GhosttyTerminalAdapter {
     this.surface?.setVisible(visible);
   }
 
+  paintNow(): void {
+    this.surface?.paintNow();
+  }
+
   refresh(_start: number, _end: number): void {
     this.surface?.refresh();
   }

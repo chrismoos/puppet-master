@@ -2705,6 +2705,10 @@ impl From<Event> for wire::Event {
                 body: reply.body,
             }),
             Event::ConnectionsChanged => W::ConnectionsChanged(wire::ConnectionsChanged {}),
+            Event::SessionLayoutChanged(layout) => W::SessionLayoutChanged(wire::SessionLayout {
+                session_id: layout.session_id,
+                json: layout.json,
+            }),
         };
         wire::Event { event: Some(event) }
     }
@@ -2760,6 +2764,10 @@ impl TryFrom<wire::Event> for Event {
                 body: reply.body,
             }),
             W::ConnectionsChanged(_) => Event::ConnectionsChanged,
+            W::SessionLayoutChanged(layout) => Event::SessionLayoutChanged(SessionLayout {
+                session_id: layout.session_id,
+                json: layout.json,
+            }),
         })
     }
 }
@@ -2792,6 +2800,14 @@ impl From<ServerMsg> for wire::ServerMessage {
                 reviews: s.reviews.into_iter().map(Into::into).collect(),
                 plans: s.plans.into_iter().map(Into::into).collect(),
                 review_viewer_states: s.review_viewer_states.into_iter().map(Into::into).collect(),
+                session_layouts: s
+                    .session_layouts
+                    .into_iter()
+                    .map(|layout| wire::SessionLayout {
+                        session_id: layout.session_id,
+                        json: layout.json,
+                    })
+                    .collect(),
             }),
             ServerMsg::Event(e) => Msg::Event(e.into()),
             ServerMsg::PtyOutput {
@@ -2907,6 +2923,14 @@ impl TryFrom<wire::ServerMessage> for ServerMsg {
                         .review_viewer_states
                         .into_iter()
                         .map(Into::into)
+                        .collect(),
+                    session_layouts: s
+                        .session_layouts
+                        .into_iter()
+                        .map(|layout| SessionLayout {
+                            session_id: layout.session_id,
+                            json: layout.json,
+                        })
                         .collect(),
                 }),
                 Msg::Event(e) => ServerMsg::Event(e.try_into()?),
@@ -3436,6 +3460,8 @@ impl From<ControllerMsg> for wire::ControllerMessage {
                 truecolor,
                 initial_cols,
                 initial_rows,
+                command,
+                env,
             } => Msg::SpawnShell(wire::ControllerSpawnShell {
                 terminal_id,
                 generation,
@@ -3443,6 +3469,8 @@ impl From<ControllerMsg> for wire::ControllerMessage {
                 truecolor: Some(truecolor),
                 initial_cols: initial_cols.map(|c| c as u32),
                 initial_rows: initial_rows.map(|r| r as u32),
+                command,
+                env: env.into_iter().collect(),
             }),
             ControllerMsg::Interrupt { session_id } => Msg::Interrupt(wire::ControllerInterrupt {
                 session_id,
@@ -3652,6 +3680,12 @@ impl TryFrom<wire::ControllerMessage> for ControllerMsg {
                     truecolor: m.truecolor.unwrap_or(true),
                     initial_cols: m.initial_cols.map(|c| c as u16),
                     initial_rows: m.initial_rows.map(|r| r as u16),
+                    command: m.command,
+                    env: {
+                        let mut env: Vec<(String, String)> = m.env.into_iter().collect();
+                        env.sort();
+                        env
+                    },
                 },
                 Msg::Interrupt(m) => {
                     if m.terminal_id != 0 {
@@ -4239,6 +4273,10 @@ mod tests {
                 reviews: Vec::new(),
                 review_viewer_states: Vec::new(),
                 plans: Vec::new(),
+                session_layouts: vec![SessionLayout {
+                    session_id: 4,
+                    json: "{\"rev\":2}".into(),
+                }],
                 buckets: vec![Bucket {
                     id: 1,
                     name: "work".into(),
@@ -4327,6 +4365,10 @@ mod tests {
             ServerMsg::Event(Event::ModelProfileChanged(sample_model_profile())),
             ServerMsg::Event(Event::ModelProfileRemoved(11)),
             ServerMsg::Event(Event::ConnectionsChanged),
+            ServerMsg::Event(Event::SessionLayoutChanged(SessionLayout {
+                session_id: 4,
+                json: "{\"rev\":3}".into(),
+            })),
             ServerMsg::Event(Event::ItemChanged(sample_item())),
             ServerMsg::Event(Event::ItemRemoved(ItemRef {
                 bucket_id: 1,
@@ -4637,6 +4679,26 @@ mod tests {
                 path: "out/report".into(),
             },
             ControllerMsg::DirShareStop { share_id: 5 },
+            ControllerMsg::SpawnShell {
+                terminal_id: 12,
+                generation: 1,
+                cwd: "/srv/api/web".into(),
+                truecolor: true,
+                initial_cols: Some(100),
+                initial_rows: Some(30),
+                command: Some("pnpm dev".into()),
+                env: vec![("A".into(), "1".into()), ("PORT".into(), "5173".into())],
+            },
+            ControllerMsg::SpawnShell {
+                terminal_id: 13,
+                generation: 1,
+                cwd: "/srv/api".into(),
+                truecolor: false,
+                initial_cols: None,
+                initial_rows: None,
+                command: None,
+                env: Vec::new(),
+            },
             ControllerMsg::Interrupt { session_id: 3 },
             ControllerMsg::Kill { session_id: 3 },
             ControllerMsg::ForwardOpen {

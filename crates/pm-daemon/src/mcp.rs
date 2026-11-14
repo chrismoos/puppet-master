@@ -252,6 +252,7 @@ fn tool_definitions(items_api: bool, supervisor_api: bool, spawnable_agents: &[&
     let mut tools = base_tool_definitions();
     if let Value::Array(tools) = &mut tools {
         tools.extend(crate::connections::tool_definitions());
+        tools.extend(crate::panes::tool_definitions());
         if let Value::Array(reviews) = review_tool_definitions() {
             tools.extend(reviews);
         }
@@ -1859,7 +1860,7 @@ async fn wait_sessions_tool(
 
 /// Removes escape sequences and non-printing control bytes so a
 /// terminal tail reads as plain text.
-fn strip_ansi(input: &str) -> String {
+pub(crate) fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
@@ -2005,6 +2006,14 @@ async fn call_tool(
                 json!({"isError":true,"content":[{"type":"text","text":error.to_string()}]})
             }
         });
+    }
+    if crate::panes::is_tool(name) {
+        return Ok(
+            match crate::panes::call_tool(daemon, token, name, args).await {
+                Ok(value) => tool_text(false, value.to_string()),
+                Err(error) => tool_text(true, error),
+            },
+        );
     }
     let str_arg = |key: &str| args[key].as_str().unwrap_or_default().to_string();
 
