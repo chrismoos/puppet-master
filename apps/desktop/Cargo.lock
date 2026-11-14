@@ -3127,7 +3127,9 @@ dependencies = [
 name = "pm-native-terminal"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "bytemuck",
+ "dispatch2",
  "fontdb",
  "futures-util",
  "objc2",

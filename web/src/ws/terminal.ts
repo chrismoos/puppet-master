@@ -127,6 +127,7 @@ export class TerminalStage {
   private root: HTMLDivElement;
   private layers = new Map<string, Layer>();
   private observer: ResizeObserver;
+  private nativeAgents = false;
   private resizeFrame = 0;
   private visibleId: string | null = null;
   private visibilityDispose: (() => void) | null = null;
@@ -232,9 +233,16 @@ export class TerminalStage {
 
   /** Starts attaching a session's terminal off screen, so the press that
    * comes before a click to open it hides the attach rather than adding to it. */
+  /** Agent terminals the desktop app draws natively. Their layers still
+   * measure and lay out, but never open a socket: the native terminal holds
+   * the only one. */
+  setNativeAgentTerminals(native: boolean): void {
+    this.nativeAgents = native;
+  }
+
   prepare(sessionId: bigint): void {
     const key = `s:${sessionId}`;
-    if (!this.root.isConnected || this.layers.has(key)) return;
+    if (!this.root.isConnected || this.layers.has(key) || this.nativeAgents) return;
     this.tryBindLayerSocket(this.createLayer(sessionId, false));
   }
 
@@ -858,6 +866,7 @@ export class TerminalStage {
 
   private tryBindLayerSocket(layer: Layer): boolean {
     if (layer.handle) return true;
+    if (this.nativeAgents && !layer.addressedTerminal) return false;
     const measured = measureFit(layer.term);
     if (!measured || !isRealPaneFit(layer.el.clientWidth, measured.cols)) return false;
     applyMeasuredFit(layer.term, measured, false);

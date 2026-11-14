@@ -63,7 +63,11 @@ mod platform {
         }
     }
 
-    pub fn open(window: WebviewWindow, request: OpenRequest, events: Channel<serde_json::Value>) -> Result<(), String> {
+    pub fn open(
+        window: WebviewWindow,
+        request: OpenRequest,
+        events: Channel<serde_json::Value>,
+    ) -> Result<(), String> {
         let label = window.label().to_string();
         // A raw pointer is not Send, so it crosses to the main thread as an address.
         let parent = window.ns_view().map_err(|error| error.to_string())? as usize;
@@ -82,10 +86,12 @@ mod platform {
                             url: request.url,
                             generation: request.generation,
                             viewer: request.viewer,
+                            claim: None,
                         },
                         request.placement.into(),
                         move |reason| {
-                            let _ = closed.send(json!({ "type": "closed", "id": id, "reason": reason }));
+                            let _ = closed
+                                .send(json!({ "type": "closed", "id": id, "reason": reason }));
                         },
                     )
                 };
@@ -94,14 +100,19 @@ mod platform {
                         TERMINALS.with(|terminals| terminals.borrow_mut().insert(key, terminal));
                     }
                     Err(reason) => {
-                        let _ = events.send(json!({ "type": "failed", "id": request.id, "reason": reason }));
+                        let _ = events
+                            .send(json!({ "type": "failed", "id": request.id, "reason": reason }));
                     }
                 }
             })
             .map_err(|error| error.to_string())
     }
 
-    fn with_terminal(window: &WebviewWindow, id: String, act: impl FnOnce(&NativeTerminal) + Send + 'static) -> Result<(), String> {
+    fn with_terminal(
+        window: &WebviewWindow,
+        id: String,
+        act: impl FnOnce(&NativeTerminal) + Send + 'static,
+    ) -> Result<(), String> {
         let key = (window.label().to_string(), id);
         window
             .run_on_main_thread(move || {
@@ -115,7 +126,9 @@ mod platform {
     }
 
     pub fn place(window: WebviewWindow, id: String, placement: PlacementArg) -> Result<(), String> {
-        with_terminal(&window, id, move |terminal| terminal.place(placement.into()))
+        with_terminal(&window, id, move |terminal| {
+            terminal.place(placement.into())
+        })
     }
 
     pub fn focus(window: WebviewWindow, id: String) -> Result<(), String> {
@@ -138,7 +151,11 @@ mod platform {
 
     const UNSUPPORTED: &str = "native terminals are drawn on macOS only";
 
-    pub fn open(_: WebviewWindow, _: OpenRequest, _: Channel<serde_json::Value>) -> Result<(), String> {
+    pub fn open(
+        _: WebviewWindow,
+        _: OpenRequest,
+        _: Channel<serde_json::Value>,
+    ) -> Result<(), String> {
         Err(UNSUPPORTED.into())
     }
 
@@ -171,7 +188,11 @@ pub fn native_terminal_open(
 }
 
 #[tauri::command]
-pub fn native_terminal_place(window: WebviewWindow, id: String, placement: PlacementArg) -> Result<(), String> {
+pub fn native_terminal_place(
+    window: WebviewWindow,
+    id: String,
+    placement: PlacementArg,
+) -> Result<(), String> {
     platform::place(window, id, placement)
 }
 

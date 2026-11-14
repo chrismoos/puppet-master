@@ -121,7 +121,7 @@ import { usePendingApprovals } from "./state/pendingApprovals";
 import { approvalRoutePath } from "@puppet-master/client-core/router";
 import { removeWorkspaceFromTabs, WorkspaceTabs } from "./views/WorkspaceTabs";
 import { AlertPill, pageIsWatched, type InAppAlert } from "./views/AlertPill";
-import { nativeBridge } from "./native";
+import { nativeBridge, nativeTerminalsAvailable } from "./native";
 
 /** Saved workspaces stay reachable by their URLs while the tab bar is hidden. */
 const SHOW_WORKSPACE_TABS = false;
@@ -250,7 +250,10 @@ function ConnectedApp({
   const themeController = themeControllerRef.current;
 
   const stageRef = useRef<TerminalStage | null>(null);
-  if (!review) stageRef.current ??= new TerminalStage(client, themeController);
+  if (!review && !stageRef.current) {
+    stageRef.current = new TerminalStage(client, themeController);
+    stageRef.current.setNativeAgentTerminals(nativeTerminalsAvailable());
+  }
   const stage = stageRef.current;
 
   const notifierRef = useRef<Notifier | null>(null);

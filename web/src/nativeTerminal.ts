@@ -1,6 +1,6 @@
 import { useEffect, type RefObject } from "react";
 import type { Terminal } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
-import { nativeBridge, type NativePlacement } from "./native";
+import { nativeBridge, nativeTerminalsAvailable, type NativePlacement } from "./native";
 import { mintSocketTicket, withTicket } from "./ws/socketTicket";
 import type { TerminalStage } from "./ws/terminal";
 
@@ -48,7 +48,7 @@ export function useNativeTerminal(
   const generation = terminal?.generation;
   useEffect(() => {
     const native = nativeBridge()?.terminal;
-    if (!native || !active || terminalId === undefined || generation === undefined) return;
+    if (!native || !nativeTerminalsAvailable() || !active || terminalId === undefined || generation === undefined) return;
     const id = `s:${sessionId}`;
     const viewer = 1 + Math.floor(Math.random() * VIEWER_ID_SPAN);
     let disposed = false;
@@ -68,7 +68,6 @@ export function useNativeTerminal(
     };
 
     const attach = async () => {
-      if (!(await native.supported()) || disposed) return;
       const path = `/ws/terminal/${terminalId}?generation=${generation}&viewer=${viewer}`;
       const ticket = await mintSocketTicket(path).catch(() => null);
       if (disposed || !ticket) return;

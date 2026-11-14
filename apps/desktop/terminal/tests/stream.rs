@@ -94,6 +94,7 @@ async fn a_snapshot_replay_then_live_output_build_the_screen_and_input_reaches_t
             url: format!("ws://127.0.0.1:{port}/ws/terminal/7?generation={GENERATION}&viewer={VIEWER}&ticket=one-use"),
             generation: GENERATION,
             viewer: VIEWER,
+            claim: None,
         },
         move |event| log.lock().unwrap().push(event),
     );
@@ -126,6 +127,91 @@ async fn a_snapshot_replay_then_live_output_build_the_screen_and_input_reaches_t
     );
     assert_eq!(frames[1], protocol::input(GENERATION, b"ls\r", true));
     assert_eq!(frames[2], protocol::resize_request(GENERATION, 1, 100, 30));
+    drop(stream);
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::result_large_err)]
+async fn the_first_claim_rides_in_the_url_and_program_copies_are_reported() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let query: Arc<Mutex<String>> = Arc::default();
+    let seen_query = query.clone();
+    let received: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let seen = received.clone();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_hdr_async(
+            tcp,
+            |request: &Request, mut response: Response| {
+                *seen_query.lock().unwrap() = request.uri().query().unwrap_or("").to_string();
+                response.headers_mut().insert(
+                    "Sec-WebSocket-Protocol",
+                    protocol::SUBPROTOCOL.parse().unwrap(),
+                );
+                Ok(response)
+            },
+        )
+        .await
+        .unwrap();
+        socket
+            .send(output(
+                FLAG_REPLAY | FLAG_REPLAY_START | FLAG_REPLAY_END,
+                b"$ ",
+            ))
+            .await
+            .unwrap();
+        socket
+            .send(output(0, b"\x1b]52;c;Y29waWVk\x07"))
+            .await
+            .unwrap();
+        while let Some(Ok(message)) = socket.next().await {
+            if let Message::Binary(frame) = message {
+                seen.lock().unwrap().push(frame.to_vec());
+            }
+        }
+    });
+    let events: Arc<Mutex<Vec<Event>>> = Arc::default();
+    let log = events.clone();
+    let stream = Stream::open(
+        Attach {
+            url: format!("ws://127.0.0.1:{port}/ws/terminal/7?generation={GENERATION}&viewer={VIEWER}&ticket=t"),
+            generation: GENERATION,
+            viewer: VIEWER,
+            claim: Some((120, 40)),
+        },
+        move |event| log.lock().unwrap().push(event),
+    );
+    eventually("the program's copy", || {
+        events
+            .lock()
+            .unwrap()
+            .contains(&Event::Clipboard("copied".into()))
+    })
+    .await;
+    assert!(
+        query.lock().unwrap().ends_with("&cols=120&rows=40&claim=1"),
+        "query was {}",
+        query.lock().unwrap()
+    );
+    stream.claim(100, 30);
+    eventually("the later claim", || {
+        received.lock().unwrap().iter().any(|f| f[0] == 0x08)
+    })
+    .await;
+    let claim = received
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|f| f[0] == 0x08)
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        claim,
+        protocol::resize_request(GENERATION, 2, 100, 30),
+        "a later claim counts on from the URL's"
+    );
     drop(stream);
     server.abort();
 }

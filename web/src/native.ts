@@ -41,6 +41,13 @@ declare global {
   }
 }
 
+/** True in a desktop build that draws terminals natively, known before
+ * any terminal is shown so the page never opens a socket of its own. */
+export function nativeTerminalsAvailable(): boolean {
+  if (typeof window === "undefined") return false;
+  return Boolean(window.__pmNative?.terminal) && (window as { __PM_NATIVE_TERMINALS__?: boolean }).__PM_NATIVE_TERMINALS__ === true;
+}
+
 export function nativeBridge(): NativeBridge | null {
   return typeof window !== "undefined" ? window.__pmNative ?? null : null;
 }

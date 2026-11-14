@@ -7,6 +7,7 @@ description = "A Puppet Master terminal drawn natively with libghostty"
 publish = false
 
 [dependencies]
+base64 = "0.23.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 fontdb = "0.24.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
@@ -26,3 +27,4 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 raw-window-handle = "0.6"
+dispatch2 = "0.3"

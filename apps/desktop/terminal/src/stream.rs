@@ -23,6 +23,8 @@ pub enum Event {
     PtySize { cols: u16, rows: u16 },
     /// Which viewer owns the size: this one when `local`.
     Ownership { local: bool, cols: u16, rows: u16 },
+    /// A program copied text to the clipboard (OSC 52).
+    Clipboard(String),
     /// The socket closed; a new ticket is needed to attach again.
     Closed { reason: String },
 }
@@ -33,7 +35,12 @@ pub struct Attach {
     pub url: String,
     pub generation: u64,
     pub viewer: u64,
+    /// The grid to claim as the socket opens, as the browser's first connect does.
+    pub claim: Option<(u16, u16)>,
 }
+
+/// The request id of a claim made in the socket URL; later claims count up from it.
+const URL_CLAIM: u64 = 1;
 
 enum Command {
     Input(Vec<u8>, bool),
@@ -117,8 +124,11 @@ async fn session(
     commands: &mut mpsc::UnboundedReceiver<Command>,
     on_event: &(dyn Fn(Event) + Send + Sync),
 ) -> Result<(), String> {
-    let mut request = attach
-        .url
+    let url = match attach.claim {
+        Some((cols, rows)) => format!("{}&cols={cols}&rows={rows}&claim={URL_CLAIM}", attach.url),
+        None => attach.url.clone(),
+    };
+    let mut request = url
         .as_str()
         .into_client_request()
         .map_err(|error| error.to_string())?;
@@ -132,7 +142,8 @@ async fn session(
     let (mut writer, mut reader) = socket.split();
     let generation = attach.generation;
     let mut replay = Replay::default();
-    let mut request_id: u64 = 0;
+    let mut clipboard = crate::osc::Osc52::default();
+    let mut request_id: u64 = if attach.claim.is_some() { URL_CLAIM } else { 0 };
     loop {
         tokio::select! {
             message = reader.next() => {
@@ -142,7 +153,7 @@ async fn session(
                     if matches!(message, Message::Close(_)) { return Ok(()); }
                     continue;
                 };
-                let parsed = handle(generation, attach.viewer, &frame, screen, &mut replay, on_event)?;
+                let parsed = handle(generation, attach.viewer, &frame, screen, &mut replay, &mut clipboard, on_event)?;
                 if parsed > 0 {
                     writer
                         .send(Message::Binary(protocol::ack(generation, parsed).into()))
@@ -174,6 +185,7 @@ fn handle(
     frame: &[u8],
     screen: &Mutex<Option<Vt>>,
     replay: &mut Replay,
+    clipboard: &mut crate::osc::Osc52,
     on_event: &(dyn Fn(Event) + Send + Sync),
 ) -> Result<u32, String> {
     match protocol::decode(frame) {
@@ -206,6 +218,9 @@ fn handle(
             };
             vt.write(&data);
             drop(guard);
+            for text in clipboard.push(&data) {
+                on_event(Event::Clipboard(text));
+            }
             on_event(Event::Changed);
             Ok(u32::try_from(data.len()).unwrap_or(u32::MAX))
         }

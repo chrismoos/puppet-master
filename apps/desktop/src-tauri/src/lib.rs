@@ -25,7 +25,15 @@ const MIN_HEIGHT: f64 = 360.0;
 const TRAFFIC_LIGHTS: (f64, f64) = (12.0, 8.0);
 
 /// Injected into every page the app loads. The controller's web UI looks for
-/// `window.__pmNative` and uses it in place of browser-only behavior.
+/// `window.__pmNative` and uses it in place of browser-only behavior. On
+/// macOS it also says terminals are drawn natively, so the page knows before
+/// showing one and never opens a socket of its own for it.
+#[cfg(target_os = "macos")]
+const BRIDGE_SCRIPT: &str = concat!(
+    "window.__PM_NATIVE_TERMINALS__ = true;\n",
+    include_str!("bridge.js")
+);
+#[cfg(not(target_os = "macos"))]
 const BRIDGE_SCRIPT: &str = include_str!("bridge.js");
 
 static EXTRA_WINDOWS: AtomicU64 = AtomicU64::new(0);

@@ -4,6 +4,7 @@
 
 use std::cell::RefCell;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use objc2::rc::Retained;
@@ -12,7 +13,7 @@ use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOn
 use objc2_app_kit::{
     NSEvent, NSEventModifierFlags, NSPasteboard, NSPasteboardTypeString, NSResponder, NSView,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
@@ -280,6 +281,32 @@ pub struct NativeTerminal {
     _paint: Paint,
     painter: Arc<Painter>,
     scale: f64,
+    /// The grid this view last claimed.
+    claimed: Arc<Mutex<(u16, u16)>>,
+    /// Whether this viewer owns the terminal's size.
+    owner: Arc<AtomicBool>,
+}
+
+/// The grid a placement holds, at the page's cell size inside its padding.
+fn grid_of(placement: Placement) -> (u16, u16) {
+    let cols =
+        ((placement.width - 2.0 * placement.padding) / placement.cell_width.max(1.0)).floor();
+    let rows =
+        ((placement.height - 2.0 * placement.padding) / placement.cell_height.max(1.0)).floor();
+    (
+        cols.clamp(1.0, f64::from(u16::MAX)) as u16,
+        rows.clamp(1.0, f64::from(u16::MAX)) as u16,
+    )
+}
+
+/// Puts text a program copied on the system clipboard, from the main thread.
+fn copy_to_pasteboard(text: String) {
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let text = NSString::from_str(&text);
+        unsafe { pasteboard.setString_forType(&text, NSPasteboardTypeString) };
+    });
 }
 
 impl NativeTerminal {
@@ -348,9 +375,18 @@ impl NativeTerminal {
         let painter_slot: Arc<Mutex<Option<Arc<Painter>>>> = Arc::default();
         let signal = painter_slot.clone();
         let closed = Arc::new(on_closed);
+        let owner = Arc::new(AtomicBool::new(true));
+        let ownership = owner.clone();
+        let grid = grid_of(placement);
+        let attach = Attach {
+            claim: Some(grid),
+            ..attach
+        };
         let stream = Arc::new(Stream::open_on(runtime, attach, move |event| match event {
             Event::Closed { reason } => closed(reason),
-            _ => {
+            Event::Clipboard(text) => copy_to_pasteboard(text),
+            Event::Ownership { local, .. } => ownership.store(local, Ordering::Relaxed),
+            Event::Changed | Event::PtySize { .. } => {
                 if let Some(painter) = signal.lock().unwrap().as_ref() {
                     painter.redraw();
                 }
@@ -367,6 +403,8 @@ impl NativeTerminal {
             _paint: paint,
             painter,
             scale,
+            claimed: Arc::new(Mutex::new(grid)),
+            owner,
         };
         terminal.place(placement);
         terminal.connect_input(placement.cell_height * scale);
@@ -377,6 +415,8 @@ impl NativeTerminal {
         let stream = self.stream.clone();
         let screen = self.stream.screen();
         let painter = self.painter.clone();
+        let claimed = self.claimed.clone();
+        let owner = self.owner.clone();
         let cell_height = cell_height_px.max(1.0) / self.scale.max(1.0);
         *self.view.ivars().sink.borrow_mut() = Some(Box::new(move |input| {
             let mut guard = screen.lock().unwrap();
@@ -386,6 +426,12 @@ impl NativeTerminal {
                     let bytes = vt.encode_key(&press);
                     if bytes.is_empty() {
                         return;
+                    }
+                    // Typing here takes the size back from another viewer, as the browser does.
+                    if !owner.load(Ordering::Relaxed) {
+                        let (cols, rows) = *claimed.lock().unwrap();
+                        stream.claim(cols, rows);
+                        stream.resync();
                     }
                     let submitted = press.key == keys::ENTER || press.key == keys::NUMPAD_ENTER;
                     let _ = vt.scroll(isize::MAX);
@@ -430,6 +476,15 @@ impl NativeTerminal {
         ));
         self.view.setHidden(!placement.visible);
         self.painter.set_layout(layout_for(placement, self.scale));
+        if placement.visible {
+            let grid = grid_of(placement);
+            let mut claimed = self.claimed.lock().unwrap();
+            if *claimed != grid {
+                *claimed = grid;
+                self.stream.claim(grid.0, grid.1);
+                self.stream.resync();
+            }
+        }
     }
 
     /// Gives the terminal the keyboard.
