@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::ipc::CapabilityBuilder;
 use tauri::menu::{Menu, MenuItem, Submenu};
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -20,9 +20,6 @@ const DEFAULT_WIDTH: f64 = 1440.0;
 const DEFAULT_HEIGHT: f64 = 900.0;
 const MIN_WIDTH: f64 = 480.0;
 const MIN_HEIGHT: f64 = 360.0;
-/// Where the traffic lights sit: centered in the page's 28px title strip.
-#[cfg(target_os = "macos")]
-const TRAFFIC_LIGHTS: (f64, f64) = (12.0, 8.0);
 
 /// Injected into every page the app loads. The controller's web UI looks for
 /// `window.__pmNative` and uses it in place of browser-only behavior. On
@@ -101,12 +98,43 @@ fn framed<'a>(
     #[cfg(target_os = "macos")]
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .hidden_title(true)
-        .traffic_light_position(tauri::LogicalPosition::new(
-            TRAFFIC_LIGHTS.0,
-            TRAFFIC_LIGHTS.1,
-        ));
+        .hidden_title(true);
     builder
+}
+
+/// Builds a framed window and hides its own window buttons, which the page
+/// replaces with buttons of its own.
+fn build_framed(
+    builder: WebviewWindowBuilder<'_, tauri::Wry, AppHandle>,
+) -> tauri::Result<WebviewWindow> {
+    let window = builder.build()?;
+    #[cfg(target_os = "macos")]
+    hide_window_buttons(&window);
+    Ok(window)
+}
+
+#[cfg(target_os = "macos")]
+fn hide_window_buttons(window: &WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowButton};
+    let Ok(pointer) = window.ns_window() else {
+        return;
+    };
+    // A raw pointer is not Send, so it crosses to the main thread as an address.
+    let address = pointer as usize;
+    let _ = window.run_on_main_thread(move || {
+        let Some(ns_window) = (unsafe { (address as *const NSWindow).as_ref() }) else {
+            return;
+        };
+        for kind in [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ] {
+            if let Some(button) = ns_window.standardWindowButton(kind) {
+                button.setHidden(true);
+            }
+        }
+    });
 }
 
 /// The bundled connect page's address, which differs by platform.
@@ -133,7 +161,7 @@ fn show_in_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
     } else {
         WebviewUrl::External(url)
     };
-    framed(WebviewWindowBuilder::new(app, MAIN_WINDOW, start)).build()?;
+    build_framed(framed(WebviewWindowBuilder::new(app, MAIN_WINDOW, start)))?;
     Ok(())
 }
 
@@ -157,7 +185,9 @@ fn grant_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
             .window("*")
             .permission("core:default")
             .permission("core:window:allow-start-dragging")
-            .permission("core:window:allow-toggle-maximize"),
+            .permission("core:window:allow-toggle-maximize")
+            .permission("core:window:allow-minimize")
+            .permission("core:window:allow-close"),
     )
 }
 
@@ -230,12 +260,11 @@ fn open_window(app: AppHandle, url: String) -> Result<(), String> {
     );
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        let built = framed(WebviewWindowBuilder::new(
+        let built = build_framed(framed(WebviewWindowBuilder::new(
             &handle,
             label,
             WebviewUrl::External(url),
-        ))
-        .build();
+        )));
         if let Err(error) = built {
             eprintln!("could not open a window: {error}");
         }

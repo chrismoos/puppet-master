@@ -8,35 +8,78 @@
 
   document.documentElement.classList.add("pm-desktop");
 
-  // The window has no native title bar: a slim strip in the page's chrome
-  // color holds the window buttons and moves the window.
-  const TITLEBAR_PX = 28;
-  const addTitlebar = () => {
-    if (document.querySelector(".pm-titlebar")) return;
-    const strip = document.createElement("div");
-    strip.className = "pm-titlebar";
-    strip.setAttribute("aria-hidden", "true");
-    Object.assign(strip.style, {
-      position: "fixed",
-      top: "0",
-      left: "0",
-      right: "0",
-      height: `${TITLEBAR_PX}px`,
-      zIndex: "2147483000",
-      background: "var(--chrome-bg, var(--bg, transparent))",
-    });
-    document.body.prepend(strip);
-    document.body.style.paddingTop = `${TITLEBAR_PX}px`;
-  };
-  if (document.body) addTitlebar();
-  else document.addEventListener("DOMContentLoaded", addTitlebar, { once: true });
-
-  // The strip and the page's top bar move and zoom the window wherever
-  // nothing interactive was pressed.
+  // The window's own buttons are hidden: these replace them, centered on
+  // the page's top bar, which makes room for them.
+  const CONTROLS_STYLE = `
+    .pm-window-controls {
+      position: fixed;
+      z-index: 2147483000;
+      left: 16px;
+      top: calc(var(--topbar-height, 46px) / 2);
+      transform: translateY(-50%);
+      display: flex;
+      gap: 8px;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .pm-window-controls button {
+      all: unset;
+      box-sizing: border-box;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 1.5px solid var(--muted, #828d9f);
+      color: transparent;
+      display: grid;
+      place-items: center;
+      cursor: default;
+      transition: background-color 90ms ease-out, border-color 90ms ease-out, color 90ms ease-out;
+    }
+    .pm-window-controls svg { width: 7px; height: 7px; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+    .pm-window-controls:hover button { color: var(--text, #c9ceda); border-color: var(--text, #c9ceda); }
+    .pm-window-controls button:hover { background: color-mix(in srgb, var(--text, #c9ceda) 16%, transparent); }
+    .pm-window-controls button.pm-close:hover { background: var(--red, #ff5d5d); border-color: var(--red, #ff5d5d); color: var(--chrome-bg, var(--bg, #000)); }
+    .pm-window-blurred .pm-window-controls { opacity: 0.45; }
+    .pm-desktop .topbar { padding-left: 84px; }
+  `;
+  const CONTROLS = [
+    ["pm-close", "Close", "close", '<path d="M1 1l5 5M6 1L1 6"/>'],
+    ["pm-minimize", "Minimize", "minimize", '<path d="M1 3.5h5"/>'],
+    ["pm-zoom", "Zoom", "toggle_maximize", '<path d="M3.5 1v5M1 3.5h5"/>'],
+  ];
   const windowLabel = () => window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? "main";
+  const addControls = () => {
+    if (document.querySelector(".pm-window-controls")) return;
+    const style = document.createElement("style");
+    style.textContent = CONTROLS_STYLE;
+    document.head.append(style);
+    const group = document.createElement("div");
+    group.className = "pm-window-controls";
+    for (const [className, label, command, glyph] of CONTROLS) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = className;
+      button.setAttribute("aria-label", label);
+      button.tabIndex = -1;
+      button.innerHTML = `<svg viewBox="0 0 7 7" aria-hidden="true">${glyph}</svg>`;
+      button.addEventListener("mousedown", (event) => event.stopPropagation());
+      button.addEventListener("click", () => {
+        invoke(`plugin:window|${command}`, { label: windowLabel() }).catch(() => {});
+      });
+      group.append(button);
+    }
+    document.body.append(group);
+  };
+  if (document.body) addControls();
+  else document.addEventListener("DOMContentLoaded", addControls, { once: true });
+  window.addEventListener("blur", () => document.documentElement.classList.add("pm-window-blurred"));
+  window.addEventListener("focus", () => document.documentElement.classList.remove("pm-window-blurred"));
+
+  // The page's top bar moves and zooms the window wherever nothing
+  // interactive was pressed.
   const onTopBar = (event) => {
     const target = event.target instanceof Element ? event.target : null;
-    if (!target || !target.closest(".topbar, .pm-titlebar")) return false;
+    if (!target || !target.closest(".topbar")) return false;
     return !target.closest("button, a, input, select, textarea, [role=button], [role=menu], [contenteditable]");
   };
   document.addEventListener("mousedown", (event) => {
