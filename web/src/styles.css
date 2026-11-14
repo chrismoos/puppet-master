@@ -8854,7 +8854,13 @@ body.ap-moving iframe { pointer-events: none; }
   .alert-pill-timer { display: none; }
 }
 
-/* The desktop app draws no title bar, and its traffic lights sit over the top bar's left end. */
-.pm-desktop .topbar {
-  padding-left: 84px;
+/* The desktop app draws its own slim title strip, holding the window buttons, above the page. */
+.pm-desktop {
+  --desktop-titlebar: 28px;
+}
+.pm-desktop .shell {
+  min-height: calc(100dvh - var(--desktop-titlebar));
+}
+.pm-desktop .shell-fullbleed {
+  height: calc(100dvh - var(--desktop-titlebar));
 }

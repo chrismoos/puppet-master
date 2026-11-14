@@ -20,10 +20,9 @@ const DEFAULT_WIDTH: f64 = 1440.0;
 const DEFAULT_HEIGHT: f64 = 900.0;
 const MIN_WIDTH: f64 = 480.0;
 const MIN_HEIGHT: f64 = 360.0;
-/// Where the traffic lights sit once the title bar is gone: centered in the
-/// controller UI's 46px top bar, clear of its left edge.
+/// Where the traffic lights sit: centered in the page's 28px title strip.
 #[cfg(target_os = "macos")]
-const TRAFFIC_LIGHTS: (f64, f64) = (16.0, 17.0);
+const TRAFFIC_LIGHTS: (f64, f64) = (12.0, 8.0);
 
 /// Injected into every page the app loads. The controller's web UI looks for
 /// `window.__pmNative` and uses it in place of browser-only behavior.

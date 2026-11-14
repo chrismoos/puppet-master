@@ -8,12 +8,35 @@
 
   document.documentElement.classList.add("pm-desktop");
 
-  // With no native title bar, the page's top bar moves and zooms the window
-  // wherever nothing interactive was pressed.
+  // The window has no native title bar: a slim strip in the page's chrome
+  // color holds the window buttons and moves the window.
+  const TITLEBAR_PX = 28;
+  const addTitlebar = () => {
+    if (document.querySelector(".pm-titlebar")) return;
+    const strip = document.createElement("div");
+    strip.className = "pm-titlebar";
+    strip.setAttribute("aria-hidden", "true");
+    Object.assign(strip.style, {
+      position: "fixed",
+      top: "0",
+      left: "0",
+      right: "0",
+      height: `${TITLEBAR_PX}px`,
+      zIndex: "2147483000",
+      background: "var(--chrome-bg, var(--bg, transparent))",
+    });
+    document.body.prepend(strip);
+    document.body.style.paddingTop = `${TITLEBAR_PX}px`;
+  };
+  if (document.body) addTitlebar();
+  else document.addEventListener("DOMContentLoaded", addTitlebar, { once: true });
+
+  // The strip and the page's top bar move and zoom the window wherever
+  // nothing interactive was pressed.
   const windowLabel = () => window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? "main";
   const onTopBar = (event) => {
     const target = event.target instanceof Element ? event.target : null;
-    if (!target || !target.closest(".topbar")) return false;
+    if (!target || !target.closest(".topbar, .pm-titlebar")) return false;
     return !target.closest("button, a, input, select, textarea, [role=button], [role=menu], [contenteditable]");
   };
   document.addEventListener("mousedown", (event) => {
