@@ -1,8 +1,8 @@
-/** Reads pane gestures from raw touches on a terminal or page pane:
- * a one-finger swipe moves to the next or previous pane, and a two-finger
- * double-tap or two-finger swipe right goes back to the agent. It only
- * watches touches, so the view under it keeps its own scrolling and
- * selection. */
+/** Reads pane gestures from raw touches on a terminal or page pane: a
+ * two-finger swipe left moves to the next pane and right to the previous
+ * one. One-finger touches are left alone, so the view under it keeps its own
+ * scrolling and selection, and a page keeps its own swipes. It only watches
+ * touches, never claims them. */
 
 export type PaneGesture = "next" | "previous" | "agent";
 
@@ -16,15 +16,10 @@ export interface TouchPoint {
 const SWIPE_MIN = 60;
 /** A swipe's sideways travel must outweigh its vertical travel this much. */
 const SWIPE_RATIO = 2;
-/** Swipes slower than this are drags or selections, not pane changes. */
-const SWIPE_MAX_MS = 700;
-/** Touches starting this close to the left edge belong to the system's back gesture. */
-const EDGE_ZONE = 24;
-/** A two-finger tap moves less than this and lifts within TAP_MAX_MS. */
-const TAP_SLOP = 12;
-const TAP_MAX_MS = 300;
-/** The second two-finger tap must come within this of the first. */
-const DOUBLE_TAP_MS = 400;
+/** Swipes slower than this are scrolls or drags, not pane changes. */
+const SWIPE_MAX_MS = 800;
+/** Two taps this close together are a double tap. */
+export const DOUBLE_TAP_MS = 350;
 
 interface Track {
   startX: number;
@@ -37,14 +32,6 @@ export class PaneGestureRecognizer {
   private tracks = new Map<number, Track>();
   private maxTouches = 0;
   private startedAt = 0;
-  private lastTwoFingerTapAt: number | null = null;
-
-  /** False where the view scrolls sideways itself, which leaves only the two-finger gestures. */
-  swipes: boolean;
-
-  constructor(options: { swipes: boolean } = { swipes: true }) {
-    this.swipes = options.swipes;
-  }
 
   start(touches: readonly TouchPoint[], timeMs: number): void {
     if (this.tracks.size === 0) {
@@ -65,9 +52,11 @@ export class PaneGestureRecognizer {
     const touches = this.maxTouches;
     const duration = timeMs - this.startedAt;
     this.tracks.clear();
-    if (touches === 1) return this.oneFinger(tracks[0], duration);
-    if (touches === 2) return this.twoFingers(tracks, duration, timeMs);
-    return null;
+    if (touches !== 2 || tracks.length < 2 || duration > SWIPE_MAX_MS) return null;
+    const dx = tracks.reduce((sum, t) => sum + (t.x - t.startX), 0) / tracks.length;
+    const dy = tracks.reduce((sum, t) => sum + (t.y - t.startY), 0) / tracks.length;
+    if (Math.abs(dx) < SWIPE_MIN || Math.abs(dx) < SWIPE_RATIO * Math.abs(dy)) return null;
+    return dx < 0 ? "next" : "previous";
   }
 
   cancel(): void {
@@ -86,32 +75,19 @@ export class PaneGestureRecognizer {
     }
     this.maxTouches = Math.max(this.maxTouches, this.tracks.size, touches.length);
   }
+}
 
-  private oneFinger(track: Track | undefined, duration: number): PaneGesture | null {
-    if (!track || !this.swipes || track.startX < EDGE_ZONE || duration > SWIPE_MAX_MS) return null;
-    const dx = track.x - track.startX;
-    const dy = track.y - track.startY;
-    if (Math.abs(dx) < SWIPE_MIN || Math.abs(dx) < SWIPE_RATIO * Math.abs(dy)) return null;
-    return dx < 0 ? "next" : "previous";
-  }
+/** Counts taps, and says when one completes a double tap. */
+export class DoubleTap {
+  private last: number | null = null;
 
-  private twoFingers(tracks: Track[], duration: number, timeMs: number): PaneGesture | null {
-    if (tracks.length < 2) return null;
-    const dx = tracks.reduce((sum, t) => sum + (t.x - t.startX), 0) / tracks.length;
-    const dy = tracks.reduce((sum, t) => sum + (t.y - t.startY), 0) / tracks.length;
-    if (dx >= SWIPE_MIN && dx >= SWIPE_RATIO * Math.abs(dy)) {
-      this.lastTwoFingerTapAt = null;
-      return "agent";
+  tap(timeMs: number): boolean {
+    if (this.last !== null && timeMs - this.last <= DOUBLE_TAP_MS) {
+      this.last = null;
+      return true;
     }
-    const tapped = duration <= TAP_MAX_MS
-      && tracks.every((t) => Math.hypot(t.x - t.startX, t.y - t.startY) < TAP_SLOP);
-    if (!tapped) return null;
-    if (this.lastTwoFingerTapAt !== null && timeMs - this.lastTwoFingerTapAt <= DOUBLE_TAP_MS) {
-      this.lastTwoFingerTapAt = null;
-      return "agent";
-    }
-    this.lastTwoFingerTapAt = timeMs;
-    return null;
+    this.last = timeMs;
+    return false;
   }
 }
 

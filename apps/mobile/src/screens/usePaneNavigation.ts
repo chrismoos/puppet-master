@@ -14,7 +14,7 @@ import {
   type SwipePane,
 } from "@puppet-master/client-core/state/sessionLayout";
 
-import { PaneGestureRecognizer, paneAfter, type PaneGesture, type TouchPoint } from "../terminal/paneGesture";
+import { DoubleTap, PaneGestureRecognizer, paneAfter, type PaneGesture, type TouchPoint } from "../terminal/paneGesture";
 import type { TerminalTarget } from "./SessionsScreen";
 
 /** How long a pane's name shows after switching, before it fades. */
@@ -39,6 +39,8 @@ export interface PaneNavigation {
     onTouchEnd: (event: GestureResponderEvent) => void;
     onTouchCancel: () => void;
   };
+  /** Counts taps on the header: a double tap goes back to the agent. */
+  onHeaderPress: () => void;
   /** Opens a shell pane beside the agent, and switches to it once it starts. */
   newShellPane: () => void;
 }
@@ -137,18 +139,17 @@ export function usePaneNavigation({
   }, [panes, goTo]);
 
   const onGesture = useCallback((gesture: PaneGesture) => {
-    // From a shell tab, which is not a pane, only the way back to the agent applies.
-    if (index < 0) {
-      if (gesture === "agent") goTo(0);
-      return;
-    }
+    // A shell tab is not a pane, so swipes there lead nowhere.
+    if (index < 0) return;
     const next = paneAfter(gesture, index, panes.length);
     if (next !== null) goTo(next);
   }, [index, panes.length, goTo]);
 
   const recognizer = useRef(new PaneGestureRecognizer()).current;
-  // A page scrolls sideways itself, so only the two-finger gestures apply over one.
-  recognizer.swipes = page === null && panes.length > 1;
+  const headerTaps = useRef(new DoubleTap()).current;
+  const onHeaderPress = useCallback(() => {
+    if (headerTaps.tap(Date.now()) && index !== 0) goTo(0);
+  }, [headerTaps, index, goTo]);
   const touchHandlers = useMemo(() => ({
     onTouchStart: (event: GestureResponderEvent) => recognizer.start(points(event), event.nativeEvent.timestamp),
     onTouchMove: (event: GestureResponderEvent) => recognizer.move(points(event)),
@@ -184,7 +185,7 @@ export function usePaneNavigation({
     });
   }, [layout, createPane]);
 
-  return { panes, index, page, goTo, goToPage, flashText, flashOpacity, touchHandlers, newShellPane };
+  return { panes, index, page, goTo, goToPage, flashText, flashOpacity, touchHandlers, onHeaderPress, newShellPane };
 }
 
 /** The address a page pane loads from, on the controller. */

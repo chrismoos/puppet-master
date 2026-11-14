@@ -91,16 +91,16 @@ Projects still filter from ⋯ → Filter.
 In a session with panes (shells or pages opened beside the agent on the web),
 the terminal screen moves between them by gesture:
 
-- Swipe left or right with one finger for the next or previous pane, in the
+- Swipe left or right with two fingers for the next or previous pane, in the
   layout's order with the agent first. The pane's name shows briefly, and
-  dots in the header show where you are.
-- Double-tap or swipe right with two fingers to go straight back to the agent.
-- A page pane shows as a web view. One-finger swipes scroll the page there,
-  so use two fingers or ⋯ → Agent to leave it.
-- ⋯ → New shell pane opens a shell beside the agent, and ⋯ → Terminals lists
-  the agent, its panes and its shell tabs.
+  dots in the header show where you are. One-finger touches stay with the
+  terminal or page, for scrolling and selecting.
+- Double-tap the header to go straight back to the agent.
+- A page pane shows as a web view.
+- ⋯ → Agent also goes back to the agent, ⋯ → New shell pane opens a shell
+  beside it, and ⋯ → Terminals lists the agent, its panes and its shell tabs.
 
-A session without panes ignores sideways swipes and looks as it did before.
+A session without panes ignores two-finger swipes and looks as it did before.
 
 ## iOS build numbers
 

@@ -1034,9 +1034,18 @@ export function TerminalScreen({
         <Pressable onPress={onBack} style={styles.backTouch} accessibilityLabel="Back to sessions">
           <View style={styles.backChevron} />
         </Pressable>
-        <Text style={styles.title} numberOfLines={1}>
-          {target.title}
-        </Text>
+        <Pressable
+          style={styles.titleTouch}
+          onPress={nav.onHeaderPress}
+          accessibilityRole="button"
+          accessibilityLabel={target.title}
+          accessibilityHint="Tap twice to go back to the agent"
+          testID="terminal-title"
+        >
+          <Text style={styles.title} numberOfLines={1}>
+            {target.title}
+          </Text>
+        </Pressable>
         <Pressable onPress={toggleDiag} hitSlop={8}>
           {hasPanes && status === "online" ? (
             <View
@@ -1387,7 +1396,8 @@ const styles = StyleSheet.create({
     borderColor: colors.blue,
     transform: [{ rotate: "45deg" }],
   },
-  title: { color: colors.textBright, fontSize: 15, fontWeight: "600", flex: 1 },
+  titleTouch: { flex: 1, minWidth: 0 },
+  title: { color: colors.textBright, fontSize: 15, fontWeight: "600" },
   status: { color: colors.textMuted, fontSize: 12 },
   keysToggle: { color: colors.textMuted, fontSize: 18 },
   keysToggleActive: { color: colors.blue },
