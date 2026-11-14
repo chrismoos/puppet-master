@@ -78,6 +78,12 @@ test("an agent's panes sit beside it and the user resizes, collapses, hides, res
   await expect(jobPane).toHaveCount(0);
   const after = layoutOf(await isolatedDaemon.callAgentTool(SESSION, "get_layout", {}));
   expect(after.panes.map((pane) => pane.id)).toEqual(["status"]);
+
+  await isolatedDaemon.callAgentTool(SESSION, "open_terminal", { id: "short", title: "Short job", command: "echo finished-output; exit 4" });
+  const shortPane = page.locator(".ap-pane", { has: page.locator(".ap-title", { hasText: "Short job" }) });
+  await expect(shortPane.locator(".ap-status")).toHaveText("exit 4");
+  await expect(shortPane.locator(".ap-output")).toContainText("finished-output");
+  await expect(shortPane.locator(".ap-output")).toContainText("[exited with status 4]");
 });
 
 test("terminal panes need bypass permissions while page panes do not", async ({ page, isolatedDaemon }) => {

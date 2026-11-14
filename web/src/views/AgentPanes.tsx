@@ -488,6 +488,8 @@ function PaneView({
             referrerPolicy="no-referrer"
             title={meta.title}
           />
+        ) : meta.exit_code !== undefined ? (
+          <EndedOutput sessionId={sessionId} paneId={meta.id} terminalId={meta.terminal_id} exitCode={meta.exit_code} />
         ) : terminal ? (
           <ReadOnlyGuard enabled={!meta.user_input}>
             <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={!collapsed} onIssue={NO_ISSUE} onCommand={NO_COMMAND} />
@@ -497,6 +499,30 @@ function PaneView({
         )}
       </div>
     </div>
+  );
+}
+
+/** An ended program's last output, since its terminal can no longer be attached. */
+function EndedOutput({ sessionId, paneId, terminalId, exitCode }: { sessionId: string; paneId: string; terminalId?: number; exitCode: number }) {
+  const [text, setText] = useState<string | null>(null);
+  const ref = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    let current = true;
+    void authedFetch(`/api/sessions/${sessionId}/panes/${encodeURIComponent(paneId)}/output`)
+      .then((response) => (response.ok ? response.text() : ""))
+      .then((body) => { if (current) setText(body.replace(/\s+$/, "")); })
+      .catch(() => { if (current) setText(""); });
+    return () => { current = false; };
+  }, [sessionId, paneId, terminalId]);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [text]);
+  return (
+    <pre className="ap-output" ref={ref}>
+      {text ?? ""}
+      <span className={exitCode === 0 ? "ap-dim" : "ap-bad"}>{`\n[exited with status ${exitCode}]`}</span>
+    </pre>
   );
 }
 

@@ -458,6 +458,10 @@ fn dashboard_router(daemon: Arc<Daemon>) -> Router {
         .route("/api/buckets/{id}/worker", post(set_bucket_worker))
         .route("/api/sessions/{id}/layout", post(set_session_layout))
         .route(
+            "/api/sessions/{id}/panes/{pane}/output",
+            get(session_pane_output),
+        )
+        .route(
             "/api/sessions/{id}/panes/{pane}/{action}",
             post(session_pane_action),
         )
@@ -2268,6 +2272,20 @@ async fn session_pane_action(
     }
     match crate::panes::user_pane_action(&daemon, id, &pane, &action).await {
         Ok(value) => Json(value).into_response(),
+        Err(error) => pane_error(error),
+    }
+}
+
+async fn session_pane_output(
+    State(daemon): State<Arc<Daemon>>,
+    headers: HeaderMap,
+    Path((id, pane)): Path<(u64, String)>,
+) -> Response {
+    if authed_user(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match crate::panes::pane_output(&daemon, id, &pane).await {
+        Ok(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
         Err(error) => pane_error(error),
     }
 }

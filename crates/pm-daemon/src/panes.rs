@@ -1271,6 +1271,24 @@ pub async fn user_pane_action(
     Ok(json!({ "ok": true }))
 }
 
+/// What an ended pane program printed, for the pane to show once there is no
+/// live terminal to attach to.
+pub async fn pane_output(
+    daemon: &Arc<Daemon>,
+    session_id: u64,
+    id: &str,
+) -> Result<String, String> {
+    let pane = daemon
+        .panes
+        .get(session_id)
+        .panes
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("no pane named {id:?}"))?;
+    let terminal_id = pane.terminal_id.ok_or("that pane has no terminal")?;
+    terminal_text(daemon, terminal_id).await
+}
+
 /// The session and file a page pane's capability token serves, if any.
 pub fn page_target(daemon: &Daemon, token: &str) -> Option<PageTarget> {
     daemon.panes.page(token)
