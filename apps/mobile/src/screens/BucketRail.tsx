@@ -96,7 +96,8 @@ const DOT = 10;
 const BADGE = 16;
 
 const styles = StyleSheet.create({
-  scroll: { flexGrow: 0 },
+  // Never squeezed when the screen is short, as in landscape, so the tiles keep their padding.
+  scroll: { flexGrow: 0, flexShrink: 0 },
   track: { gap: 10, paddingHorizontal: 16, paddingTop: 6, paddingBottom: 12 },
   tile: {
     width: TILE,
