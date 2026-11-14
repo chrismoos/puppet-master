@@ -91,10 +91,15 @@ export class WorkspaceTerminal {
       (href) => href.startsWith("pm:") || isSafeHttpUrl(href),
       { family: MONO_FONT_STACK, size: FONT_SIZE_PX },
     );
-    const initialSize = measureFit(this.terminal) ?? { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
+    // The surface is created asynchronously, so a first measurement usually
+    // fails. Claiming a guessed size would force the PTY to it and paint the
+    // first snapshot at the wrong width; the real size is claimed as soon as
+    // the surface can measure, which normally lands before the socket attaches.
+    const measuredAtOpen = measureFit(this.terminal);
+    const initialSize = measuredAtOpen ?? { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
     this.lastResize = initialSize;
     this.requestedSize = initialSize;
-    this.handle = client.openTerminal(terminalId, initialSize);
+    this.handle = client.openTerminal(terminalId, measuredAtOpen);
     this.sizePrompt = createTerminalSizePrompt(host, () => measureFit(this.terminal), (size) => {
       if (!documentVisible(document)) return;
       this.lastResize = size;
@@ -222,6 +227,7 @@ export class WorkspaceTerminal {
       this.scheduleResize();
     });
     this.observer.observe(host);
+    if (!measuredAtOpen) this.terminal.whenReady(() => this.resizeBeforeInput());
     const unregisterTheme = themeController.register(this);
     const returnDispose = onUserReturn(() => {
       if (this.active && documentVisible(document)) this.sizePrompt.reclaim();

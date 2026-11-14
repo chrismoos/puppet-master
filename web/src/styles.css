@@ -8642,6 +8642,8 @@ body.ap-resizing iframe { pointer-events: none; }
 .ap-pane.is-sideways .ap-btn { display: none; }
 .ap-body { flex: 1; min-height: 0; display: flex; position: relative; }
 .ap-body.is-curtained > * { visibility: hidden; }
+.ap-root.is-warm { visibility: hidden; opacity: 0; }
+.ap-root.is-warm * { pointer-events: none !important; }
 .ap-body > * { flex: 1; min-width: 0; min-height: 0; }
 .ap-guard { display: flex; }
 .ap-guard > * { flex: 1; min-width: 0; min-height: 0; }

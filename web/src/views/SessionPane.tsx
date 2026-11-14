@@ -177,6 +177,9 @@ export function canResumeSession(ended: boolean, resumable: boolean, taskPrompt:
   return ended && (resumable || taskPrompt.length === 0);
 }
 
+/** How many sessions keep their panes mounted and connected while hidden. */
+const MAX_WARM_PANE_SESSIONS = 4;
+
 export function SessionPane({
   routeTab,
   routeFocus,
@@ -245,6 +248,21 @@ export function SessionPane({
 
   const session = state.sessions.get(sessionId);
   const ended = session ? sessionEnded(session) : false;
+  // Sessions whose panes stay mounted while another session is shown, newest
+  // first, so switching back shows them without reconnecting or reloading.
+  const [warmPaneSessions, setWarmPaneSessions] = useState<string[]>([]);
+  const showsPanes = !ended && layoutHasPanes(paneLayout);
+  useEffect(() => {
+    setWarmPaneSessions((current) => {
+      const live = current.filter((id) => {
+        const session = state.sessions.get(id);
+        return session !== undefined && layoutHasPanes(parseSessionLayout(state.sessionLayouts.get(id)));
+      });
+      const next = showsPanes ? [sessionId, ...live.filter((id) => id !== sessionId)] : live;
+      const capped = next.slice(0, MAX_WARM_PANE_SESSIONS);
+      return capped.length === current.length && capped.every((id, index) => id === current[index]) ? current : capped;
+    });
+  }, [sessionId, showsPanes, state.sessions, state.sessionLayouts]);
   const forwards = useMemo(
     () => forwardsNewestFirst(forwardsForSession({ sessions: state.sessions, forwards: state.forwards }, sessionId))
       .filter((owned) => !isPaneForward(owned.forward.slug, sessionId)),
@@ -587,9 +605,12 @@ export function SessionPane({
             {...fileDrop.handlers}
           >
             <div className="term-host" ref={hostRef} />
-            {selectedTerminal === "agent" && !ended && paneLayout && layoutHasPanes(paneLayout) && (
-              <AgentPanes sessionId={sessionId} layout={paneLayout} hostRef={hostRef} />
-            )}
+            {warmPaneSessions.map((id) => {
+              const layout = parseSessionLayout(state.sessionLayouts.get(id));
+              if (!layout || !layoutHasPanes(layout)) return null;
+              const shown = id === sessionId && selectedTerminal === "agent" && !ended;
+              return <AgentPanes key={id} sessionId={id} layout={layout} hostRef={hostRef} active={shown} />;
+            })}
             <SessionDropOverlay state={fileDrop.state} />
             {session && ended && selectedTerminal === "agent" && (
               <div className="term-overlay">

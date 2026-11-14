@@ -1,4 +1,5 @@
 import { openForward, parseForwardHandoff } from "./views/forwardLink";
+import { layoutHasPanes, parseSessionLayout } from "./views/AgentPanes";
 import { ownsItsWindow, reviewEntry } from "./views/reviewWindow";
 import { FullscreenReview } from "./views/FullscreenReview";
 import { browserJsonFetch } from "./api/http";
@@ -497,10 +498,20 @@ function Shell({
     navigate(sessionRoutePath(id, lastTabBySession.current[id]));
   }, []);
 
+  // Warming a terminal claims the size its host has now. When either session
+  // shows panes the agent's slot differs between them, so the warm claim would
+  // be wrong and the terminal would draw twice; opening it binds at the right
+  // size instead.
+  const shownSessionId = route.name === "session" ? route.id : null;
   const prepareSession = useCallback((id: string) => {
     const tab = lastTabBySession.current[id];
-    if (tab === undefined || tab === "agent") stage.prepare(BigInt(id));
-  }, [stage]);
+    if (tab !== undefined && tab !== "agent") return;
+    const layouts = client.getState().sessionLayouts;
+    const paned = (sessionId: string | null) =>
+      sessionId !== null && layoutHasPanes(parseSessionLayout(layouts.get(sessionId)));
+    if (paned(id) || paned(shownSessionId)) return;
+    stage.prepare(BigInt(id));
+  }, [client, stage, shownSessionId]);
 
   useLayoutEffect(() => {
     if (route.name !== "session") return;

@@ -233,10 +233,14 @@ export function AgentPanes({
   sessionId,
   layout,
   hostRef,
+  active,
 }: {
   sessionId: string;
   layout: SessionPaneLayout;
   hostRef: RefObject<HTMLDivElement | null>;
+  /** Shown and placing the agent's terminal. An inactive layout stays mounted
+   * and connected but hidden, so returning to its session shows it at once. */
+  active: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -244,39 +248,54 @@ export function AgentPanes({
   const tree = draft ?? layout.tree;
   useEffect(() => setDraft(null), [layout.rev]);
 
+  // Measured again whenever the layout becomes active: its area can differ
+  // from the session shown while it was hidden, such as one without a
+  // forwards bar, and the agent's terminal must be placed at the real size
+  // before it is shown or it claims a stale one and redraws.
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    const read = () => setSize({ w: root.clientWidth, h: root.clientHeight });
+    const read = () =>
+      setSize((current) =>
+        current && current.w === root.clientWidth && current.h === root.clientHeight
+          ? current
+          : { w: root.clientWidth, h: root.clientHeight },
+      );
     read();
     const observer = new ResizeObserver(read);
     observer.observe(root);
     return () => observer.disconnect();
-  }, []);
+  }, [active]);
 
   const panes = new Map<string, Placed>();
   const gutters: Gutter[] = [];
   if (size) measure(tree, { x: 0, y: 0, w: size.w, h: size.h }, null, [], layout, panes, gutters);
-  const agentRect = panes.get(AGENT)?.rect;
 
+  // Placed from the area as it is now, not the last stored measurement: the
+  // agent's terminal is shown in this same commit, and a stale height would
+  // make it claim the wrong size and redraw.
   useLayoutEffect(() => {
     const host = hostRef.current;
-    if (!host || !agentRect) return;
-    Object.assign(host.style, {
-      position: "absolute",
-      left: `${agentRect.x}px`,
-      top: `${agentRect.y}px`,
-      width: `${agentRect.w}px`,
-      height: `${agentRect.h}px`,
-      flex: "none",
-    });
-  }, [hostRef, agentRect?.x, agentRect?.y, agentRect?.w, agentRect?.h]);
+    const root = rootRef.current;
+    if (!host || !root || !active) return;
+    const fresh = new Map<string, Placed>();
+    measure(tree, { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight }, null, [], layout, fresh, []);
+    const rect = fresh.get(AGENT)?.rect;
+    if (!rect) return;
+    const next = { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.w}px`, height: `${rect.h}px` };
+    if (
+      host.style.position === "absolute" && host.style.left === next.left && host.style.top === next.top
+      && host.style.width === next.width && host.style.height === next.height
+    ) return;
+    Object.assign(host.style, { position: "absolute", flex: "none", ...next });
+  });
   useLayoutEffect(() => {
     const host = hostRef.current;
+    if (!active) return;
     return () => {
       if (host) for (const key of ["position", "left", "top", "width", "height", "flex"]) host.style.removeProperty(key);
     };
-  }, [hostRef]);
+  }, [hostRef, active]);
 
   // A resize applies to the newest revision when the tree it was dragged on
   // still has the same shape; collapsing or retitling a pane changes the
@@ -346,7 +365,7 @@ export function AgentPanes({
 
   const ids = Object.keys(layout.panes).sort();
   return (
-    <div className="ap-root" ref={rootRef}>
+    <div className={`ap-root${active ? "" : " is-warm"}`} ref={rootRef} aria-hidden={active ? undefined : true}>
       {ids.map((id) => {
         const placed = panes.get(id);
         if (!placed) return null;
@@ -357,6 +376,7 @@ export function AgentPanes({
             sessionId={sessionId}
             rect={placed.rect}
             axis={placed.axis}
+            active={active}
           />
         );
       })}
@@ -382,11 +402,13 @@ function PaneView({
   sessionId,
   rect,
   axis,
+  active,
 }: {
   meta: PaneMeta;
   sessionId: string;
   rect: Rect;
   axis: "row" | "column" | null;
+  active: boolean;
 }) {
   const state = useAppState();
   const collapsed = meta.collapsed === true;
@@ -504,7 +526,7 @@ function PaneView({
           <EndedOutput sessionId={sessionId} paneId={meta.id} terminalId={meta.terminal_id} exitCode={meta.exit_code} />
         ) : terminal ? (
           <ReadOnlyGuard enabled={!meta.user_input}>
-            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={!collapsed} onIssue={NO_ISSUE} onCommand={NO_COMMAND} onFirstPaint={() => setReady(true)} />
+            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={active && !collapsed} onIssue={NO_ISSUE} onCommand={NO_COMMAND} onFirstPaint={() => setReady(true)} />
           </ReadOnlyGuard>
         ) : (
           <div className="ap-wait">starting…</div>

@@ -242,6 +242,11 @@ export class GhosttyTerminalAdapter {
     this.surface?.paintNow();
   }
 
+  /** Runs once the surface exists and can measure, which is asynchronous. */
+  whenReady(callback: () => void): void {
+    this.enqueue(() => callback());
+  }
+
   refresh(_start: number, _end: number): void {
     this.surface?.refresh();
   }
