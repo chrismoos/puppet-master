@@ -492,7 +492,7 @@ async fn an_agent_tool_call_after_an_approval_resumes_working() {
     let token = env.daemon.session_token(id).unwrap().unwrap();
 
     env.daemon.handle_pty_needs_input(id);
-    env.daemon.note_agent_tool_call(&token);
+    env.daemon.note_agent_tool_call(&token, "report");
     assert_eq!(state_of(&env, id), (SessionState::Working, String::new()));
 }
 
@@ -506,7 +506,7 @@ async fn an_agent_tool_call_leaves_a_question_standing() {
     env.daemon
         .apply_blocked(id, "which branch?".into())
         .unwrap();
-    env.daemon.note_agent_tool_call(&token);
+    env.daemon.note_agent_tool_call(&token, "report");
     assert_eq!(
         state_of(&env, id),
         (SessionState::NeedsInput, "which branch?".into()),

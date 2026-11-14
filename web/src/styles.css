@@ -8770,3 +8770,86 @@ body.ap-moving iframe { pointer-events: none; }
   color: var(--blue);
 }
 .popover-menu.ap-menu { top: auto; z-index: 1000; min-width: 180px; }
+
+.alert-pill {
+  position: fixed;
+  top: calc(var(--topbar-height) + 10px);
+  right: 12px;
+  z-index: 900;
+  display: flex;
+  align-items: stretch;
+  max-width: min(560px, calc(100vw - 24px));
+  overflow: hidden;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  animation: alert-pill-in 140ms ease-out;
+}
+@keyframes alert-pill-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+.alert-pill-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 6px 6px 12px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.alert-pill-main:hover .alert-pill-title { text-decoration: underline; }
+.alert-pill-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--alert-pill-color); }
+.alert-pill-kind {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--alert-pill-color);
+}
+.alert-pill-title { flex: none; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--bright); }
+.alert-pill-body { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.alert-pill-more { flex: none; padding: 0 7px; border-radius: 999px; font-size: 11px; color: var(--muted); background: var(--panel-2); }
+.alert-pill-close {
+  flex: none;
+  width: 30px;
+  padding: 0;
+  font: inherit;
+  font-size: 15px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--line);
+  cursor: pointer;
+}
+.alert-pill-close:hover { color: var(--bright); background: var(--panel-2); }
+.alert-pill-timer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--alert-pill-color);
+  transform-origin: left;
+  animation-name: alert-pill-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes alert-pill-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+.alert-pill-needs-input, .alert-pill-approval { --alert-pill-color: var(--amber); }
+.alert-pill-finished { --alert-pill-color: var(--green); }
+.alert-pill-failed { --alert-pill-color: var(--red); }
+@media (prefers-reduced-motion: reduce) {
+  .alert-pill { animation: none; }
+  .alert-pill-timer { display: none; }
+}

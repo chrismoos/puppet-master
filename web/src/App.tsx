@@ -58,6 +58,7 @@ import {
 import { agentTerminalForSession, parseWorkspaceLayout, removeTerminalFromLayout } from "@puppet-master/client-core/state/workspace";
 import {
   SessionAlertKind,
+  SessionState,
   type SecurityNotice,
   TerminalKind,
   type Item,
@@ -119,6 +120,7 @@ import { ApprovalsButton, ApprovalsPage } from "./views/ApprovalsPage";
 import { usePendingApprovals } from "./state/pendingApprovals";
 import { approvalRoutePath } from "@puppet-master/client-core/router";
 import { removeWorkspaceFromTabs, WorkspaceTabs } from "./views/WorkspaceTabs";
+import { AlertPill, pageIsWatched, type InAppAlert } from "./views/AlertPill";
 
 /** Saved workspaces stay reachable by their URLs while the tab bar is hidden. */
 const SHOW_WORKSPACE_TABS = false;
@@ -597,6 +599,32 @@ function Shell({
     notifier.onActivateApproval = (id) => navigate(approvalRoutePath(id));
   }, [notifier, select]);
 
+  // Drawn in the page while somebody is looking at it, sent to the desktop
+  // otherwise. The session already on screen needs neither.
+  const [pillAlerts, setPillAlerts] = useState<InAppAlert[]>([]);
+  const shownSessionRef = useRef(shownSessionId);
+  shownSessionRef.current = shownSessionId;
+  const deliverAlert = useCallback((alert: InAppAlert, native: () => void) => {
+    if (!pageIsWatched()) {
+      native();
+      return;
+    }
+    if (alert.sessionId !== undefined && alert.sessionId === shownSessionRef.current) return;
+    notifier.chime();
+    setPillAlerts((current) => [alert, ...current.filter((other) => other.key !== alert.key)]);
+  }, [notifier]);
+  useEffect(() => {
+    setPillAlerts((current) => {
+      const kept = current.filter((alert) => {
+        if (alert.sessionId === undefined) return true;
+        if (alert.sessionId === shownSessionId) return false;
+        if (alert.kind !== "needs-input") return true;
+        return state.sessions.get(alert.sessionId)?.state === SessionState.NEEDS_INPUT;
+      });
+      return kept.length === current.length ? current : kept;
+    });
+  }, [shownSessionId, state.sessions]);
+
   // The daemon decides what is worth an alert; this only renders it.
   useEffect(() => {
     return client.onAlert((session, kind) => {
@@ -605,13 +633,20 @@ function Shell({
       if (kind === SessionAlertKind.NEEDS_INPUT) {
         const project = client.getState().projects.get(session.projectId.toString());
         const notification = needsInputNotification(session, project);
-        notifier.fire(notification.title, notification.body, id);
+        deliverAlert(
+          { key: `needs-input:${id}`, kind: "needs-input", title: notification.title, body: notification.body, sessionId: id },
+          () => notifier.fire(notification.title, notification.body, id),
+        );
         return;
       }
       const notification = sessionAlertNotification(session, kind);
-      notifier.fire(notification.title, notification.body, id, "finished");
+      const failed = kind === SessionAlertKind.FAILED;
+      deliverAlert(
+        { key: `${failed ? "failed" : "finished"}:${id}`, kind: failed ? "failed" : "finished", title: notification.title, body: failed ? notification.body : session.headline.trim() || undefined, sessionId: id },
+        () => notifier.fire(notification.title, notification.body, id, "finished"),
+      );
     });
-  }, [client, notifier]);
+  }, [client, notifier, deliverAlert]);
 
   // Said twice on purpose. A desktop notification is what reaches somebody who
   // is not looking at the tab, and it can be denied or unsupported, so the
@@ -842,11 +877,11 @@ function Shell({
   const isSettingsRoute = route.name === "settings";
   const pendingApprovals = usePendingApprovals((approval) => {
     if (!enabledRef.current) return;
-    notifier.fire(
-      `${approval.project_name ?? "A session"}: connection approval requested`,
-      `${approval.tool} on ${approval.connection_name ?? "a connection"}`,
-      approval.id,
-      "approval",
+    const title = `${approval.project_name ?? "A session"}: connection approval requested`;
+    const body = `${approval.tool} on ${approval.connection_name ?? "a connection"}`;
+    deliverAlert(
+      { key: `approval:${approval.id}`, kind: "approval", title, body, approvalId: approval.id },
+      () => notifier.fire(title, body, approval.id, "approval"),
     );
   });
 
@@ -1025,6 +1060,15 @@ function Shell({
 
   return (
     <div className={`shell shell-fullbleed ${focusMode ? "is-focus-mode" : ""} ${isBoardRoute ? "is-board-route" : ""} ${isSettingsRoute ? "is-settings-route" : ""}`}>
+      <AlertPill
+        alerts={pillAlerts}
+        onOpen={(alert) => {
+          setPillAlerts((current) => current.filter((other) => other.key !== alert.key));
+          if (alert.sessionId !== undefined) select(alert.sessionId);
+          else if (alert.approvalId !== undefined) navigate(approvalRoutePath(alert.approvalId));
+        }}
+        onDismiss={() => setPillAlerts([])}
+      />
       <header className="topbar">
         <a
           href="#/"

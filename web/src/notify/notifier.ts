@@ -75,6 +75,11 @@ export class Notifier {
     }
   }
 
+  /** The alert sound on its own, for an alert drawn in the page instead of sent to the desktop. */
+  chime(): void {
+    if (this.soundEnabled) this.beep();
+  }
+
   private beep(): void {
     type AudioCtor = typeof AudioContext;
     const Ctor: AudioCtor | undefined =

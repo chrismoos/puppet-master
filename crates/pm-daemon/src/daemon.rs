@@ -298,6 +298,9 @@ pub struct Daemon {
     /// an approval, so its needs-input clears on the agent's next tool call
     /// or turn end instead of persisting like a question.
     approval_prompts: Mutex<HashSet<u64>>,
+    /// When each session last raised a flag_blocked question, so a report
+    /// sent right after the question does not read as the agent moving on.
+    questions_asked_at: Mutex<std::collections::HashMap<u64, i64>>,
     /// Terminal-id keyed because a session's agent terminal is stable while
     /// its generation increments on resume/recovery.
     generation_lifecycle: Mutex<std::collections::HashMap<u64, GenerationLifecycle>>,
@@ -617,6 +620,13 @@ pub const SETTING_SPAWN_FULLSCREEN: &str = "spawn.fullscreen";
 /// output, and let the agent's root record drive the session state ahead
 /// of lifecycle hooks.
 pub const SETTING_SPAWN_PROGRAM_STATUS: &str = "spawn.program_status";
+
+/// How long after a question an agent's new headline still reads as part of
+/// asking it rather than as work resumed.
+const QUESTION_SETTLE_MS: i64 = 30_000;
+
+/// Tools an agent calls while it waits, which say nothing about an answer.
+const WAITING_TOOLS: &[&str] = &["flag_blocked", "report", "await_reply"];
 
 /// Settings key: how many live sessions one supervisor session may
 /// have spawned at a time; further spawns are rejected until one ends.
@@ -1503,6 +1513,7 @@ impl Daemon {
             terminal_workers: Mutex::new(std::collections::HashMap::new()),
             pending_session_activity: Mutex::new(std::collections::HashMap::new()),
             approval_prompts: Mutex::new(HashSet::new()),
+            questions_asked_at: Mutex::new(std::collections::HashMap::new()),
             generation_lifecycle: Mutex::new(std::collections::HashMap::new()),
             program_status: Default::default(),
             worker_epochs: Mutex::new(std::collections::HashMap::new()),
@@ -1668,23 +1679,31 @@ impl Daemon {
         Ok(())
     }
 
-    /// Moves a session waiting on a tool approval back to working once its
-    /// agent makes a tool call, which it cannot do while the prompt is open.
-    pub fn note_agent_tool_call(&self, session_token: &str) {
+    /// Moves a session waiting on the user back to working once its agent
+    /// makes a tool call. An open approval prompt allows no tool call at all.
+    /// A question allows only the calls an agent makes while it waits, and a
+    /// supervisor keeps working on purpose while its question is open.
+    pub fn note_agent_tool_call(&self, session_token: &str, tool: &str) {
+        if tool == "flag_blocked" {
+            return;
+        }
         let Ok(Some(session_id)) = self.storage.get_session_id_by_token(session_token) else {
             return;
         };
         let _guard = self.state_lock.lock().unwrap();
-        if !self.approval_prompts.lock().unwrap().remove(&session_id) {
+        let Ok(session) = self.storage.get_session(session_id) else {
+            return;
+        };
+        let approval = self.approval_prompts.lock().unwrap().remove(&session_id);
+        if session.state != SessionState::NeedsInput {
             return;
         }
-        let waiting = self
-            .storage
-            .get_session(session_id)
-            .is_ok_and(|session| session.state == SessionState::NeedsInput);
-        if !waiting {
+        let moved_on = approval
+            || (!WAITING_TOOLS.contains(&tool) && session.role != SessionRole::Supervisor);
+        if !moved_on {
             return;
         }
+        self.questions_asked_at.lock().unwrap().remove(&session_id);
         if let Ok(updated) =
             self.storage
                 .update_session_state(session_id, SessionState::Working, "")
@@ -6225,6 +6244,22 @@ impl Daemon {
         }
     }
 
+    /// A new headline well after a question means the agent is working again,
+    /// which an agent still waiting on its answer would not report.
+    fn report_moves_past_question(&self, session: &Session, now: i64) -> bool {
+        if session.state != SessionState::NeedsInput || session.role == SessionRole::Supervisor {
+            return false;
+        }
+        if self.approval_prompts.lock().unwrap().contains(&session.id) {
+            return false;
+        }
+        self.questions_asked_at
+            .lock()
+            .unwrap()
+            .get(&session.id)
+            .is_none_or(|asked| now - asked >= QUESTION_SETTLE_MS)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply_report(
         &self,
@@ -6250,7 +6285,7 @@ impl Daemon {
         };
         let summary = summary
             .map(|s| crate::text::unescape_html_entities(&s))
-            .unwrap_or(current.summary);
+            .unwrap_or_else(|| current.summary.clone());
         let note = crate::text::unescape_html_entities(&note);
         let mut notes: Vec<String> = Vec::new();
 
@@ -6266,9 +6301,16 @@ impl Daemon {
                 .set_goal(session_id, &truncate_chars(&goal, crate::storage::GOAL_MAX))?;
         }
         let headline_changed = headline != current.headline;
-        let updated = self
+        let mut updated = self
             .storage
             .set_headline_summary(session_id, &headline, &summary)?;
+        if headline_changed && self.report_moves_past_question(&current, now) {
+            self.questions_asked_at.lock().unwrap().remove(&session_id);
+            updated = self
+                .storage
+                .update_session_state(session_id, SessionState::Working, "")?;
+            info!(session = session_id, "agent reported progress past its question");
+        }
         notes.extend(self.report_freshness.observe(
             session_id,
             now,
@@ -6357,6 +6399,10 @@ impl Daemon {
             },
         )?;
         self.approval_prompts.lock().unwrap().remove(&session_id);
+        self.questions_asked_at
+            .lock()
+            .unwrap()
+            .insert(session_id, now_unix_ms());
         info!(session = session_id, "agent blocked");
         self.publish(Event::SessionChanged(updated));
         Ok(None)
@@ -8833,8 +8879,9 @@ impl Daemon {
         input_state: SessionState,
     ) {
         // An agent reporting through Program Status says when its turn
-        // starts, and a guess from input would only be overwritten.
-        if self.program_status_decides(terminal.session_id) {
+        // starts, and a guess from input would only be overwritten. An
+        // answer to its question is not a guess, so that still counts.
+        if self.program_status_decides(terminal.session_id) && input_state != SessionState::NeedsInput {
             return;
         }
         let Ok(session) = self.storage.get_session(terminal.session_id) else {

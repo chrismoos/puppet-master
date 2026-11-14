@@ -1992,9 +1992,7 @@ async fn call_tool(
 ) -> Result<Value, (i64, String)> {
     let name = params["name"].as_str().unwrap_or_default();
     let args = &params["arguments"];
-    if name != "flag_blocked" {
-        daemon.note_agent_tool_call(token);
-    }
+    daemon.note_agent_tool_call(token, name);
     if crate::connections::tool_definitions()
         .iter()
         .any(|tool| tool["name"] == name)

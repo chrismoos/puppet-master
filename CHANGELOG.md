@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [Web] While you are looking at Puppet Master, alerts show as a slim pill at the top right instead of a desktop notification. Click it to open the session, or dismiss it, and it hides on its own. Alerts still go to the desktop while the tab is in the background.
+
+- [Daemon] A session's question stops showing as needs-input once you answer it in the terminal, Codex included, or once its agent goes back to work, instead of lasting until the agent's turn ends.
+
 - [Web] Right-click an agent's terminal, a pane's header or the agent's hover header to open a new shell beside it, in any direction. A shell tab splits the same way, and the shells inside it close with the tab. Every live session shows the hover header, including one with no panes yet.
 
 - [Web] A shell or program pane nobody named shows the program it is running, such as bash or vim, until it is given a title.
