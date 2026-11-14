@@ -215,3 +215,52 @@ async fn the_first_claim_rides_in_the_url_and_program_copies_are_reported() {
     drop(stream);
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::result_large_err)]
+async fn a_replay_reports_online_and_a_refusal_carries_its_close_code() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_hdr_async(tcp, |_: &Request, mut response: Response| {
+            response.headers_mut().insert("Sec-WebSocket-Protocol", protocol::SUBPROTOCOL.parse().unwrap());
+            Ok(response)
+        })
+        .await
+        .unwrap();
+        socket
+            .send(output(FLAG_REPLAY | FLAG_REPLAY_START | FLAG_REPLAY_END, b"$ "))
+            .await
+            .unwrap();
+        socket
+            .close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                code: INCOMPATIBLE.into(),
+                reason: "terminal engine mismatch".into(),
+            }))
+            .await
+            .unwrap();
+    });
+    let events: Arc<Mutex<Vec<Event>>> = Arc::default();
+    let log = events.clone();
+    let _stream = Stream::open(
+        Attach {
+            url: format!("ws://127.0.0.1:{port}/ws/terminal/7?generation={GENERATION}&viewer={VIEWER}&ticket=t"),
+            generation: GENERATION,
+            viewer: VIEWER,
+            claim: None,
+        },
+        move |event| log.lock().unwrap().push(event),
+    );
+    eventually("the close", || events.lock().unwrap().iter().any(|e| matches!(e, Event::Closed { .. }))).await;
+    let events = events.lock().unwrap();
+    assert!(events.contains(&Event::Online));
+    assert!(events.contains(&Event::Closed {
+        reason: "terminal engine mismatch".into(),
+        code: Some(INCOMPATIBLE),
+    }));
+    server.abort();
+}
+
+/// The controller's close code for a worker whose terminal engine differs.
+const INCOMPATIBLE: u16 = 4412;

@@ -1,12 +1,33 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { workerUnavailableReason } from "@puppet-master/client-core/state/worker";
+import type { TerminalStreamStatus } from "@puppet-master/client-core/ws/terminalSocket";
+import { useAppState } from "./state/hooks";
+import {
+  ATTACHING,
+  MANUAL_RETRY_DELAY_MS,
+  STATUS_DELAY_MS,
+  closedLink,
+  nativeStreamStatus,
+  onlineLink,
+  reattachDelay,
+  type NativeLink,
+} from "./nativeStatus";
 import type { Terminal } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
-import { nativeBridge, nativeTerminalsAvailable, type NativePlacement, type NativeRect, type NativeTerminalEvent, type NativeTerminals } from "./native";
+import {
+  nativeBridge,
+  nativeTerminalsAvailable,
+  type NativeColor,
+  type NativePlacement,
+  type NativeRect,
+  type NativeTerminalEvent,
+  type NativeTerminals,
+  type NativeTheme,
+} from "./native";
+import type { GhosttyTheme } from "./ws/ghostty/core";
 import { mintSocketTicket, withTicket } from "./ws/socketTicket";
 import { TERMINAL_PM_LINK_ERROR_EVENT } from "./ws/terminalLinks";
 import type { TerminalStage } from "./ws/terminal";
 
-/** Wait before attaching again after the native terminal's socket closed. */
-const REATTACH_MS = 1_000;
 /** Viewer ids are random below this, clear of the page's own counter. */
 const VIEWER_ID_SPAN = 2 ** 48;
 
@@ -25,6 +46,32 @@ export function placementOf(host: HTMLElement, stage: Pick<TerminalStage, "visib
       && rect.height > 0
       && document.visibilityState === "visible"
       && getComputedStyle(host).visibility !== "hidden",
+    scale: window.devicePixelRatio || 1,
+    viewportWidth: window.innerWidth,
+  };
+}
+
+/** A theme color in `#RRGGBB` or `#RRGGBBAA` form. */
+export function parseThemeColor(value: string | undefined): NativeColor | undefined {
+  const match = value ? /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$/i.exec(value) : null;
+  if (!match) return undefined;
+  const [, r, g, b, a] = match;
+  return {
+    r: parseInt(r, 16),
+    g: parseInt(g, 16),
+    b: parseInt(b, 16),
+    ...(a ? { a: parseInt(a, 16) / 255 } : {}),
+  };
+}
+
+export function nativeThemeOf(theme: GhosttyTheme): NativeTheme {
+  const selection = parseThemeColor(theme.selectionBackground);
+  return {
+    foreground: { ...theme.foreground },
+    background: { ...theme.background },
+    cursor: { ...theme.cursor },
+    palette: (theme.palette ?? []).map((color) => ({ ...color })),
+    ...(selection ? { selection } : {}),
   };
 }
 
@@ -36,6 +83,7 @@ const OVERLAY_SELECTOR = [
   "[role=tooltip]",
   ".modal-backdrop",
   ".alert-pill",
+  ".terminal-stream-status:not([hidden])",
   ".term-drop-overlay",
   ".ap-drop-target",
   ".ap-move-ghost",
@@ -93,7 +141,8 @@ interface Handlers {
   onCommand?(command: string): void;
   onContextMenu(x: number, y: number): void;
   onLinkHover(link: boolean): void;
-  onClosed(): void;
+  onOnline(): void;
+  onClosed(reason: string, code: number | null): void;
 }
 
 /** A native terminal that is open, shown or kept warm while hidden. */
@@ -102,6 +151,16 @@ interface Entry {
   /** The last placement sent, so a hidden one can be shown again as it was. */
   placement: NativePlacement | null;
   hiddenAt: number | null;
+  link: NativeLink;
+  /** Failed attaches in a row, which sets the wait before the next. */
+  attempts: number;
+}
+
+/** What the page shows for a native terminal: its connection status, and a
+ * retry the status offers. */
+export interface NativeTerminalView {
+  status: TerminalStreamStatus | null;
+  retry(): void;
 }
 
 /** Set on a terminal's host while ⌘ is held over a link in it. */
@@ -119,9 +178,10 @@ function routeEvent(id: string, event: NativeTerminalEvent): void {
     return;
   }
   if (event.type === "closed" || event.type === "failed") {
-    if (entry.handlers) entry.handlers.onClosed();
+    const code = event.type === "closed" ? event.code ?? null : null;
+    if (entry.handlers) entry.handlers.onClosed(event.reason, code);
     else entries.delete(id);
-  } else if (event.type === "link") entry.handlers?.onLink(event.href);
+  } else if (event.type === "online") entry.handlers?.onOnline(); else if (event.type === "link") entry.handlers?.onLink(event.href);
   else if (event.type === "contextmenu") entry.handlers?.onContextMenu(event.x, event.y);
   else if (event.type === "command") entry.handlers?.onCommand?.(event.command);
   else if (event.type === "hover") entry.handlers?.onLinkHover(event.link);
@@ -161,12 +221,20 @@ export interface NativeTerminalOptions {
  * layout moves. The native terminal is the page's only viewer of it, and it
  * stays attached for a while once hidden.
  */
-export function useNativeTerminal(options: NativeTerminalOptions): void {
+export function useNativeTerminal(options: NativeTerminalOptions): NativeTerminalView {
   const { terminal, hostRef, active, stage, readOnly = false } = options;
   const terminalId = terminal?.id;
   const generation = terminal?.generation;
   const callbacks = useRef(options);
   callbacks.current = options;
+  const state = useAppState();
+  const session = terminal ? state.sessions.get(terminal.sessionId.toString()) : undefined;
+  const unavailable = session ? workerUnavailableReason(state.workers, session.workerId) : null;
+  const unavailableRef = useRef(unavailable);
+  unavailableRef.current = unavailable;
+  const [status, setStatus] = useState<TerminalStreamStatus | null>(null);
+  const controls = useRef<{ retry(): void; recheck(): void } | null>(null);
+  useEffect(() => controls.current?.recheck(), [unavailable]);
   useEffect(() => {
     const native = nativeBridge()?.terminal;
     if (!native || !nativeTerminalsAvailable() || !active || terminalId === undefined || generation === undefined) return;
@@ -174,11 +242,25 @@ export function useNativeTerminal(options: NativeTerminalOptions): void {
     let disposed = false;
     let frame = 0;
     let reattach = 0;
+    let statusTimers: number[] = [];
     let regions: NativeRegions = { holes: [], passthrough: [] };
-    const entry: Entry = entries.get(id) ?? { handlers: null, placement: null, hiddenAt: null };
+    const entry: Entry = entries.get(id) ?? { handlers: null, placement: null, hiddenAt: null, link: ATTACHING(Date.now()), attempts: 0 };
     const warm = entries.has(id) && entry.placement !== null;
     entries.set(id, entry);
     entry.hiddenAt = null;
+
+    const showStatus = () => {
+      if (disposed) return;
+      setStatus(nativeStreamStatus(entry.link, unavailableRef.current, Date.now()));
+      for (const timer of statusTimers) window.clearTimeout(timer);
+      statusTimers = [];
+      const since = entry.link.waitingSince;
+      if (since === null) return;
+      for (const at of [STATUS_DELAY_MS, MANUAL_RETRY_DELAY_MS]) {
+        const wait = since + at - Date.now();
+        if (wait > 0) statusTimers.push(window.setTimeout(showStatus, wait));
+      }
+    };
 
     const follow = () => {
       if (disposed) return;
@@ -197,10 +279,17 @@ export function useNativeTerminal(options: NativeTerminalOptions): void {
     };
 
     const attach = async () => {
+      window.clearTimeout(reattach);
+      reattach = 0;
+      if (unavailableRef.current) return;
       const viewer = 1 + Math.floor(Math.random() * VIEWER_ID_SPAN);
       const path = `/ws/terminal/${terminalId}?generation=${generation}&viewer=${viewer}`;
       const ticket = await mintSocketTicket(path).catch(() => null);
-      if (disposed || !ticket) return;
+      if (disposed) return;
+      if (!ticket) {
+        entry.handlers?.onClosed("could not get a ticket for the terminal", null);
+        return;
+      }
       let placement: NativePlacement | null = null;
       while (!disposed && !placement) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -231,28 +320,53 @@ export function useNativeTerminal(options: NativeTerminalOptions): void {
         if (hostRef.current) dispatchContextMenu(x, y, hostRef.current);
       },
       onLinkHover: (link) => hostRef.current?.classList.toggle(LINK_HOVER_CLASS, link),
-      onClosed: () => {
+      onOnline: () => {
+        entry.link = onlineLink();
+        entry.attempts = 0;
+        showStatus();
+      },
+      onClosed: (reason, code) => {
         if (disposed) return;
-        cancelAnimationFrame(frame);
-        entry.placement = null;
-        reattach = window.setTimeout(() => void attach(), REATTACH_MS);
+        entry.link = closedLink(entry.link, reason, code, Date.now());
+        showStatus();
+        // The view keeps its last screen in place while a new socket attaches.
+        if (entry.link.refusal || unavailableRef.current || reattach) return;
+        reattach = window.setTimeout(() => void attach(), reattachDelay(entry.attempts++));
+      },
+    };
+    controls.current = {
+      retry: () => {
+        entry.attempts = 0;
+        entry.link = { ...entry.link, refusal: null };
+        showStatus();
+        void attach();
+      },
+      recheck: () => {
+        showStatus();
+        if (!unavailableRef.current && !entry.link.online && !reattach && !entry.link.refusal) void attach();
       },
     };
 
+    showStatus();
     if (warm) {
       callbacks.current.onOpened?.();
       if (!readOnly) void native.focus(id).catch(() => {});
       frame = requestAnimationFrame(follow);
     } else {
+      entry.link = ATTACHING(Date.now());
+      showStatus();
       void attach();
     }
     return () => {
       disposed = true;
+      controls.current = null;
       cancelAnimationFrame(frame);
       window.clearTimeout(reattach);
+      for (const timer of statusTimers) window.clearTimeout(timer);
+      setStatus(null);
       entry.handlers = null;
       hostRef.current?.classList.remove(LINK_HOVER_CLASS);
-      if (!entry.placement) {
+      if (!entry.placement || !entry.link.online) {
         entries.delete(id);
         void native.close(id).catch(() => {});
         return;
@@ -263,4 +377,5 @@ export function useNativeTerminal(options: NativeTerminalOptions): void {
       evictWarm(native);
     };
   }, [terminalId, generation, hostRef, active, stage, readOnly]);
+  return { status, retry: () => controls.current?.retry() };
 }

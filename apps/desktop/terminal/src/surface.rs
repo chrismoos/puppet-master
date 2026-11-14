@@ -5,8 +5,8 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
-use crate::renderer::Renderer;
-use crate::vt::{Frame, Vt};
+use crate::renderer::{Renderer, Tint};
+use crate::vt::{Frame, Rgb, Vt};
 
 /// The view's layout in physical pixels and the page's cell size, which the
 /// grid is laid out with.
@@ -21,13 +21,29 @@ pub struct Layout {
     pub visible: bool,
 }
 
-/// One frame's work: the layout, new holes if they changed, and composing text.
-type Work = (Layout, Option<Vec<[f32; 4]>>, String);
+/// One frame's work: the layout, settings that changed since the last
+/// frame, and composing text.
+struct Work {
+    layout: Layout,
+    holes: Option<Vec<[f32; 4]>>,
+    theme: Option<Colors>,
+    preedit: String,
+}
+
+/// The theme colors the renderer itself needs: the background drawn before
+/// the first replay, and the selection highlight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Colors {
+    pub background: Rgb,
+    pub selection: Option<Tint>,
+}
 
 struct State {
     layout: Layout,
     /// Transparent rectangles in physical pixels, taken by the next frame.
     holes: Option<Vec<[f32; 4]>>,
+    /// New theme colors, taken by the next frame.
+    theme: Option<Colors>,
     /// Text an input method is composing, drawn at the cursor.
     preedit: String,
     dirty: bool,
@@ -63,6 +79,13 @@ impl Painter {
         self.wake.notify_one();
     }
 
+    pub fn set_colors(&self, colors: Colors) {
+        let mut state = self.state.lock().unwrap();
+        state.theme = Some(colors);
+        state.dirty = true;
+        self.wake.notify_one();
+    }
+
     pub fn set_preedit(&self, text: &str) {
         let mut state = self.state.lock().unwrap();
         if state.preedit != text {
@@ -87,7 +110,12 @@ impl Painter {
             return None;
         }
         state.dirty = false;
-        Some((state.layout, state.holes.take(), state.preedit.clone()))
+        Some(Work {
+            layout: state.layout,
+            holes: state.holes.take(),
+            theme: state.theme.take(),
+            preedit: state.preedit.clone(),
+        })
     }
 }
 
@@ -111,6 +139,7 @@ impl Paint {
             state: Mutex::new(State {
                 layout,
                 holes: None,
+                theme: None,
                 preedit: String::new(),
                 dirty: true,
                 alive: true,
@@ -122,10 +151,21 @@ impl Paint {
             .name("terminal render".into())
             .spawn(move || {
                 let mut font_px = 0.0;
+                let mut blank = Frame::default();
                 let mut cell = (0.0, 0.0);
-                while let Some((layout, holes, preedit)) = shared.next() {
+                while let Some(work) = shared.next() {
+                    let Work {
+                        layout,
+                        holes,
+                        theme,
+                        preedit,
+                    } = work;
                     if let Some(holes) = holes {
                         renderer.set_holes(&holes);
+                    }
+                    if let Some(colors) = theme {
+                        renderer.set_selection(colors.selection);
+                        blank.background = colors.background;
                     }
                     if !layout.visible || layout.width == 0 || layout.height == 0 {
                         continue;
@@ -163,6 +203,7 @@ impl Paint {
                         .create_view(&wgpu::TextureViewDescriptor::default());
                     {
                         let mut guard = screen.lock().unwrap();
+                        renderer.set_scrollbar(guard.as_ref().and_then(Vt::scrollbar));
                         match guard.as_mut().map(Vt::update) {
                             Some(Ok(frame)) if !preedit.is_empty() => renderer.render(
                                 &crate::preedit::overlay(frame, &preedit),
@@ -180,7 +221,7 @@ impl Paint {
                             ),
                             // Before the first replay, or after a failed update: the plain background.
                             _ => renderer.render(
-                                &Frame::default(),
+                                &blank,
                                 &view,
                                 config.width,
                                 config.height,

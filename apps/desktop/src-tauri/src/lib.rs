@@ -54,7 +54,8 @@ pub fn run() {
             native::native_terminal_focus,
             native::native_terminal_close,
             native::native_terminal_regions,
-            native::native_terminal_close_all
+            native::native_terminal_close_all,
+            native::native_terminal_theme
         ])
         .menu(|app| {
             let menu = Menu::default(app)?;
@@ -97,6 +98,7 @@ fn framed<'a>(
         .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
         .initialization_script(BRIDGE_SCRIPT)
+        .zoom_hotkeys_enabled(true)
         // Tauri's own handler takes dropped files, so the page never sees them.
         .disable_drag_drop_handler();
     #[cfg(target_os = "macos")]
@@ -212,6 +214,7 @@ const CONTROLLER_PERMISSIONS: &[&str] = &[
     "allow-native-terminal-close",
     "allow-native-terminal-regions",
     "allow-native-terminal-close-all",
+    "allow-native-terminal-theme",
 ];
 
 fn show_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {

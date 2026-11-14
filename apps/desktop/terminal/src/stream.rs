@@ -12,6 +12,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::protocol::{self, Incoming, Replay, FLAG_REPLAY};
+use crate::theme::Theme;
 use crate::vt::Vt;
 
 /// What the socket reports back to whoever shows the terminal.
@@ -27,8 +28,11 @@ pub enum Event {
     Clipboard(String),
     /// The shell reported the program now in the foreground.
     Command(String),
-    /// The socket closed; a new ticket is needed to attach again.
-    Closed { reason: String },
+    /// A full replay arrived: the screen is current.
+    Online,
+    /// The socket closed; a new ticket is needed to attach again. `code` is
+    /// the close frame's code when the controller sent one.
+    Closed { reason: String, code: Option<u16> },
 }
 
 pub struct Attach {
@@ -54,6 +58,7 @@ enum Command {
 pub struct Stream {
     commands: mpsc::UnboundedSender<Command>,
     screen: Arc<Mutex<Option<Vt>>>,
+    theme: Arc<Mutex<Option<Theme>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -72,12 +77,28 @@ impl Stream {
     ) -> Stream {
         let (commands, receiver) = mpsc::unbounded_channel();
         let screen = Arc::new(Mutex::new(None));
-        let task = runtime.spawn(run(attach, screen.clone(), receiver, Arc::new(on_event)));
+        let theme = Arc::new(Mutex::new(None));
+        let task = runtime.spawn(run(
+            attach,
+            screen.clone(),
+            theme.clone(),
+            receiver,
+            Arc::new(on_event),
+        ));
         Stream {
             commands,
             screen,
+            theme,
             task,
         }
+    }
+
+    /// Draws with `theme`'s default colors, now and on every screen a replay brings.
+    pub fn set_theme(&self, theme: Theme) {
+        if let Some(vt) = self.screen.lock().unwrap().as_mut() {
+            vt.set_theme(&theme);
+        }
+        *self.theme.lock().unwrap() = Some(theme);
     }
 
     /// The screen, once the first replay has arrived.
@@ -110,22 +131,26 @@ impl Drop for Stream {
 async fn run(
     attach: Attach,
     screen: Arc<Mutex<Option<Vt>>>,
+    theme: Arc<Mutex<Option<Theme>>>,
     mut commands: mpsc::UnboundedReceiver<Command>,
     on_event: Arc<dyn Fn(Event) + Send + Sync>,
 ) {
-    let reason = match session(&attach, &screen, &mut commands, &*on_event).await {
-        Ok(()) => "the controller closed the terminal".to_string(),
-        Err(error) => error,
+    let (reason, code) = match session(&attach, &screen, &theme, &mut commands, &*on_event).await {
+        Ok(Some((code, reason))) if !reason.is_empty() => (reason, Some(code)),
+        Ok(Some((code, _))) => (format!("connection closed ({code})"), Some(code)),
+        Ok(None) => ("the controller closed the terminal".to_string(), None),
+        Err(error) => (error, None),
     };
-    on_event(Event::Closed { reason });
+    on_event(Event::Closed { reason, code });
 }
 
 async fn session(
     attach: &Attach,
     screen: &Mutex<Option<Vt>>,
+    theme: &Mutex<Option<Theme>>,
     commands: &mut mpsc::UnboundedReceiver<Command>,
     on_event: &(dyn Fn(Event) + Send + Sync),
-) -> Result<(), String> {
+) -> Result<Option<(u16, String)>, String> {
     let url = match attach.claim {
         Some((cols, rows)) => format!("{}&cols={cols}&rows={rows}&claim={URL_CLAIM}", attach.url),
         None => attach.url.clone(),
@@ -143,19 +168,20 @@ async fn session(
         .map_err(|error| format!("could not open the terminal: {error}"))?;
     let (mut writer, mut reader) = socket.split();
     let generation = attach.generation;
-    let mut replay = Replay::default();
-    let mut clipboard = crate::osc::OscWatch::default();
+    let mut decoding = Decoding::default();
     let mut request_id: u64 = if attach.claim.is_some() { URL_CLAIM } else { 0 };
     loop {
         tokio::select! {
             message = reader.next() => {
-                let Some(message) = message else { return Ok(()) };
+                let Some(message) = message else { return Ok(None) };
                 let message = message.map_err(|error| format!("the terminal connection failed: {error}"))?;
                 let Message::Binary(frame) = message else {
-                    if matches!(message, Message::Close(_)) { return Ok(()); }
+                    if let Message::Close(frame) = message {
+                        return Ok(frame.map(|frame| (u16::from(frame.code), frame.reason.to_string())));
+                    }
                     continue;
                 };
-                let parsed = handle(generation, attach.viewer, &frame, screen, &mut replay, &mut clipboard, on_event)?;
+                let parsed = handle(generation, attach.viewer, &frame, screen, theme, &mut decoding, on_event)?;
                 if parsed > 0 {
                     writer
                         .send(Message::Binary(protocol::ack(generation, parsed).into()))
@@ -164,7 +190,7 @@ async fn session(
                 }
             }
             command = commands.recv() => {
-                let Some(command) = command else { return Ok(()) };
+                let Some(command) = command else { return Ok(None) };
                 let frame = match command {
                     Command::Input(data, submitted) => protocol::input(generation, &data, submitted),
                     Command::Claim { cols, rows } => {
@@ -181,13 +207,20 @@ async fn session(
 
 /// Applies one frame to the screen and returns how many output bytes it
 /// parsed, which the controller expects acknowledged.
+/// What decoding output carries from one frame to the next.
+#[derive(Default)]
+struct Decoding {
+    replay: Replay,
+    osc: crate::osc::OscWatch,
+}
+
 fn handle(
     generation: u64,
     viewer: u64,
     frame: &[u8],
     screen: &Mutex<Option<Vt>>,
-    replay: &mut Replay,
-    clipboard: &mut crate::osc::OscWatch,
+    theme: &Mutex<Option<Theme>>,
+    decoding: &mut Decoding,
     on_event: &(dyn Fn(Event) + Send + Sync),
 ) -> Result<u32, String> {
     match protocol::decode(frame) {
@@ -197,7 +230,7 @@ fn handle(
             data,
         }) if g == generation => {
             if flags & FLAG_REPLAY != 0 {
-                let Some(complete) = replay.push(flags, &data) else {
+                let Some(complete) = decoding.replay.push(flags, &data) else {
                     return Ok(0);
                 };
                 let restored = if complete.ghostty_snapshot {
@@ -210,7 +243,12 @@ fn handle(
                     vt.write(&complete.data);
                     vt
                 };
+                let mut restored = restored;
+                if let Some(theme) = theme.lock().unwrap().as_ref() {
+                    restored.set_theme(theme);
+                }
                 *screen.lock().unwrap() = Some(restored);
+                on_event(Event::Online);
                 on_event(Event::Changed);
                 return Ok(0);
             }
@@ -220,7 +258,7 @@ fn handle(
             };
             vt.write(&data);
             drop(guard);
-            for found in clipboard.push(&data) {
+            for found in decoding.osc.push(&data) {
                 on_event(match found {
                     crate::osc::Osc::Copy(text) => Event::Clipboard(text),
                     crate::osc::Osc::Command(command) => Event::Command(command),

@@ -33,15 +33,27 @@ page's layout as panes move or the session list collapses.
   letters) is drawn underlined at the cursor, with the candidate window
   beside it, and is sent once committed.
 - Read-only panes take no typing, but still select and copy.
+- It draws with your terminal theme, light or dark, including its
+  selection color, and follows a theme change or preview at once.
 - Drag to select, double-click for a word, triple-click for a line, and ⌘C
-  to copy. Text a program copies with OSC 52 lands on the clipboard.
+  to copy. Dragging past the top or bottom edge scrolls to extend the
+  selection, and Shift-click extends it. Text a program copies with OSC 52
+  lands on the clipboard.
 - ⌘-click a link to open it: an OSC 8 hyperlink, or a URL or `pm:` link
   written in the text. Your controller's own pages open in the app, other
   sites in your default browser.
 - A program that asks for the mouse, such as a full-screen editor, gets
   clicks, drags and the wheel. Hold Shift to select text instead.
-- Otherwise the wheel and trackpad scroll back through history, and a right
-  click opens the page's terminal menu.
+- Otherwise the wheel and trackpad scroll back through history, with a
+  scrollbar on the right while you are scrolled back, and a right click
+  opens the page's terminal menu.
+- ⌘+ and ⌘− zoom the page and the terminal with it, and moving the window
+  to another display redraws it sharp at that display's scale.
+- Connection trouble shows as it does in a browser: connecting, worker
+  offline, a retry once attaching has failed for a while, and a prompt to
+  update the worker or reload the page when terminal engines differ. The
+  last screen stays in place while it reconnects.
+- VoiceOver reads the terminal as a text area holding the visible screen.
 - Drop files on the terminal to upload them, as in a browser.
 - Page menus, dialogs, alerts and the pane's hover header show over the
   terminal.

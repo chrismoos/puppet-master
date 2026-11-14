@@ -9,6 +9,28 @@ export interface NativePlacement {
   fontSize: number;
   padding: number;
   visible: boolean;
+  /** Device pixels per CSS pixel. It changes as the window moves between
+   * displays, which places the terminal again for the new display. */
+  scale: number;
+  /** The viewport's width in CSS pixels, from which the app reads the page zoom. */
+  viewportWidth: number;
+}
+
+/** A color for the native terminal, with an opacity from 0 to 1 when it has one. */
+export interface NativeColor {
+  r: number;
+  g: number;
+  b: number;
+  a?: number;
+}
+
+/** The page's terminal theme, as the native terminal draws it. */
+export interface NativeTheme {
+  foreground: NativeColor;
+  background: NativeColor;
+  cursor: NativeColor;
+  palette: NativeColor[];
+  selection?: NativeColor;
 }
 
 /** A rectangle in page coordinates, in CSS pixels. */
@@ -20,7 +42,9 @@ export interface NativeRect {
 }
 
 export type NativeTerminalEvent =
-  | { type: "closed" | "failed" | "linkfailed"; id: string; reason: string }
+  | { type: "closed"; id: string; reason: string; code?: number | null }
+  | { type: "failed" | "linkfailed"; id: string; reason: string }
+  | { type: "online"; id: string }
   | { type: "link"; id: string; href: string }
   | { type: "contextmenu"; id: string; x: number; y: number }
   | { type: "command"; id: string; command: string }
@@ -40,6 +64,8 @@ export interface NativeTerminals {
   /** Page content over the terminal: holes show through and take the mouse,
    * passthrough areas only take the mouse. */
   regions(id: string, holes: NativeRect[], passthrough: NativeRect[]): Promise<void>;
+  /** Sets the theme every native terminal in the window draws with. */
+  theme(theme: NativeTheme): Promise<void>;
   close(id: string): Promise<void>;
 }
 

@@ -14,8 +14,9 @@ use objc2::{
     define_class, msg_send, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
 };
 use objc2_app_kit::{
-    NSEvent, NSEventModifierFlags, NSPasteboard, NSPasteboardTypeString, NSResponder,
-    NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSAccessibilityTextAreaRole, NSEvent, NSEventModifierFlags, NSPasteboard,
+    NSPasteboardTypeString, NSResponder, NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions,
+    NSView,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSAttributedStringKey, NSObjectProtocol, NSPoint, NSRange, NSRect,
@@ -29,7 +30,8 @@ use crate::input::{keys, mods, Key, KeyPress};
 use crate::pointer::{MouseAction, MouseButton, MouseGeometry};
 use crate::renderer::Renderer;
 use crate::stream::{Attach, Event, Stream};
-use crate::surface::{Layout, Paint, Painter};
+use crate::surface::{Colors, Layout, Paint, Painter};
+use crate::theme::Theme;
 use crate::vt::Vt;
 
 /// Lines one notch of a mouse wheel scrolls; trackpads report pixels and
@@ -75,7 +77,9 @@ type InputSink = Box<dyn Fn(ViewInput) -> bool>;
 #[derive(Clone, Debug, PartialEq)]
 pub enum TerminalEvent {
     /// The socket closed; a new ticket is needed to attach again.
-    Closed(String),
+    Closed { reason: String, code: Option<u16> },
+    /// A full replay arrived: the screen is current.
+    Online,
     /// A link was ⌘-clicked.
     Link(String),
     /// Whether ⌘ is held over a link, which shows a pointing hand.
@@ -90,6 +94,8 @@ pub struct ViewIvars {
     sink: RefCell<Option<InputSink>>,
     /// The cursor's cell in view coordinates, for the input method's window.
     caret: RefCell<Option<Box<dyn Fn() -> NSRect>>>,
+    /// The visible screen's text, for VoiceOver.
+    screen_text: RefCell<Option<Box<dyn Fn() -> String>>>,
     /// Text the input method is composing.
     marked: RefCell<String>,
     /// Text the input method committed during the current key press.
@@ -126,6 +132,9 @@ fn mods_of(flags: NSEventModifierFlags) -> u16 {
     bits
 }
 
+/// What VoiceOver calls the terminal.
+const ACCESSIBILITY_LABEL: &str = "Terminal";
+
 /// `NSNotFound`, which an input method reads as "no range".
 const NOT_FOUND: usize = isize::MAX as usize;
 
@@ -159,6 +168,28 @@ define_class!(
         #[unsafe(method(acceptsFirstResponder))]
         fn accepts_first_responder(&self) -> bool {
             true
+        }
+
+        #[unsafe(method(isAccessibilityElement))]
+        fn is_accessibility_element(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(accessibilityRole))]
+        fn accessibility_role(&self) -> *mut NSString {
+            let role: &NSString = unsafe { NSAccessibilityTextAreaRole };
+            Retained::autorelease_return(role.retain())
+        }
+
+        #[unsafe(method(accessibilityLabel))]
+        fn accessibility_label(&self) -> *mut NSString {
+            Retained::autorelease_return(NSString::from_str(ACCESSIBILITY_LABEL))
+        }
+
+        #[unsafe(method(accessibilityValue))]
+        fn accessibility_value(&self) -> *mut NSString {
+            let text = self.ivars().screen_text.borrow().as_ref().map(|read| read()).unwrap_or_default();
+            Retained::autorelease_return(NSString::from_str(&text))
         }
 
         #[unsafe(method(acceptsFirstMouse:))]
@@ -417,6 +448,7 @@ impl TerminalView {
         let this = Self::alloc(mtm).set_ivars(ViewIvars {
             sink: RefCell::new(None),
             caret: RefCell::new(None),
+            screen_text: RefCell::new(None),
             marked: RefCell::default(),
             inserted: RefCell::new(None),
             in_key_down: Cell::new(false),
@@ -620,6 +652,9 @@ pub struct Placement {
     pub font_size: f64,
     pub padding: f64,
     pub visible: bool,
+    /// The page's viewport width in CSS pixels, which with the web view's
+    /// width in points gives the page zoom; 0 for no zoom.
+    pub viewport_width: f64,
 }
 
 /// A terminal drawn natively over the page. It lives on the main thread.
@@ -630,7 +665,7 @@ pub struct NativeTerminal {
     /// Kept for its drop, which stops the render thread.
     _paint: Paint,
     painter: Arc<Painter>,
-    scale: f64,
+    scale: Cell<f64>,
     /// The grid this view last claimed.
     claimed: Arc<Mutex<(u16, u16)>>,
     /// Whether this viewer owns the terminal's size.
@@ -690,9 +725,7 @@ impl NativeTerminal {
         }
         *view.ivars().webview.borrow_mut() = webview;
         parent.addSubview(&view);
-        let scale = parent
-            .window()
-            .map_or(1.0, |window| window.backingScaleFactor());
+        let scale = zoom_of(&parent, placement) * backing_of(&parent);
 
         let instance = wgpu::Instance::default();
         let handle = AppKitWindowHandle::new(NonNull::from(&*view).cast());
@@ -751,7 +784,8 @@ impl NativeTerminal {
             ..attach
         };
         let stream = Arc::new(Stream::open_on(runtime, attach, move |event| match event {
-            Event::Closed { reason } => notify(TerminalEvent::Closed(reason)),
+            Event::Closed { reason, code } => notify(TerminalEvent::Closed { reason, code }),
+            Event::Online => notify(TerminalEvent::Online),
             Event::Clipboard(text) => copy_to_pasteboard(text),
             Event::Ownership { local, .. } => ownership.store(local, Ordering::Relaxed),
             Event::Command(command) => notify(TerminalEvent::Command(command)),
@@ -771,7 +805,7 @@ impl NativeTerminal {
             stream,
             _paint: paint,
             painter,
-            scale,
+            scale: Cell::new(scale),
             claimed: Arc::new(Mutex::new(grid)),
             owner,
             placement: Rc::new(Cell::new(placement)),
@@ -802,6 +836,24 @@ impl NativeTerminal {
                 }
             }
         };
+        *self.view.ivars().screen_text.borrow_mut() = Some(Box::new({
+            let screen = screen.clone();
+            move || {
+                screen
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map_or_else(String::new, |vt| {
+                        let frame = vt.frame();
+                        (0..frame.rows)
+                            .map(|y| frame.row_text(y))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                            .trim_end()
+                            .to_string()
+                    })
+            }
+        }));
         *self.view.ivars().caret.borrow_mut() = Some(Box::new({
             let screen = screen.clone();
             let placement = placement.clone();
@@ -822,8 +874,10 @@ impl NativeTerminal {
                 )
             }
         }));
-        // Where a drag that selects text started.
-        let anchor: Cell<Option<(u16, u16)>> = Cell::new(None);
+        // Where a drag that selects text started, and where the last
+        // selection started for Shift-click, as screen points.
+        let anchor: Cell<Option<(u16, u32)>> = Cell::new(None);
+        let last_anchor: Cell<Option<(u16, u32)>> = Cell::new(None);
         let over_link = Cell::new(false);
         *self.view.ivars().sink.borrow_mut() = Some(Box::new(move |input| {
             if let ViewInput::Preedit(text) = &input {
@@ -970,10 +1024,17 @@ impl NativeTerminal {
                         }
                         (MouseButton::Left, MouseAction::Press) => {
                             anchor.set(None);
+                            let here = vt.screen_point(cell.0, cell.1);
                             match clicks {
+                                1 if bits & mods::SHIFT != 0 && last_anchor.get().is_some() => {
+                                    let start = last_anchor.get().unwrap_or(here);
+                                    vt.select_screen(start, here);
+                                    anchor.set(Some(start));
+                                }
                                 1 => {
                                     vt.clear_selection();
-                                    anchor.set(Some(cell));
+                                    anchor.set(Some(here));
+                                    last_anchor.set(Some(here));
                                 }
                                 2 => {
                                     vt.select_word(cell.0, cell.1);
@@ -987,7 +1048,15 @@ impl NativeTerminal {
                         }
                         (MouseButton::Left, MouseAction::Motion) => {
                             if let Some(start) = anchor.get() {
-                                vt.select_range(start, cell);
+                                // Dragging past the top or bottom edge scrolls to extend the selection.
+                                if point.y < at.padding {
+                                    let _ = vt.scroll(-1);
+                                } else if point.y > at.height - at.padding {
+                                    let _ = vt.scroll(1);
+                                }
+                                let cell = cell_at(vt, at, point);
+                                let here = vt.screen_point(cell.0, cell.1);
+                                vt.select_screen(start, here);
                                 drop(guard);
                                 painter.redraw();
                             }
@@ -1025,7 +1094,7 @@ impl NativeTerminal {
                 .collect()
         };
         let holes = local(holes);
-        let scale = self.scale as f32;
+        let scale = self.scale.get() as f32;
         self.painter.set_holes(
             holes
                 .iter()
@@ -1046,17 +1115,25 @@ impl NativeTerminal {
     /// Moves the view to the page's current place for the terminal.
     pub fn place(&self, placement: Placement) {
         let bounds = self.parent.bounds();
+        let zoom = zoom_of(&self.parent, placement);
+        let height = placement.height * zoom;
         let y = if self.parent.isFlipped() {
-            placement.y
+            placement.y * zoom
         } else {
-            bounds.size.height - placement.y - placement.height
+            bounds.size.height - placement.y * zoom - height
         };
         self.view.setFrame(NSRect::new(
-            NSPoint::new(placement.x, y),
-            NSSize::new(placement.width, placement.height),
+            NSPoint::new(placement.x * zoom, y),
+            NSSize::new(placement.width * zoom, height),
         ));
+        // The view works in the page's CSS pixels whatever the zoom, so mouse
+        // points, the caret and the page's regions need no conversion.
+        self.view
+            .setBoundsSize(NSSize::new(placement.width, placement.height));
         self.view.setHidden(!placement.visible);
-        self.painter.set_layout(layout_for(placement, self.scale));
+        self.scale.set(zoom * backing_of(&self.parent));
+        self.painter
+            .set_layout(layout_for(placement, self.scale.get()));
         self.placement.set(placement);
         let was_shown = self.shown.replace(placement.visible);
         let showing = placement.visible && !was_shown;
@@ -1071,6 +1148,12 @@ impl NativeTerminal {
                 self.stream.resync();
             }
         }
+    }
+
+    /// Draws with the page's terminal theme.
+    pub fn set_theme(&self, theme: Theme, colors: Colors) {
+        self.stream.set_theme(theme);
+        self.painter.set_colors(colors);
     }
 
     /// Gives the terminal the keyboard.
@@ -1096,6 +1179,23 @@ impl Drop for NativeTerminal {
         self.view.ivars().sink.borrow_mut().take();
         self.view.removeFromSuperview();
     }
+}
+
+/// Points per CSS pixel: above 1 when the page is zoomed in.
+fn zoom_of(parent: &NSView, placement: Placement) -> f64 {
+    let width = parent.bounds().size.width;
+    if placement.viewport_width > 0.0 && width > 0.0 {
+        width / placement.viewport_width
+    } else {
+        1.0
+    }
+}
+
+/// Device pixels per point on the window's display.
+fn backing_of(parent: &NSView) -> f64 {
+    parent
+        .window()
+        .map_or(1.0, |window| window.backingScaleFactor())
 }
 
 /// The viewport cell under a point in the view, clamped to the grid.

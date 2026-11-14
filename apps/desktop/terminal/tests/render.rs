@@ -2,7 +2,7 @@
 //! Mac, a software Vulkan driver on a Linux build host) and reads the pixels
 //! back.
 
-use pm_native_terminal::renderer::Renderer;
+use pm_native_terminal::renderer::{Renderer, Tint};
 use pm_native_terminal::vt::{Rgb, Vt};
 
 const WIDTH: u32 = 320;
@@ -204,4 +204,56 @@ fn a_hole_is_fully_transparent_so_the_page_shows_through() {
     };
     assert_eq!(alpha(20, 10), 0, "inside the hole");
     assert_eq!(alpha(70, 10), 255, "outside the hole");
+}
+
+#[test]
+fn a_selection_is_drawn_in_the_theme_highlight() {
+    let (device, queue) = gpu();
+    let mut renderer = Renderer::new(device, queue, FORMAT, FONT_PX);
+    let (cols, rows) = renderer.grid_for(WIDTH as f32, HEIGHT as f32, PADDING);
+    let mut vt = Vt::new(cols, rows).unwrap();
+    vt.write(b"          ");
+    assert!(vt.select_range((0, 0), (3, 0)));
+    let highlight = Rgb {
+        r: 40,
+        g: 90,
+        b: 200,
+    };
+    renderer.set_selection(Some(Tint {
+        color: highlight,
+        alpha: 1.0,
+    }));
+    let pixels = draw(&mut renderer, &mut vt);
+    let cell = renderer.metrics();
+    let inside = (PADDING + cell.width) as u32;
+    let row = (PADDING + cell.height / 2.0) as u32;
+    assert_eq!(pixels.at(inside, row), highlight);
+    let past = (PADDING + cell.width * 6.0) as u32;
+    assert_ne!(
+        pixels.at(past, row),
+        highlight,
+        "unselected cells keep the background"
+    );
+}
+
+#[test]
+fn a_scrollbar_shows_only_while_scrolled_back() {
+    let (device, queue) = gpu();
+    let mut renderer = Renderer::new(device, queue, FORMAT, FONT_PX);
+    let (cols, rows) = renderer.grid_for(WIDTH as f32, HEIGHT as f32, PADDING);
+    let mut vt = Vt::new(cols, rows).unwrap();
+    for line in 0..40 {
+        vt.write(format!("{line}\r\n").as_bytes());
+    }
+    let edge = |pixels: &Pixels, background: Rgb| {
+        pixels.any_in(WIDTH - 12, 0, WIDTH, HEIGHT, |p| p != background)
+    };
+    renderer.set_scrollbar(vt.scrollbar());
+    let pixels = draw(&mut renderer, &mut vt);
+    let background = vt.frame().background;
+    assert!(!edge(&pixels, background), "no scrollbar at the bottom");
+    vt.scroll(-10).unwrap();
+    renderer.set_scrollbar(vt.scrollbar());
+    let pixels = draw(&mut renderer, &mut vt);
+    assert!(edge(&pixels, background), "a scrollbar while scrolled back");
 }

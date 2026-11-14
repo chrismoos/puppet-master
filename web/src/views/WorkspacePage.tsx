@@ -9,6 +9,7 @@ import { WorkspaceTerminal } from "../ws/workspaceTerminal";
 import { activateTerminalLink } from "../ws/terminalLinks";
 import { nativeTerminalsAvailable } from "../native";
 import { useNativeTerminal } from "../nativeTerminal";
+import { NativeTerminalStatus } from "./NativeTerminalStatus";
 import type { GhosttyRendererIssue } from "../ws/ghostty/terminalAdapter";
 import type { TerminalStreamStatus } from "@puppet-master/client-core/ws/terminalSocket";
 import { useTerminalThemeController } from "../theme/context";
@@ -72,7 +73,7 @@ export function TerminalViewport({ terminal, focused, active, onIssue, onCommand
   const viewRef = useRef<WorkspaceTerminal | null>(null);
   const [streamStatus, setStreamStatus] = useState<TerminalStreamStatus | null>(null);
   const native = Boolean(stage) && nativeTerminalsAvailable();
-  useNativeTerminal({
+  const nativeView = useNativeTerminal({
     terminal: native ? terminal : undefined,
     hostRef,
     active,
@@ -110,6 +111,9 @@ export function TerminalViewport({ terminal, focused, active, onIssue, onCommand
   return (
     <div className={`workspace-terminal-wrap${statusView?.level === "recovering" ? " is-stale" : ""}`}>
       <div className="workspace-terminal-host" ref={hostRef} />
+      {native && nativeView.status && (
+        <NativeTerminalStatus status={nativeView.status} terminal={terminal} onRetry={nativeView.retry} />
+      )}
       {statusView && (
         <TerminalStatus
           view={statusView}

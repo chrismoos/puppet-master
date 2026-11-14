@@ -122,6 +122,7 @@ import { approvalRoutePath } from "@puppet-master/client-core/router";
 import { removeWorkspaceFromTabs, WorkspaceTabs } from "./views/WorkspaceTabs";
 import { AlertPill, pageIsWatched, type InAppAlert } from "./views/AlertPill";
 import { nativeBridge, nativeTerminalsAvailable } from "./native";
+import { nativeThemeOf } from "./nativeTerminal";
 
 /** Saved workspaces stay reachable by their URLs while the tab bar is hidden. */
 const SHOW_WORKSPACE_TABS = false;
@@ -255,6 +256,13 @@ function ConnectedApp({
     stageRef.current.setNativeTerminals(nativeTerminalsAvailable());
   }
   const stage = stageRef.current;
+  useEffect(() => {
+    const native = nativeBridge()?.terminal;
+    if (!native || !nativeTerminalsAvailable()) return;
+    return themeController.register({
+      setTheme: (theme) => void native.theme(nativeThemeOf(theme)).catch(() => {}),
+    });
+  }, [themeController]);
 
   const notifierRef = useRef<Notifier | null>(null);
   if (!review) notifierRef.current ??= new Notifier();

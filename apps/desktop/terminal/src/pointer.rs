@@ -43,12 +43,40 @@ const LINK_TRAILERS: &[char] = &['.', ',', ';', ':', '!', '?', ')', ']'];
 /// Bytes a link or a mouse report is expected to fit in; longer ones are retried.
 const BUFFER: usize = 256;
 
+/// Where the viewport sits in the scrollback, in rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scrollbar {
+    pub total: u64,
+    /// The first visible row, counted from the top of the scrollback.
+    pub offset: u64,
+    pub len: u64,
+}
+
+impl Scrollbar {
+    pub fn at_bottom(&self) -> bool {
+        self.offset + self.len >= self.total
+    }
+}
+
 impl Vt {
     fn grid_ref(&self, x: u16, y: u16) -> Option<ffi::GhosttyGridRef> {
+        self.grid_ref_at(
+            ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_VIEWPORT,
+            x,
+            u32::from(y),
+        )
+    }
+
+    fn grid_ref_at(
+        &self,
+        tag: ffi::GhosttyPointTag,
+        x: u16,
+        y: u32,
+    ) -> Option<ffi::GhosttyGridRef> {
         let point = ffi::GhosttyPoint {
-            tag: ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_VIEWPORT,
+            tag,
             value: ffi::GhosttyPointValue {
-                coordinate: ffi::GhosttyPointCoordinate { x, y: u32::from(y) },
+                coordinate: ffi::GhosttyPointCoordinate { x, y },
             },
         };
         let mut found: ffi::GhosttyGridRef = unsafe { std::mem::zeroed() };
@@ -74,6 +102,54 @@ impl Vt {
     pub fn select_range(&mut self, from: (u16, u16), to: (u16, u16)) -> bool {
         let (Some(start), Some(end)) = (self.grid_ref(from.0, from.1), self.grid_ref(to.0, to.1))
         else {
+            return false;
+        };
+        self.set_selection(Some(&ffi::GhosttySelection {
+            start,
+            end,
+            rectangle: false,
+        }))
+    }
+
+    pub fn scrollbar(&self) -> Option<Scrollbar> {
+        let mut bar = ffi::GhosttyTerminalScrollbar {
+            total: 0,
+            offset: 0,
+            len: 0,
+        };
+        let result = unsafe {
+            ffi::ghostty_terminal_get(
+                self.terminal,
+                ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_SCROLLBAR,
+                (&mut bar as *mut ffi::GhosttyTerminalScrollbar).cast::<c_void>(),
+            )
+        };
+        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(Scrollbar {
+            total: bar.total,
+            offset: bar.offset,
+            len: bar.len,
+        })
+    }
+
+    /// A viewport cell as a point in the whole screen, scrollback included,
+    /// which stays put as the viewport scrolls.
+    pub fn screen_point(&self, x: u16, y: u16) -> (u16, u32) {
+        let offset = self.scrollbar().map_or(0, |bar| bar.offset);
+        (
+            x,
+            u32::try_from(offset)
+                .unwrap_or(u32::MAX)
+                .saturating_add(u32::from(y)),
+        )
+    }
+
+    /// Selects between two screen points, from [`Vt::screen_point`].
+    pub fn select_screen(&mut self, from: (u16, u32), to: (u16, u32)) -> bool {
+        let tag = ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_SCREEN;
+        let (Some(start), Some(end)) = (
+            self.grid_ref_at(tag, from.0, from.1),
+            self.grid_ref_at(tag, to.0, to.1),
+        ) else {
             return false;
         };
         self.set_selection(Some(&ffi::GhosttySelection {
@@ -350,6 +426,26 @@ mod tests {
         assert_eq!(vt.selected_text(), "world\nsecond");
         vt.clear_selection();
         assert_eq!(vt.selected_text(), "");
+    }
+
+    #[test]
+    fn a_selection_anchored_in_the_screen_survives_scrolling() {
+        let mut vt = Vt::new(10, 3).unwrap();
+        for line in 0..10 {
+            vt.write(format!("line{line}\r\n").as_bytes());
+        }
+        let bar = vt.scrollbar().unwrap();
+        assert!(bar.at_bottom());
+        let anchor = vt.screen_point(0, 0);
+        assert!(vt.scroll(-2).is_ok());
+        assert!(!vt.scrollbar().unwrap().at_bottom());
+        let end = vt.screen_point(4, 0);
+        assert!(vt.select_screen(end, anchor));
+        assert_eq!(
+            vt.selected_text(),
+            "6\nline7\nl",
+            "from line6's fifth column back down to line8's first"
+        );
     }
 
     #[test]

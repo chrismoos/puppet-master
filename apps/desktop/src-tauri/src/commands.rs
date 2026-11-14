@@ -14,4 +14,5 @@ pub const COMMANDS: &[&str] = &[
     "native_terminal_close",
     "native_terminal_regions",
     "native_terminal_close_all",
+    "native_terminal_theme",
 ];

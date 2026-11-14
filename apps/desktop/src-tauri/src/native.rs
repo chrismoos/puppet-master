@@ -18,6 +18,33 @@ pub struct PlacementArg {
     font_size: f64,
     padding: f64,
     visible: bool,
+    /// The page's viewport width in CSS pixels, which gives the page zoom.
+    #[serde(default)]
+    viewport_width: f64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub struct ColorArg {
+    r: u8,
+    g: u8,
+    b: u8,
+    /// Opacity from 0 to 1, for the selection highlight.
+    #[serde(default)]
+    a: Option<f32>,
+}
+
+/// The page's terminal theme.
+#[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub struct ThemeArg {
+    foreground: ColorArg,
+    background: ColorArg,
+    cursor: ColorArg,
+    #[serde(default)]
+    palette: Vec<ColorArg>,
+    #[serde(default)]
+    selection: Option<ColorArg>,
 }
 
 /// A rectangle in page coordinates, in CSS pixels.
@@ -51,7 +78,11 @@ mod platform {
 
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     use pm_native_terminal::macos::{NativeTerminal, Placement, TerminalEvent};
+    use pm_native_terminal::renderer::Tint;
     use pm_native_terminal::stream::Attach;
+    use pm_native_terminal::surface::Colors;
+    use pm_native_terminal::theme::Theme;
+    use pm_native_terminal::vt::Rgb;
     use serde_json::json;
     use tauri::Manager;
 
@@ -59,6 +90,8 @@ mod platform {
 
     thread_local! {
         static TERMINALS: RefCell<HashMap<(String, String), NativeTerminal>> = RefCell::new(HashMap::new());
+        /// Each window's terminal theme, for terminals it opens later.
+        static THEMES: RefCell<HashMap<String, ThemeArg>> = RefCell::new(HashMap::new());
     }
 
     /// Web links open from here; `pm:` links name places in the page, which opens them.
@@ -78,8 +111,53 @@ mod platform {
                 font_size: p.font_size,
                 padding: p.padding,
                 visible: p.visible,
+                viewport_width: p.viewport_width,
             }
         }
+    }
+
+    fn rgb(color: ColorArg) -> Rgb {
+        Rgb {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+        }
+    }
+
+    fn theme_of(theme: &ThemeArg) -> (Theme, Colors) {
+        let background = rgb(theme.background);
+        (
+            Theme {
+                foreground: rgb(theme.foreground),
+                background,
+                cursor: rgb(theme.cursor),
+                palette: theme.palette.iter().copied().map(rgb).collect(),
+            },
+            Colors {
+                background,
+                selection: theme.selection.map(|color| Tint {
+                    color: rgb(color),
+                    alpha: color.a.unwrap_or(1.0).clamp(0.0, 1.0),
+                }),
+            },
+        )
+    }
+
+    pub fn theme(window: WebviewWindow, theme: ThemeArg) -> Result<(), String> {
+        let label = window.label().to_string();
+        window
+            .run_on_main_thread(move || {
+                THEMES.with(|themes| themes.borrow_mut().insert(label.clone(), theme.clone()));
+                let (theme, colors) = theme_of(&theme);
+                TERMINALS.with(|terminals| {
+                    for ((owner, _), terminal) in terminals.borrow().iter() {
+                        if *owner == label {
+                            terminal.set_theme(theme.clone(), colors);
+                        }
+                    }
+                });
+            })
+            .map_err(|error| error.to_string())
     }
 
     pub fn open(
@@ -113,9 +191,10 @@ mod platform {
                         request.read_only,
                         move |event| {
                             let message = match event {
-                                TerminalEvent::Closed(reason) => {
-                                    json!({ "type": "closed", "id": id, "reason": reason })
+                                TerminalEvent::Closed { reason, code } => {
+                                    json!({ "type": "closed", "id": id, "reason": reason, "code": code })
                                 }
+                                TerminalEvent::Online => json!({ "type": "online", "id": id }),
                                 TerminalEvent::Link(href) if is_web_link(&href) => {
                                     match crate::open_link(&app, &href) {
                                         Ok(()) => return,
@@ -148,6 +227,10 @@ mod platform {
                 };
                 match opened {
                     Ok(terminal) => {
+                        if let Some(theme) = THEMES.with(|themes| themes.borrow().get(&key.0).cloned()) {
+                            let (theme, colors) = theme_of(&theme);
+                            terminal.set_theme(theme, colors);
+                        }
                         TERMINALS.with(|terminals| terminals.borrow_mut().insert(key, terminal));
                     }
                     Err(reason) => {
@@ -265,6 +348,10 @@ mod platform {
     pub fn close_all(_: WebviewWindow) -> Result<(), String> {
         Ok(())
     }
+
+    pub fn theme(_: WebviewWindow, _: ThemeArg) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Whether this build draws terminals natively, so the page knows to ask.
@@ -318,4 +405,11 @@ pub fn native_terminal_regions(
 #[tauri::command]
 pub fn native_terminal_close_all(window: WebviewWindow) -> Result<(), String> {
     platform::close_all(window)
+}
+
+/// Sets the terminal theme for every native terminal in the window, now and
+/// for ones it opens later.
+#[tauri::command]
+pub fn native_terminal_theme(window: WebviewWindow, theme: ThemeArg) -> Result<(), String> {
+    platform::theme(window, theme)
 }

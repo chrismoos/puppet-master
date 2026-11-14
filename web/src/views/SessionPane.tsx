@@ -21,6 +21,7 @@ import { browserWindowOpener, openForward } from "./forwardLink";
 import { SessionDropOverlay, useSessionDrop } from "./SessionDropZone";
 import { REVIEW_TAB_PREFIX, opensOwnWindow } from "./reviewWindow";
 import { useNativeTerminal } from "../nativeTerminal";
+import { NativeTerminalStatus } from "./NativeTerminalStatus";
 
 /// Distinguishes a plan tab from a terminal id in the same selection.
 const PLAN_TAB_PREFIX = "plan:";
@@ -315,7 +316,7 @@ export function SessionPane({
   // not know yet.
   const agentTerminal = terminals.find((terminal) => terminal.kind === TerminalKind.AGENT);
   const hostedTerminal = selected?.kind === TerminalKind.SHELL ? selected : selectedTerminal === "agent" ? agentTerminal : undefined;
-  useNativeTerminal({
+  const nativeView = useNativeTerminal({
     terminal: hostedTerminal,
     hostRef,
     active: active && !ended,
@@ -636,6 +637,9 @@ export function SessionPane({
               />
             )}
             <SessionDropOverlay state={fileDrop.state} />
+            {nativeView.status && hostedTerminal && (
+              <NativeTerminalStatus status={nativeView.status} terminal={hostedTerminal} onRetry={nativeView.retry} />
+            )}
             {session && ended && selectedTerminal === "agent" && (
               <div className="term-overlay">
                 <div className="term-overlay-card">

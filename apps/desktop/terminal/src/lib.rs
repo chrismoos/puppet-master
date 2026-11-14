@@ -23,6 +23,7 @@ pub mod protocol;
 pub mod renderer;
 pub mod stream;
 pub mod surface;
+pub mod theme;
 pub mod vt;
 
 #[cfg(target_os = "macos")]

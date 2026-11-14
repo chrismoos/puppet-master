@@ -150,6 +150,8 @@ pub struct Vt {
     cells: ffi::GhosttyRenderStateRowCells,
     frame: Frame,
     graphemes: Vec<u32>,
+    /// Rereads every row on the next update, as after the default colors changed.
+    reread: bool,
 }
 
 // The handles are owned by this value and used from one thread at a time.
@@ -197,6 +199,7 @@ impl Vt {
             cells: ptr::null_mut(),
             frame: Frame::default(),
             graphemes: vec![0; GRAPHEME_CAPACITY],
+            reread: false,
         };
         check("ghostty_render_state_new", unsafe {
             ffi::ghostty_render_state_new(ptr::null(), &mut vt.state)
@@ -277,7 +280,9 @@ impl Vt {
         };
         self.frame.dirty_rows.clear();
 
-        let full = resized || dirty == ffi::GhosttyRenderStateDirty_GHOSTTY_RENDER_STATE_DIRTY_FULL;
+        let full = resized
+            || std::mem::take(&mut self.reread)
+            || dirty == ffi::GhosttyRenderStateDirty_GHOSTTY_RENDER_STATE_DIRTY_FULL;
         if full || dirty != ffi::GhosttyRenderStateDirty_GHOSTTY_RENDER_STATE_DIRTY_FALSE {
             self.read_rows(full, foreground, background)?;
             let clean = ffi::GhosttyRenderStateDirty_GHOSTTY_RENDER_STATE_DIRTY_FALSE;
@@ -291,6 +296,10 @@ impl Vt {
         }
         self.frame.cursor = self.read_cursor()?;
         Ok(&self.frame)
+    }
+
+    pub(crate) fn mark_all_dirty(&mut self) {
+        self.reread = true;
     }
 
     pub fn frame(&self) -> &Frame {

@@ -10,12 +10,16 @@ use wgpu::util::DeviceExt;
 
 use crate::atlas::{Atlas, ATLAS_SIZE};
 use crate::font::{CellMetrics, Face, Fonts};
+use crate::pointer::Scrollbar;
 use crate::vt::{style, CursorShape, Frame, Rgb};
 
 /// Rectangle and glyph instances a buffer holds before it is grown.
 const INITIAL_INSTANCES: usize = 4096;
 const FAINT_ALPHA: f32 = 0.5;
 const OPAQUE: f32 = 1.0;
+/// The scrollbar thumb's width, as a fraction of a cell's.
+const SCROLLBAR_WIDTH_CELLS: f32 = 0.35;
+const SCROLLBAR_ALPHA: f32 = 0.4;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -40,6 +44,25 @@ struct GlyphInstance {
     uv_origin: [f32; 2],
     uv_size: [f32; 2],
     color: [f32; 4],
+}
+
+/// `tint` over `under`, by the tint's own opacity.
+fn blend(under: Rgb, tint: Tint) -> Rgb {
+    let mix = |a: u8, b: u8| -> u8 {
+        (f32::from(a) * (1.0 - tint.alpha) + f32::from(b) * tint.alpha).round() as u8
+    };
+    Rgb {
+        r: mix(under.r, tint.color.r),
+        g: mix(under.g, tint.color.g),
+        b: mix(under.b, tint.color.b),
+    }
+}
+
+/// A translucent color, such as the theme's selection highlight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tint {
+    pub color: Rgb,
+    pub alpha: f32,
 }
 
 fn color(rgb: Rgb, alpha: f32) -> [f32; 4] {
@@ -104,6 +127,10 @@ pub struct Renderer {
     rect_pipeline: wgpu::RenderPipeline,
     glyph_pipeline: wgpu::RenderPipeline,
     cut_pipeline: wgpu::RenderPipeline,
+    /// The theme's selection highlight, or swapped colors without one.
+    selection: Option<Tint>,
+    /// Where the viewport is in the scrollback, shown while scrolled back.
+    scrollbar: Option<Scrollbar>,
     holes: Instances,
     hole_items: Vec<RectInstance>,
     backgrounds: Instances,
@@ -250,6 +277,8 @@ impl Renderer {
             holes: Instances::new::<RectInstance>(&device, "terminal holes"),
             cut_pipeline,
             hole_items: Vec::new(),
+            selection: None,
+            scrollbar: None,
             device,
             queue,
             fonts,
@@ -320,6 +349,14 @@ impl Renderer {
         };
     }
 
+    pub fn set_scrollbar(&mut self, bar: Option<Scrollbar>) {
+        self.scrollbar = bar;
+    }
+
+    pub fn set_selection(&mut self, tint: Option<Tint>) {
+        self.selection = tint;
+    }
+
     /// Leaves these rectangles, `[x, y, width, height]` in physical pixels,
     /// fully transparent, so page content over the terminal shows through
     /// when the surface composites with alpha.
@@ -375,6 +412,7 @@ impl Renderer {
             self.atlas.clear();
             self.build(frame, padding);
         }
+        self.push_scrollbar(frame, width as f32, height as f32);
         self.queue.write_buffer(
             &self.viewport,
             0,
@@ -445,6 +483,25 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
     }
 
+    /// A slim thumb on the right edge while the viewport is scrolled back.
+    fn push_scrollbar(&mut self, frame: &Frame, width: f32, height: f32) {
+        let Some(bar) = self
+            .scrollbar
+            .filter(|bar| !bar.at_bottom() && bar.total > 0)
+        else {
+            return;
+        };
+        let thumb = (self.metrics.width * SCROLLBAR_WIDTH_CELLS).max(2.0);
+        let total = bar.total as f32;
+        let top = height * bar.offset as f32 / total;
+        let length = (height * bar.len as f32 / total).max(thumb * 2.0);
+        self.overlay_items.push(RectInstance {
+            origin: [width - thumb - thumb / 2.0, top],
+            size: [thumb, length.min(height - top)],
+            color: color(frame.foreground, SCROLLBAR_ALPHA),
+        });
+    }
+
     fn build(&mut self, frame: &Frame, padding: f32) {
         self.background_items.clear();
         self.glyph_items.clear();
@@ -466,7 +523,10 @@ impl Renderer {
                     std::mem::swap(&mut fg, &mut bg);
                 }
                 if cell.selected {
-                    std::mem::swap(&mut fg, &mut bg);
+                    match self.selection {
+                        Some(tint) => bg = blend(bg, tint),
+                        None => std::mem::swap(&mut fg, &mut bg),
+                    }
                 }
                 let left = padding + f32::from(x) * cw;
                 let top = padding + f32::from(y) * ch;
