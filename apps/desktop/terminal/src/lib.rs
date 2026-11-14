@@ -15,10 +15,15 @@ mod ffi {
 
 pub mod atlas;
 pub mod font;
+pub mod input;
 pub mod protocol;
 pub mod renderer;
 pub mod stream;
+pub mod surface;
 pub mod vt;
+
+#[cfg(target_os = "macos")]
+pub mod macos;
 
 // Links the pinned libghostty-vt archive the bindings call into.
 use pm_ghostty as _;

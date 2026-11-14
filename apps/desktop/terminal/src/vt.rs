@@ -138,7 +138,9 @@ impl Frame {
 /// A terminal screen fed from a byte stream, with the render state that
 /// turns it into frames.
 pub struct Vt {
-    terminal: ffi::GhosttyTerminal,
+    pub(crate) terminal: ffi::GhosttyTerminal,
+    pub(crate) key_encoder: ffi::GhosttyKeyEncoder,
+    pub(crate) key_event: ffi::GhosttyKeyEvent,
     state: ffi::GhosttyRenderState,
     rows: ffi::GhosttyRenderStateRowIterator,
     cells: ffi::GhosttyRenderStateRowCells,
@@ -182,6 +184,8 @@ impl Vt {
     fn around(terminal: ffi::GhosttyTerminal) -> Result<Self, Error> {
         let mut vt = Vt {
             terminal,
+            key_encoder: ptr::null_mut(),
+            key_event: ptr::null_mut(),
             state: ptr::null_mut(),
             rows: ptr::null_mut(),
             cells: ptr::null_mut(),
@@ -506,6 +510,12 @@ impl Vt {
 impl Drop for Vt {
     fn drop(&mut self) {
         unsafe {
+            if !self.key_event.is_null() {
+                ffi::ghostty_key_event_free(self.key_event);
+            }
+            if !self.key_encoder.is_null() {
+                ffi::ghostty_key_encoder_free(self.key_encoder);
+            }
             ffi::ghostty_render_state_row_cells_free(self.cells);
             ffi::ghostty_render_state_row_iterator_free(self.rows);
             ffi::ghostty_render_state_free(self.state);

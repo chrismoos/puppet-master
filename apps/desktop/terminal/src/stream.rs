@@ -52,9 +52,18 @@ impl Stream {
     /// Opens the socket on the current tokio runtime. `on_event` is called
     /// from the socket's task, so it should only signal, never block.
     pub fn open(attach: Attach, on_event: impl Fn(Event) + Send + Sync + 'static) -> Stream {
+        Self::open_on(&tokio::runtime::Handle::current(), attach, on_event)
+    }
+
+    /// Opens the socket on `runtime`, for a caller outside any runtime.
+    pub fn open_on(
+        runtime: &tokio::runtime::Handle,
+        attach: Attach,
+        on_event: impl Fn(Event) + Send + Sync + 'static,
+    ) -> Stream {
         let (commands, receiver) = mpsc::unbounded_channel();
         let screen = Arc::new(Mutex::new(None));
-        let task = tokio::spawn(run(attach, screen.clone(), receiver, Arc::new(on_event)));
+        let task = runtime.spawn(run(attach, screen.clone(), receiver, Arc::new(on_event)));
         Stream {
             commands,
             screen,

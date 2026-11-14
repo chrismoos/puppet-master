@@ -290,6 +290,19 @@ impl Renderer {
         self.metrics
     }
 
+    /// Lays cells out at exactly `width` by `height` physical pixels, such
+    /// as the page's own cell size, so this grid lines up with the browser's.
+    /// The glyphs stay at the font size, vertically centered in the cell.
+    pub fn set_cell_size(&mut self, width: f32, height: f32) {
+        let natural = self.fonts.metrics();
+        let slack = (height - natural.height).max(0.0);
+        self.metrics = CellMetrics {
+            width: width.max(1.0),
+            height: height.max(1.0),
+            baseline: (natural.baseline + slack / 2.0).round(),
+        };
+    }
+
     /// Changes the font size, for a zoom or a display with another scale.
     pub fn set_font_px(&mut self, px: f32) {
         if (px - self.fonts.px()).abs() < f32::EPSILON {
