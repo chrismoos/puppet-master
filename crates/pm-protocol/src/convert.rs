@@ -312,8 +312,59 @@ impl TryFrom<i32> for SessionAlertKind {
             Ok(wire::SessionAlertKind::NeedsInput) => Ok(SessionAlertKind::NeedsInput),
             Ok(wire::SessionAlertKind::Failed) => Ok(SessionAlertKind::Failed),
             Ok(wire::SessionAlertKind::Completed) => Ok(SessionAlertKind::Completed),
+            Ok(wire::SessionAlertKind::Message) => Ok(SessionAlertKind::Message),
             _ => Err(DecodeError::UnknownEnum("SessionAlertKind", v)),
         }
+    }
+}
+
+impl TryFrom<i32> for AgentNotificationLinkKind {
+    type Error = DecodeError;
+    fn try_from(v: i32) -> Result<Self, DecodeError> {
+        match wire::AgentNotificationLinkKind::try_from(v) {
+            Ok(wire::AgentNotificationLinkKind::Page) => Ok(AgentNotificationLinkKind::Page),
+            Ok(wire::AgentNotificationLinkKind::Preview) => Ok(AgentNotificationLinkKind::Preview),
+            Ok(wire::AgentNotificationLinkKind::Item) => Ok(AgentNotificationLinkKind::Item),
+            _ => Err(DecodeError::UnknownEnum("AgentNotificationLinkKind", v)),
+        }
+    }
+}
+
+impl From<AgentNotification> for wire::AgentNotification {
+    fn from(message: AgentNotification) -> Self {
+        wire::AgentNotification {
+            title: message.title,
+            body: message.body,
+            link: message.link.map(|link| wire::AgentNotificationLink {
+                kind: match link.kind {
+                    AgentNotificationLinkKind::Page => wire::AgentNotificationLinkKind::Page as i32,
+                    AgentNotificationLinkKind::Preview => {
+                        wire::AgentNotificationLinkKind::Preview as i32
+                    }
+                    AgentNotificationLinkKind::Item => wire::AgentNotificationLinkKind::Item as i32,
+                },
+                title: link.title,
+                url: link.url,
+            }),
+        }
+    }
+}
+
+impl TryFrom<wire::AgentNotification> for AgentNotification {
+    type Error = DecodeError;
+    fn try_from(message: wire::AgentNotification) -> Result<Self, DecodeError> {
+        Ok(AgentNotification {
+            title: message.title,
+            body: message.body,
+            link: match message.link {
+                Some(link) => Some(AgentNotificationLink {
+                    kind: link.kind.try_into()?,
+                    title: link.title,
+                    url: link.url,
+                }),
+                None => None,
+            },
+        })
     }
 }
 
@@ -2679,7 +2730,9 @@ impl From<Event> for wire::Event {
                     SessionAlertKind::NeedsInput => wire::SessionAlertKind::NeedsInput as i32,
                     SessionAlertKind::Failed => wire::SessionAlertKind::Failed as i32,
                     SessionAlertKind::Completed => wire::SessionAlertKind::Completed as i32,
+                    SessionAlertKind::Message => wire::SessionAlertKind::Message as i32,
                 },
+                notification: alert.notification.map(Into::into),
             }),
             Event::SecurityNotice(notice) => W::SecurityNotice(wire::SecurityNotice {
                 kind: match notice.kind {
@@ -2752,6 +2805,7 @@ impl TryFrom<wire::Event> for Event {
             W::SessionAlert(alert) => Event::SessionAlert(SessionAlert {
                 session_id: alert.session_id,
                 kind: alert.kind.try_into()?,
+                notification: alert.notification.map(TryInto::try_into).transpose()?,
             }),
             W::SecurityNotice(notice) => Event::SecurityNotice(SecurityNotice {
                 kind: notice.kind.try_into()?,

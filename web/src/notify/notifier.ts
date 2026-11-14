@@ -7,6 +7,7 @@ const NOTIFY_TAG_PREFIXES = {
   "needs-input": "pm-needs-input-",
   finished: "pm-finished-",
   approval: "pm-approval-",
+  message: "pm-message-",
 } as const;
 
 export type NotifyKind = keyof typeof NOTIFY_TAG_PREFIXES;

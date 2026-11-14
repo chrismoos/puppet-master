@@ -1577,16 +1577,48 @@ enum SessionAlertKind {
   SESSION_ALERT_KIND_NEEDS_INPUT = 1;
   SESSION_ALERT_KIND_FAILED = 2;
   SESSION_ALERT_KIND_COMPLETED = 3;
+  // The agent told the user something they asked to hear about, through
+  // notify_user. The alert carries its own copy in `notification`.
+  SESSION_ALERT_KIND_MESSAGE = 4;
+}
+
+// What an agent message links to. Only things this controller serves, so
+// a card never carries a link the agent made up.
+enum AgentNotificationLinkKind {
+  AGENT_NOTIFICATION_LINK_KIND_UNSPECIFIED = 0;
+  // A directory the session publishes.
+  AGENT_NOTIFICATION_LINK_KIND_PAGE = 1;
+  // A port the session publishes.
+  AGENT_NOTIFICATION_LINK_KIND_PREVIEW = 2;
+  // A board item in the session's bucket.
+  AGENT_NOTIFICATION_LINK_KIND_ITEM = 3;
+}
+
+message AgentNotificationLink {
+  AgentNotificationLinkKind kind = 1;
+  string title = 2;
+  // The forward's public URL for a page or preview, and the dashboard
+  // route (for example /bucket/1/item/42) for an item.
+  string url = 3;
+}
+
+message AgentNotification {
+  string title = 1;
+  string body = 2;
+  optional AgentNotificationLink link = 3;
 }
 
 // An alert the daemon decided is worth raising, so a connected client
 // renders exactly what the push pipeline judged worth sending rather
-// than deciding for itself. Carries no copy: the client already holds
-// the session and renders its own. Not persisted, so a client that was
-// not connected when it was raised never sees it.
+// than deciding for itself. Carries no copy except for a message, whose
+// words are the agent's: otherwise the client already holds the session
+// and renders its own. Not persisted, so a client that was not connected
+// when it was raised never sees it.
 message SessionAlert {
   uint64 session_id = 1;
   SessionAlertKind kind = 2;
+  // Set only for SESSION_ALERT_KIND_MESSAGE.
+  optional AgentNotification notification = 3;
 }
 
 // What happened, for the notices the user is told about rather than asked

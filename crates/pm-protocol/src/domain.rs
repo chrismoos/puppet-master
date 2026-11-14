@@ -2080,12 +2080,57 @@ pub enum SessionAlertKind {
     NeedsInput,
     Failed,
     Completed,
+    /// An agent told the user something through notify_user.
+    Message,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionAlert {
     pub session_id: u64,
     pub kind: SessionAlertKind,
+    /// Set only for [`SessionAlertKind::Message`].
+    pub notification: Option<AgentNotification>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentNotificationLinkKind {
+    Page,
+    Preview,
+    Item,
+}
+
+impl AgentNotificationLinkKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Preview => "preview",
+            Self::Item => "item",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "page" => Some(Self::Page),
+            "preview" => Some(Self::Preview),
+            "item" => Some(Self::Item),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentNotificationLink {
+    pub kind: AgentNotificationLinkKind,
+    pub title: String,
+    /// A forward's public URL, or a dashboard route for an item.
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentNotification {
+    pub title: String,
+    pub body: String,
+    pub link: Option<AgentNotificationLink>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

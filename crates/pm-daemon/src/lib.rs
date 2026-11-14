@@ -21,6 +21,7 @@ pub mod inbox;
 pub mod mcp;
 pub mod mobile;
 pub mod mux;
+pub mod notify_user;
 pub mod panes;
 pub mod plan;
 pub mod plan_store;

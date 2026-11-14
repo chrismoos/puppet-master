@@ -1079,3 +1079,59 @@ async fn snooze_after_flag_blocked_keeps_push_and_restores_completion_on_new_pro
     assert!(pending.iter().any(|delivery| delivery.state == "completed"));
     assert!(env.storage.get_session(id).unwrap().idle_unseen);
 }
+
+#[tokio::test]
+async fn notify_user_pushes_a_sealed_message_that_names_nothing_without_previews() {
+    let env = push_env();
+    let mock = MockProvider::default();
+    let base = start_mock_provider(mock.clone()).await;
+    configure_gateway(&env.daemon, &base);
+    mock.push_response(200, serde_json::json!({"status": "accepted"}));
+    let (_, device_id, bearer) = enroll_device(&env.daemon, "notify-1");
+    let response = register_via_http(&env.daemon, device_id, &bearer, device_registration()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let (session_id, token) = seeded_session(&env, false, None);
+
+    env.daemon
+        .notify_user(&token, "Deploy finished", "staging is green", "")
+        .unwrap();
+
+    let pending = pending_deliveries(&env.storage);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].state, "message");
+    assert_eq!(pending[0].session_id, session_id);
+    let stats = env.daemon.process_push_deliveries(now()).await;
+    assert_eq!((stats.attempted, stats.sent), (1, 1));
+    let request = &mock.provider_requests()[0];
+    let sealed = open_sealed(request);
+    assert_eq!(sealed["title"], "Session sent a message");
+    assert_eq!(sealed["body"], "");
+    assert_eq!(sealed["state"], "message");
+    assert_eq!(sealed["session_id"], session_id);
+    assert!(!request.raw_body.contains("Deploy finished"));
+}
+
+#[tokio::test]
+async fn notify_user_pushes_the_agents_words_when_previews_are_on() {
+    let env = push_env();
+    let mock = MockProvider::default();
+    let base = start_mock_provider(mock.clone()).await;
+    configure_gateway(&env.daemon, &base);
+    mock.push_response(200, serde_json::json!({"status": "accepted"}));
+    let (_, device_id, bearer) = enroll_device(&env.daemon, "notify-2");
+    let mut registration = device_registration();
+    registration["previewsEnabled"] = true.into();
+    let response = register_via_http(&env.daemon, device_id, &bearer, registration).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let (_, token) = seeded_session(&env, false, None);
+
+    env.daemon
+        .notify_user(&token, "Deploy finished", "staging is green", "")
+        .unwrap();
+    env.daemon.process_push_deliveries(now()).await;
+
+    let sealed = open_sealed(&mock.provider_requests()[0]);
+    let title = sealed["title"].as_str().unwrap();
+    assert!(title.ends_with(": Deploy finished"), "{title}");
+    assert_eq!(sealed["body"], "staging is green");
+}

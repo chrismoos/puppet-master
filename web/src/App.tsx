@@ -23,7 +23,7 @@ import { WebAudioSink } from "./voice/webAudioSink";
 import { securityNoticeTitle } from "./securityNotice";
 import { fetchItem } from "./api/items";
 import { createWorkspace, deleteWorkspace, listWorkspaces, reorderWorkspaces, updateWorkspace, type SavedWorkspace } from "./api/workspaces";
-import { sessionEnded } from "@puppet-master/client-core/format";
+import { sessionDisplayName, sessionEnded } from "@puppet-master/client-core/format";
 import { visibleSessions } from "@puppet-master/client-core/state/sidebar";
 import { sessionRoutePath, settingsRoutePath, withRememberedTab, type SettingsSection } from "@puppet-master/client-core/router";
 import { navigate, sessionHomeId, useRoute } from "./router";
@@ -120,7 +120,7 @@ import { ApprovalsButton, ApprovalsPage } from "./views/ApprovalsPage";
 import { usePendingApprovals } from "./state/pendingApprovals";
 import { approvalRoutePath } from "@puppet-master/client-core/router";
 import { removeWorkspaceFromTabs, WorkspaceTabs } from "./views/WorkspaceTabs";
-import { AlertPill, pageIsWatched, type InAppAlert } from "./views/AlertPill";
+import { AlertStack, alertLinkFrom, pageIsWatched, type InAppAlert } from "./views/AlertStack";
 
 /** Saved workspaces stay reachable by their URLs while the tab bar is hidden. */
 const SHOW_WORKSPACE_TABS = false;
@@ -609,14 +609,14 @@ function Shell({
       native();
       return;
     }
-    if (alert.sessionId !== undefined && alert.sessionId === shownSessionRef.current) return;
+    if (alert.kind !== "message" && alert.sessionId !== undefined && alert.sessionId === shownSessionRef.current) return;
     notifier.chime();
     setPillAlerts((current) => [alert, ...current.filter((other) => other.key !== alert.key)]);
   }, [notifier]);
   useEffect(() => {
     setPillAlerts((current) => {
       const kept = current.filter((alert) => {
-        if (alert.sessionId === undefined) return true;
+        if (alert.sessionId === undefined || alert.kind === "message") return true;
         if (alert.sessionId === shownSessionId) return false;
         if (alert.kind !== "needs-input") return true;
         return state.sessions.get(alert.sessionId)?.state === SessionState.NEEDS_INPUT;
@@ -627,14 +627,30 @@ function Shell({
 
   // The daemon decides what is worth an alert; this only renders it.
   useEffect(() => {
-    return client.onAlert((session, kind) => {
+    return client.onAlert((session, kind, message) => {
       if (!enabledRef.current) return;
       const id = session.id.toString();
+      const project = client.getState().projects.get(session.projectId.toString());
+      const title = sessionDisplayName(session);
+      const card = {
+        title,
+        detail: project && project.name !== title ? project.name : undefined,
+        sessionId: id,
+        raisedAtMs: Date.now(),
+      };
+      if (kind === SessionAlertKind.MESSAGE) {
+        if (!message) return;
+        const body = message.body.trim() || undefined;
+        deliverAlert(
+          { ...card, key: `message:${id}`, kind: "message", heading: message.title, body, link: alertLinkFrom(message.link) },
+          () => notifier.fire(`${card.title}: ${message.title}`, body, id, "message"),
+        );
+        return;
+      }
       if (kind === SessionAlertKind.NEEDS_INPUT) {
-        const project = client.getState().projects.get(session.projectId.toString());
         const notification = needsInputNotification(session, project);
         deliverAlert(
-          { key: `needs-input:${id}`, kind: "needs-input", title: notification.title, body: notification.body, sessionId: id },
+          { ...card, key: `needs-input:${id}`, kind: "needs-input", body: notification.body },
           () => notifier.fire(notification.title, notification.body, id),
         );
         return;
@@ -642,7 +658,7 @@ function Shell({
       const notification = sessionAlertNotification(session, kind);
       const failed = kind === SessionAlertKind.FAILED;
       deliverAlert(
-        { key: `${failed ? "failed" : "finished"}:${id}`, kind: failed ? "failed" : "finished", title: notification.title, body: failed ? notification.body : session.headline.trim() || undefined, sessionId: id },
+        { ...card, key: `${failed ? "failed" : "finished"}:${id}`, kind: failed ? "failed" : "finished", body: failed ? notification.body : session.headline.trim() || undefined },
         () => notifier.fire(notification.title, notification.body, id, "finished"),
       );
     });
@@ -880,7 +896,7 @@ function Shell({
     const title = `${approval.project_name ?? "A session"}: connection approval requested`;
     const body = `${approval.tool} on ${approval.connection_name ?? "a connection"}`;
     deliverAlert(
-      { key: `approval:${approval.id}`, kind: "approval", title, body, approvalId: approval.id },
+      { key: `approval:${approval.id}`, kind: "approval", title, body, approvalId: approval.id, raisedAtMs: Date.now() },
       () => notifier.fire(title, body, approval.id, "approval"),
     );
   });
@@ -1060,14 +1076,16 @@ function Shell({
 
   return (
     <div className={`shell shell-fullbleed ${focusMode ? "is-focus-mode" : ""} ${isBoardRoute ? "is-board-route" : ""} ${isSettingsRoute ? "is-settings-route" : ""}`}>
-      <AlertPill
+      <AlertStack
         alerts={pillAlerts}
         onOpen={(alert) => {
           setPillAlerts((current) => current.filter((other) => other.key !== alert.key));
           if (alert.sessionId !== undefined) select(alert.sessionId);
           else if (alert.approvalId !== undefined) navigate(approvalRoutePath(alert.approvalId));
         }}
-        onDismiss={() => setPillAlerts([])}
+        onOpenLink={(alert) => setPillAlerts((current) => current.filter((other) => other.key !== alert.key))}
+        onDismiss={(key) => setPillAlerts((current) => current.filter((other) => other.key !== key))}
+        onDismissAll={() => setPillAlerts([])}
       />
       <header className="topbar">
         <a
