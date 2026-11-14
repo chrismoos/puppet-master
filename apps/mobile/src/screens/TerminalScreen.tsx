@@ -32,7 +32,7 @@ import { websocketBaseUrl } from "../adapters/socket";
 import { bearerJsonFetch, mintTerminalAttachTicket } from "../auth/api";
 import type { DeviceAuthSession } from "../auth/session";
 import type { ControllerConfig } from "../config";
-import { colors } from "../theme";
+import { colors, stateColor } from "../theme";
 import { bytesToBase64 } from "../terminal/base64";
 import { AccessoryRowVisibility } from "../terminal/accessoryVisibility";
 import { bindTerminalVisibility } from "../terminal/visibility";
@@ -58,6 +58,7 @@ import type { TerminalTarget } from "./SessionsScreen";
 import type { PlanTarget } from "./PlanScreen";
 import { OverflowButton, OverflowMenu, type OverflowMenuItem } from "./OverflowMenu";
 import { SessionSheet } from "./SessionSheet";
+import { pagePaneUrl, usePaneNavigation } from "./usePaneNavigation";
 import { TerminalsSheet } from "./TerminalsSheet";
 import { canResumeSession, endedSummary, resumeLabel } from "./endedSession";
 import {
@@ -328,6 +329,22 @@ export function TerminalScreen({
   const viewingClaude = session?.agent === AgentKind.CLAUDE_CODE
     && appState.terminals.get(target.terminalId.toString())?.kind === TerminalKind.AGENT;
   const ended = session !== undefined && sessionEnded(session);
+  const createPane = useCallback(async (body: { id: string; base_rev: number; layout: unknown }) => {
+    await auth.withAccessToken(config.baseUrl, async (accessToken) => {
+      const origin = /^[a-z][a-z0-9+.-]*:\/\/[^/]+/i.exec(config.baseUrl)?.[0] ?? config.baseUrl;
+      const response = await fetch(`${origin}/api/sessions/${target.sessionId}/panes`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `could not open the pane (${response.status})`);
+      }
+    });
+  }, [auth, config.baseUrl, target.sessionId]);
+  const nav = usePaneNavigation({ appState, target, sessionTerminals, onSwitchTerminal, createPane });
+  const hasPanes = nav.panes.length > 1;
   const [resuming, setResuming] = useState(false);
   // The resumed agent restarts this same terminal under a new generation,
   // which the attach path below already follows.
@@ -373,7 +390,15 @@ export function TerminalScreen({
     }
 
     items.push(
+      {
+        key: "agent",
+        label: "Agent",
+        icon: "dot",
+        color: session ? stateColor(session.state) : colors.textMuted,
+        onPress: () => nav.goTo(0),
+      },
       { key: "terminals", label: "Terminals", icon: "list", onPress: () => setSheetTab("terminals") },
+      ...(ended ? [] : [{ key: "newPane", label: "New shell pane", icon: "plus", onPress: nav.newShellPane } satisfies OverflowMenuItem]),
       { key: "info", label: "Session info", icon: "info", onPress: () => setSheetTab("info") },
       { key: "glance", label: "Glance & context", icon: "list", onPress: () => setSheetTab("glance") },
       { key: "timeline", label: "Timeline", icon: "clock", onPress: () => setSheetTab("timeline") },
@@ -384,7 +409,7 @@ export function TerminalScreen({
     );
     if (!ended) items.push({ key: "kill", label: "Kill session", icon: "x", color: colors.red, onPress: confirmKill });
     return items;
-  }, [target.sessionId, ended, confirmKill, sessionPlans, activeDecisionPlan, handleOpenPlan]);
+  }, [target.sessionId, ended, confirmKill, sessionPlans, activeDecisionPlan, handleOpenPlan, session, nav.goTo, nav.newShellPane]);
 
   // The accessory row follows the software keyboard, which appears for
   // WebView focus without resizing the RN layout on iOS. Android resizes
@@ -1013,7 +1038,27 @@ export function TerminalScreen({
           {target.title}
         </Text>
         <Pressable onPress={toggleDiag} hitSlop={8}>
-          <Text style={[styles.status, __DEV__ && diagVisible ? styles.diagActive : null]}>{status}</Text>
+          {hasPanes && status === "online" ? (
+            <View
+              style={styles.paneDots}
+              accessibilityLabel={`Pane ${Math.max(nav.index, 0) + 1} of ${nav.panes.length}`}
+              testID="pane-dots"
+            >
+              {nav.panes.map((pane, index) => (
+                <View
+                  key={pane.kind === "agent" ? "agent" : pane.paneId}
+                  style={[
+                    styles.paneDot,
+                    index === 0 && session ? { backgroundColor: stateColor(session.state) } : null,
+                    index === nav.index ? styles.paneDotCurrent : null,
+                    index === nav.index && index !== 0 ? styles.paneDotCurrentPane : null,
+                  ]}
+                />
+              ))}
+            </View>
+          ) : (
+            <Text style={[styles.status, __DEV__ && diagVisible ? styles.diagActive : null]}>{status}</Text>
+          )}
         </Pressable>
         <Pressable
           onPress={toggleAccessory}
@@ -1040,8 +1085,21 @@ export function TerminalScreen({
       <TerminalsSheet
         visible={sheetTab === "terminals"}
         terminals={sessionTerminals}
+        panes={nav.panes}
         selectedTerminalId={target.terminalId}
+        selectedPageId={nav.page?.paneId ?? null}
+        onSelectPage={(paneId) => {
+          nav.goToPage(paneId);
+          setSheetTab(null);
+        }}
         onSelect={(terminal) => {
+          const paneIndex = nav.panes.findIndex((pane) =>
+            pane.kind === "agent" ? terminal.kind === TerminalKind.AGENT : pane.kind === "terminal" && pane.terminalId === terminal.id.toString());
+          if (paneIndex >= 0) {
+            nav.goTo(paneIndex);
+            setSheetTab(null);
+            return;
+          }
           onSwitchTerminal({
             sessionId: target.sessionId,
             terminalId: terminal.id,
@@ -1083,7 +1141,7 @@ export function TerminalScreen({
       ) : null}
       <View style={[styles.shiftClip, { paddingBottom: keyboardInsetPx }]}>
         <Animated.View style={[styles.shifted, { transform: [{ translateY: shiftY }] }]}>
-          <View style={styles.terminalArea}>
+          <View style={styles.terminalArea} {...nav.touchHandlers}>
             <View
               ref={frameRef}
               testID="terminal-frame"
@@ -1113,7 +1171,26 @@ export function TerminalScreen({
                 />
               )}
             </View>
-            {!followingBottom || appScrolledUp ? (
+            {nav.page ? (
+              <View style={styles.pagePane} testID="page-pane">
+                <WebView
+                  style={styles.webview}
+                  source={{ uri: pagePaneUrl(config.baseUrl, nav.page) }}
+                  originWhitelist={["https://*", "http://*"]}
+                  setSupportMultipleWindows={false}
+                  allowsBackForwardNavigationGestures={false}
+                />
+              </View>
+            ) : null}
+            <Animated.View pointerEvents="none" style={[styles.paneFlash, { opacity: nav.flashOpacity }]} testID="pane-flash">
+              <Text style={styles.paneFlashText} numberOfLines={1}>
+                {nav.flashText}
+                {nav.index >= 0 && hasPanes ? (
+                  <Text style={styles.paneFlashCount}>{`  ${nav.index + 1} of ${nav.panes.length}`}</Text>
+                ) : null}
+              </Text>
+            </Animated.View>
+            {!nav.page && (!followingBottom || appScrolledUp) ? (
               <Pressable
                 style={styles.scrollBottomButton}
                 onPress={() => send({
@@ -1343,6 +1420,25 @@ const styles = StyleSheet.create({
   shiftClip: { flex: 1, overflow: "hidden", backgroundColor: colors.bg },
   shifted: { flex: 1 },
   terminalArea: { flex: 1 },
+  pagePane: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: colors.bg },
+  paneDots: { flexDirection: "row", alignItems: "center", gap: 4 },
+  paneDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.line },
+  paneDotCurrent: { width: 14 },
+  paneDotCurrentPane: { backgroundColor: colors.textBright },
+  paneFlash: {
+    position: "absolute",
+    top: 8,
+    alignSelf: "center",
+    backgroundColor: "rgba(26, 32, 43, 0.94)",
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    maxWidth: "80%",
+  },
+  paneFlashText: { color: colors.textBright, fontSize: 12, fontWeight: "600" },
+  paneFlashCount: { color: colors.textMuted, fontWeight: "500" },
   webviewFrame: { flex: 1 },
   webview: { flex: 1, backgroundColor: colors.bg },
   accessoryBar: { flexGrow: 0, backgroundColor: colors.panel },

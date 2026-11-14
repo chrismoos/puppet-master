@@ -4,7 +4,10 @@ import type { Terminal } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
 import { TerminalKind, TerminalRunState } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
 import { shellTabLabel } from "@puppet-master/client-core/terminal/label";
 
+import type { SwipePane } from "@puppet-master/client-core/state/sessionLayout";
+
 import { colors } from "../theme";
+import { terminalGroups, type PaneEntry } from "./terminalGroups";
 
 function runStateLabel(terminal: Terminal): { text: string; color: string } {
   switch (terminal.state) {
@@ -35,20 +38,70 @@ function terminalLabel(terminal: Terminal): string {
 export function TerminalsSheet({
   visible,
   terminals,
+  panes = [],
   selectedTerminalId,
+  selectedPageId = null,
   onSelect,
+  onSelectPage,
   onCreateShell,
   onClose,
   onCloseTerminal,
 }: {
   visible: boolean;
   terminals: Terminal[];
+  /** The session's panes in swipe order, which the list groups apart from shell tabs. */
+  panes?: readonly SwipePane[];
   selectedTerminalId: bigint;
+  /** The page pane on screen, when one is. */
+  selectedPageId?: string | null;
   onSelect: (terminal: Terminal) => void;
+  onSelectPage?: (paneId: string) => void;
   onCreateShell: () => void;
   onClose: () => void;
   onCloseTerminal: (terminalId: bigint) => void;
 }) {
+  const groups = terminalGroups(terminals, panes);
+  const terminalRow = (terminal: Terminal, label: string) => {
+    const selected = selectedPageId === null && terminal.id === selectedTerminalId;
+    const status = runStateLabel(terminal);
+    const isShell = terminal.kind === TerminalKind.SHELL;
+    const alive = terminal.state === TerminalRunState.RUNNING || terminal.state === TerminalRunState.STARTING;
+    return (
+      <View key={terminal.id.toString()} style={[styles.row, selected && styles.rowSelected]}>
+        <Pressable style={styles.rowContent} onPress={() => onSelect(terminal)}>
+          <View style={styles.rowLeft}>
+            <Text style={[styles.terminalLabel, selected && styles.terminalLabelSelected]}>{label}</Text>
+            {terminal.cwd ? (
+              <Text style={styles.cwd} numberOfLines={1}>{terminal.cwd}</Text>
+            ) : null}
+          </View>
+          <Text style={[styles.status, { color: status.color }]}>{status.text}</Text>
+        </Pressable>
+        {isShell && alive ? (
+          <Pressable
+            style={styles.closeButton}
+            onPress={() => onCloseTerminal(terminal.id)}
+            hitSlop={8}
+          >
+            <Text style={styles.closeButtonText}>Close</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  };
+  const pageRow = (entry: Extract<PaneEntry, { kind: "page" }>) => {
+    const selected = selectedPageId === entry.paneId;
+    return (
+      <View key={entry.paneId} style={[styles.row, selected && styles.rowSelected]}>
+        <Pressable style={styles.rowContent} onPress={() => onSelectPage?.(entry.paneId)}>
+          <View style={styles.rowLeft}>
+            <Text style={[styles.terminalLabel, selected && styles.terminalLabelSelected]}>{entry.title}</Text>
+          </View>
+          <Text style={[styles.status, { color: colors.textMuted }]}>page</Text>
+        </Pressable>
+      </View>
+    );
+  };
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.root}>
@@ -59,36 +112,12 @@ export function TerminalsSheet({
           </Pressable>
         </View>
         <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-          {terminals.map((terminal) => {
-            const selected = terminal.id === selectedTerminalId;
-            const status = runStateLabel(terminal);
-            const isShell = terminal.kind === TerminalKind.SHELL;
-            const alive = terminal.state === TerminalRunState.RUNNING || terminal.state === TerminalRunState.STARTING;
-            return (
-              <View key={terminal.id.toString()} style={[styles.row, selected && styles.rowSelected]}>
-                <Pressable style={styles.rowContent} onPress={() => onSelect(terminal)}>
-                  <View style={styles.rowLeft}>
-                    <Text style={[styles.terminalLabel, selected && styles.terminalLabelSelected]}>
-                      {terminalLabel(terminal)}
-                    </Text>
-                    {terminal.cwd ? (
-                      <Text style={styles.cwd} numberOfLines={1}>{terminal.cwd}</Text>
-                    ) : null}
-                  </View>
-                  <Text style={[styles.status, { color: status.color }]}>{status.text}</Text>
-                </Pressable>
-                {isShell && alive ? (
-                  <Pressable
-                    style={styles.closeButton}
-                    onPress={() => onCloseTerminal(terminal.id)}
-                    hitSlop={8}
-                  >
-                    <Text style={styles.closeButtonText}>Close</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            );
-          })}
+          {groups.agent.length > 0 ? <Text style={styles.section}>Agent</Text> : null}
+          {groups.agent.map((terminal) => terminalRow(terminal, terminalLabel(terminal)))}
+          {groups.panes.length > 0 ? <Text style={styles.section}>Panes</Text> : null}
+          {groups.panes.map((entry) => entry.kind === "page" ? pageRow(entry) : terminalRow(entry.terminal, entry.title))}
+          {groups.tabs.length > 0 ? <Text style={styles.section}>Shell tabs</Text> : null}
+          {groups.tabs.map((terminal) => terminalRow(terminal, terminalLabel(terminal)))}
           <Pressable style={styles.addShell} onPress={onCreateShell}>
             <Text style={styles.addShellText}>+ New shell</Text>
           </Pressable>
@@ -112,6 +141,15 @@ const styles = StyleSheet.create({
   title: { color: colors.textBright, fontSize: 17, fontWeight: "600" },
   closeText: { color: colors.blue, fontSize: 15 },
   list: { flex: 1 },
+  section: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    marginTop: 6,
+    marginLeft: 2,
+  },
   listContent: { padding: 16, gap: 8 },
   row: {
     backgroundColor: colors.panel,

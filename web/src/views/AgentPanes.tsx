@@ -7,7 +7,7 @@ import type { TerminalStage } from "../ws/terminal";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TerminalViewport } from "./WorkspacePage";
 import { paneDropRegionRect } from "@puppet-master/client-core/state/workspace";
-import { insertPaneInTree, movePaneInTree, movePositionAt, type LayoutNode, type MovePosition } from "./paneMoves";
+import { insertPaneInTree, movePaneInTree, movePositionAt, type LayoutNode, type MovePosition } from "@puppet-master/client-core/state/paneMoves";
 import { AGENT_PANE as AGENT, type PaneMeta, type SessionPaneLayout } from "@puppet-master/client-core/state/sessionLayout";
 
 export {

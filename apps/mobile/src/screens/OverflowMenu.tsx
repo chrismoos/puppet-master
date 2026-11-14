@@ -144,6 +144,15 @@ function XIcon({ color }: { color: string }) {
   );
 }
 
+function PlusIcon({ color }: { color: string }) {
+  return (
+    <View style={iconStyles.box}>
+      <View style={[iconStyles.plusBar, { backgroundColor: color }]} />
+      <View style={[iconStyles.plusBar, iconStyles.plusUpright, { backgroundColor: color }]} />
+    </View>
+  );
+}
+
 function LinkIcon({ color }: { color: string }) {
   return (
     <View style={iconStyles.box}>
@@ -170,6 +179,7 @@ const ICON_MAP: Record<string, (props: { color: string }) => React.JSX.Element> 
   microphone: MicrophoneIcon,
   x: XIcon,
   link: LinkIcon,
+  plus: PlusIcon,
 };
 
 const iconStyles = StyleSheet.create({
@@ -221,6 +231,8 @@ const iconStyles = StyleSheet.create({
   // X
   xLine1: { width: 16, height: 2, borderRadius: 1, transform: [{ rotate: "45deg" }], position: "absolute" },
   xLine2: { width: 16, height: 2, borderRadius: 1, transform: [{ rotate: "-45deg" }], position: "absolute" },
+  plusBar: { width: 14, height: 2, borderRadius: 1, position: "absolute" },
+  plusUpright: { transform: [{ rotate: "90deg" }] },
   // Link (two overlapping ovals)
   linkOval1: { width: 10, height: 6, borderRadius: 3, borderWidth: 1.5, position: "absolute", transform: [{ rotate: "45deg" }], left: 1, top: 5 },
   linkOval2: { width: 10, height: 6, borderRadius: 3, borderWidth: 1.5, position: "absolute", transform: [{ rotate: "45deg" }], left: 7, top: 7 },

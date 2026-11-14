@@ -1,4 +1,4 @@
-import type { LayoutNode } from "@puppet-master/client-core/state/sessionLayout";
+import type { LayoutNode } from "./sessionLayout";
 
 export type { LayoutNode };
 export type MovePosition = "left" | "right" | "above" | "below" | "swap";

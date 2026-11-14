@@ -77,6 +77,30 @@ Build and run on macOS with Xcode using `make ios-run`, or build without
 installing using `make ios-build`. Use `make ios-doctor` to check local build
 requirements. These commands run from the repository root.
 
+## Session list and panes
+
+With more than one bucket, the session list shows a tile per bucket across
+the top. A tile's dot shows its most urgent state: amber for a session
+waiting on you, blue for one working, green for idle sessions. Tap a tile to
+list only that bucket, and tap the selected tile again to list every bucket.
+With every bucket listed, each row shows its bucket's letters. The choice is
+remembered. With a single bucket there is no rail and the list is unchanged.
+Projects still filter from ⋯ → Filter.
+
+In a session with panes (shells or pages opened beside the agent on the web),
+the terminal screen moves between them by gesture:
+
+- Swipe left or right with one finger for the next or previous pane, in the
+  layout's order with the agent first. The pane's name shows briefly, and
+  dots in the header show where you are.
+- Double-tap or swipe right with two fingers to go straight back to the agent.
+- A page pane shows as a web view. One-finger swipes scroll the page there,
+  so use two fingers or ⋯ → Agent to leave it.
+- ⋯ → New shell pane opens a shell beside the agent, and ⋯ → Terminals lists
+  the agent, its panes and its shell tabs.
+
+A session without panes ignores sideways swipes and looks as it did before.
+
 ## iOS build numbers
 
 From the repository root, `make ios-testflight` increments `expo.ios.buildNumber`
