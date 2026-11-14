@@ -17,6 +17,7 @@ pub mod atlas;
 pub mod font;
 pub mod input;
 pub mod osc;
+pub mod pointer;
 pub mod protocol;
 pub mod renderer;
 pub mod stream;

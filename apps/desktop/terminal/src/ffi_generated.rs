@@ -543,6 +543,40 @@ pub struct GhosttyGridRef {
     pub x: u16,
     pub y: u16,
 }
+unsafe extern "C" {
+    pub fn ghostty_grid_ref_cell(
+        ref_: *const GhosttyGridRef,
+        out_cell: *mut GhosttyCell,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_grid_ref_row(
+        ref_: *const GhosttyGridRef,
+        out_row: *mut GhosttyRow,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_grid_ref_graphemes(
+        ref_: *const GhosttyGridRef,
+        buf: *mut u32,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_grid_ref_hyperlink_uri(
+        ref_: *const GhosttyGridRef,
+        buf: *mut u8,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_grid_ref_style(
+        ref_: *const GhosttyGridRef,
+        out_style: *mut GhosttyStyle,
+    ) -> GhosttyResult;
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct GhosttyPointCoordinate {
@@ -1705,6 +1739,52 @@ pub const GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_EXTRAS: GhosttyFormatterO
 pub const GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_MAX_VALUE: GhosttyFormatterOption =
     2147483647;
 pub type GhosttyFormatterOption = ::core::ffi::c_uint;
+unsafe extern "C" {
+    pub fn ghostty_formatter_terminal_new(
+        allocator: *const GhosttyAllocator,
+        formatter: *mut GhosttyFormatter,
+        terminal: GhosttyTerminal,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_formatter_set(
+        formatter: GhosttyFormatter,
+        option: GhosttyFormatterOption,
+        value: *const ::core::ffi::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_formatter_get(
+        formatter: GhosttyFormatter,
+        option: GhosttyFormatterOption,
+        out: *mut ::core::ffi::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_formatter_format(
+        formatter: GhosttyFormatter,
+        writer: GhosttyWriter,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_formatter_format_buf(
+        formatter: GhosttyFormatter,
+        buf: *mut u8,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_formatter_format_alloc(
+        formatter: GhosttyFormatter,
+        allocator: *const GhosttyAllocator,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_formatter_free(formatter: GhosttyFormatter);
+}
 pub const GhosttyRenderStateDirty_GHOSTTY_RENDER_STATE_DIRTY_FALSE: GhosttyRenderStateDirty = 0;
 pub const GhosttyRenderStateDirty_GHOSTTY_RENDER_STATE_DIRTY_PARTIAL: GhosttyRenderStateDirty = 1;
 pub const GhosttyRenderStateDirty_GHOSTTY_RENDER_STATE_DIRTY_FULL: GhosttyRenderStateDirty = 2;

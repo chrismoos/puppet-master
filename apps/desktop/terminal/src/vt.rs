@@ -141,6 +141,8 @@ pub struct Vt {
     pub(crate) terminal: ffi::GhosttyTerminal,
     pub(crate) key_encoder: ffi::GhosttyKeyEncoder,
     pub(crate) key_event: ffi::GhosttyKeyEvent,
+    pub(crate) mouse_encoder: ffi::GhosttyMouseEncoder,
+    pub(crate) mouse_event: ffi::GhosttyMouseEvent,
     state: ffi::GhosttyRenderState,
     rows: ffi::GhosttyRenderStateRowIterator,
     cells: ffi::GhosttyRenderStateRowCells,
@@ -186,6 +188,8 @@ impl Vt {
             terminal,
             key_encoder: ptr::null_mut(),
             key_event: ptr::null_mut(),
+            mouse_encoder: ptr::null_mut(),
+            mouse_event: ptr::null_mut(),
             state: ptr::null_mut(),
             rows: ptr::null_mut(),
             cells: ptr::null_mut(),
@@ -510,6 +514,12 @@ impl Vt {
 impl Drop for Vt {
     fn drop(&mut self) {
         unsafe {
+            if !self.mouse_event.is_null() {
+                ffi::ghostty_mouse_event_free(self.mouse_event);
+            }
+            if !self.mouse_encoder.is_null() {
+                ffi::ghostty_mouse_encoder_free(self.mouse_encoder);
+            }
             if !self.key_event.is_null() {
                 ffi::ghostty_key_event_free(self.key_event);
             }
