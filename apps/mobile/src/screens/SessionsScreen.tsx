@@ -470,7 +470,7 @@ export function SessionsScreen({
           </Pressable>
         </View>
       ) : (
-        <View style={styles.header}>
+        <View style={[styles.header, showRail && styles.headerAboveRail]}>
           <View style={styles.titleCol}>
             <Text style={styles.title} numberOfLines={1}>
               {showRail ? selectedBucket?.name ?? "All buckets" : "Sessions"}
@@ -629,6 +629,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  // The rail's own top padding leaves room for its badges, so the header gives up the same.
+  headerAboveRail: { paddingBottom: 6 },
   titleCol: { flex: 1, minWidth: 0 },
   title: { color: colors.textBright, fontSize: 20, fontWeight: "600" },
   subtitle: { color: colors.textMuted, fontSize: 11, marginTop: 1 },

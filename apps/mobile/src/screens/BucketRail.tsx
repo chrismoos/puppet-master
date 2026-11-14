@@ -97,7 +97,7 @@ const BADGE = 16;
 
 const styles = StyleSheet.create({
   scroll: { flexGrow: 0 },
-  track: { gap: 10, paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10 },
+  track: { gap: 10, paddingHorizontal: 16, paddingTop: 6, paddingBottom: 12 },
   tile: {
     width: TILE,
     height: TILE,
