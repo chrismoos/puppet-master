@@ -6,10 +6,6 @@ license = "MIT"
 description = "Puppet Master desktop client"
 publish = false
 
-# Its own workspace: Tauri needs the platform web view's development
-# libraries, which the main workspace's lint and test runs do not have.
-[workspace]
-
 [lib]
 name = "pm_desktop"
 crate-type = ["rlib"]

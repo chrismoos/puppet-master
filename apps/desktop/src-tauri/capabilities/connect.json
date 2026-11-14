@@ -3,5 +3,5 @@
   "description": "The bundled connect page, which only picks the controller.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-toggle-maximize"]
 }

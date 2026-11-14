@@ -2666,6 +2666,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pm-ghostty"
+version = "0.10.5-dev.7"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "pm-native-terminal"
+version = "0.1.0"
+dependencies = [
+ "pm-ghostty",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

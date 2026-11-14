@@ -1,0 +1,10 @@
+[package]
+name = "pm-native-terminal"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A Puppet Master terminal drawn natively with libghostty"
+publish = false
+
+[dependencies]
+pm-ghostty = { path = "../../../crates/pm-ghostty" }

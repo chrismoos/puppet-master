@@ -19,6 +19,10 @@ const DEFAULT_WIDTH: f64 = 1440.0;
 const DEFAULT_HEIGHT: f64 = 900.0;
 const MIN_WIDTH: f64 = 480.0;
 const MIN_HEIGHT: f64 = 360.0;
+/// Where the traffic lights sit once the title bar is gone: centered in the
+/// controller UI's 46px top bar, clear of its left edge.
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHTS: (f64, f64) = (16.0, 17.0);
 
 /// Injected into every page the app loads. The controller's web UI looks for
 /// `window.__pmNative` and uses it in place of browser-only behavior.
@@ -68,6 +72,27 @@ pub fn run() {
         .expect("Puppet Master could not start");
 }
 
+/// Every app window: no native title bar on macOS, so the controller UI's own
+/// top bar runs to the window's top edge with the traffic lights over it.
+fn framed<'a>(
+    builder: WebviewWindowBuilder<'a, tauri::Wry, AppHandle>,
+) -> WebviewWindowBuilder<'a, tauri::Wry, AppHandle> {
+    let builder = builder
+        .title("Puppet Master")
+        .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
+        .initialization_script(BRIDGE_SCRIPT);
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(
+            TRAFFIC_LIGHTS.0,
+            TRAFFIC_LIGHTS.1,
+        ));
+    builder
+}
+
 /// The bundled connect page's address, which differs by platform.
 fn connect_page_url() -> Url {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -92,12 +117,7 @@ fn show_in_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
     } else {
         WebviewUrl::External(url)
     };
-    WebviewWindowBuilder::new(app, MAIN_WINDOW, start)
-        .title("Puppet Master")
-        .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
-        .initialization_script(BRIDGE_SCRIPT)
-        .build()?;
+    framed(WebviewWindowBuilder::new(app, MAIN_WINDOW, start)).build()?;
     Ok(())
 }
 
@@ -119,7 +139,9 @@ fn grant_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
         CapabilityBuilder::new(format!("controller-{id}"))
             .remote(format!("{origin}/*"))
             .window("*")
-            .permission("core:default"),
+            .permission("core:default")
+            .permission("core:window:allow-start-dragging")
+            .permission("core:window:allow-toggle-maximize"),
     )
 }
 
@@ -192,12 +214,12 @@ fn open_window(app: AppHandle, url: String) -> Result<(), String> {
     );
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        let built = WebviewWindowBuilder::new(&handle, label, WebviewUrl::External(url))
-            .title("Puppet Master")
-            .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
-            .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
-            .initialization_script(BRIDGE_SCRIPT)
-            .build();
+        let built = framed(WebviewWindowBuilder::new(
+            &handle,
+            label,
+            WebviewUrl::External(url),
+        ))
+        .build();
         if let Err(error) = built {
             eprintln!("could not open a window: {error}");
         }

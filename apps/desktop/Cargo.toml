@@ -1,0 +1,6 @@
+# The desktop app's own workspace: Tauri needs the platform web view's
+# development libraries, which the controller workspace's lint and test runs
+# do not have.
+[workspace]
+resolver = "2"
+members = ["src-tauri", "terminal"]

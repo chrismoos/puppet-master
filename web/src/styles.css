@@ -8853,3 +8853,8 @@ body.ap-moving iframe { pointer-events: none; }
   .alert-pill { animation: none; }
   .alert-pill-timer { display: none; }
 }
+
+/* The desktop app draws no title bar, and its traffic lights sit over the top bar's left end. */
+.pm-desktop .topbar {
+  padding-left: 84px;
+}
