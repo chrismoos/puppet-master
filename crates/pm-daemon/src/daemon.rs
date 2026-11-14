@@ -9,9 +9,9 @@ use pm_protocol::domain::{
     BucketBriefing, BucketIcon, ConnectMode, ContextField, ControllerMsg, Event, HookKind,
     InstructionLayer, InstructionRevision, InstructionTarget, Item, ItemQuery, ItemRef, ItemWrite,
     MessageOrigin, ModelDialect, ModelProfile, ModelProfileSource, PermissionMode,
-    ResolvedModelEndpoint, RespondTarget, Scope, Session, SessionForward, SessionRole,
-    SessionState, Snapshot, UserSetting, UserSettingChanged, WorkerMsg, WorkerTerminal,
-    LOCAL_WORKER_ID,
+    ProgramStatusState, ResolvedModelEndpoint, RespondTarget, Scope, Session, SessionForward,
+    SessionRole, SessionState, Snapshot, UserSetting, UserSettingChanged, WorkerMsg,
+    WorkerTerminal, LOCAL_WORKER_ID,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
@@ -8895,17 +8895,24 @@ impl Daemon {
         submitted: bool,
         input_state: SessionState,
     ) {
-        // An agent reporting through Program Status says when its turn
-        // starts, and a guess from input would only be overwritten. An
-        // answer to its question is not a guess, so that still counts.
-        if self.program_status_decides(terminal.session_id)
-            && input_state != SessionState::NeedsInput
-        {
-            return;
-        }
         let Ok(session) = self.storage.get_session(terminal.session_id) else {
             return;
         };
+        // An agent reporting through Program Status says when its turn
+        // starts and when it is blocked, and a guess from input would only be
+        // overwritten. An answer to a flag_blocked question its record does
+        // not mention is not a guess, so that still counts.
+        if self.program_status_decides(terminal.session_id) {
+            let record_blocked = self
+                .program_status_records(terminal.session_id)
+                .first()
+                .is_some_and(|root| {
+                    root.id.is_empty() && root.state == ProgramStatusState::Blocked
+                });
+            if input_state != SessionState::NeedsInput || record_blocked {
+                return;
+            }
+        }
         if !user_input_acknowledges_state(
             input_state,
             session.state,
