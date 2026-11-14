@@ -1,4 +1,6 @@
-export type LayoutNode = { pane?: string; row?: LayoutNode[]; column?: LayoutNode[]; size?: number };
+import type { LayoutNode } from "@puppet-master/client-core/state/sessionLayout";
+
+export type { LayoutNode };
 export type MovePosition = "left" | "right" | "above" | "below" | "swap";
 
 const FULL_SHARE = 100;

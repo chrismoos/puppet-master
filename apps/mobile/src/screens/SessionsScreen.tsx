@@ -22,6 +22,8 @@ import type { ConnectionBanner } from "../status";
 import { colors, stateColor, stateBackgroundColor } from "../theme";
 import { OverflowButton, OverflowMenu, type OverflowMenuItem } from "./OverflowMenu";
 import { SpawnSheet } from "./SpawnSheet";
+import { BucketRail } from "./BucketRail";
+import { railSummary, railTiles, tapBucket } from "./railModel";
 
 export interface TerminalTarget {
   sessionId: bigint;
@@ -107,19 +109,24 @@ function RowSubtitle({
   session,
   workers,
   showHost,
+  bucketLetters,
 }: {
   session: Session;
   workers: ReadonlyMap<string, { hostname: string; name: string; id: bigint }>;
   showHost: boolean;
+  /** Set while every bucket is listed, so a row says which bucket it is in. */
+  bucketLetters?: string;
 }) {
   const worker = workers.get(session.workerId.toString());
   const host = worker
     ? worker.id === 0n ? "local" : worker.hostname || worker.name
     : "";
   const subtitle = sessionRowSubtitle(session, host, showHost);
-  if (!subtitle) return null;
+  if (!subtitle && !bucketLetters) return null;
   return (
     <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 1 }} numberOfLines={1}>
+      {bucketLetters ? <Text style={{ color: colors.slate, fontWeight: "600" }}>{bucketLetters}</Text> : null}
+      {bucketLetters && subtitle ? " · " : ""}
       {subtitle}
     </Text>
   );
@@ -181,7 +188,23 @@ export function SessionsScreen({
     storage.setItem(FILTER_STORAGE_KEY, JSON.stringify(next));
   }, [storage]);
 
-  const filterCount = (filter.bucketId ? 1 : 0) + (filter.projectId ? 1 : 0);
+  const tiles = useMemo(() => railTiles(state), [state]);
+  // One bucket needs no rail: the list is already that bucket.
+  const showRail = tiles.length > 1;
+  const selectedBucket = tiles.find((tile) => tile.id === filter.bucketId);
+  const lettersByProject = useMemo(() => {
+    const letters = new Map(tiles.map((tile) => [tile.id, tile.letters]));
+    const byProject = new Map<string, string>();
+    for (const project of state.projects.values()) {
+      const bucketLetters = letters.get(project.bucketId.toString());
+      if (bucketLetters) byProject.set(project.id.toString(), bucketLetters);
+    }
+    return byProject;
+  }, [tiles, state.projects]);
+  const summary = useMemo(() => railSummary(state, selectedBucket?.id), [state, selectedBucket?.id]);
+  const rowBucketLetters = (session: Session) =>
+    showRail && !selectedBucket ? lettersByProject.get(session.projectId.toString()) : undefined;
+  const filterCount = (filter.bucketId && !showRail ? 1 : 0) + (filter.projectId ? 1 : 0);
 
   const toggleShowEnded = useCallback(() => {
     setShowEnded((prev) => {
@@ -354,7 +377,7 @@ export function SessionsScreen({
               ) : (
                 <Text style={styles.rowTitle} numberOfLines={1}>{sessionDisplayName(item.session)}</Text>
               )}
-              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} />
+              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} bucketLetters={rowBucketLetters(item.session)} />
             </View>
             <Text style={styles.rowTimestamp}>{sessionRowTime(item.session, now)}</Text>
           </Pressable>
@@ -382,7 +405,7 @@ export function SessionsScreen({
               ) : (
                 <Text style={styles.rowTitle} numberOfLines={1}>{sessionDisplayName(item.session)}</Text>
               )}
-              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} />
+              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} bucketLetters={rowBucketLetters(item.session)} />
             </View>
             <Pressable
               onPress={(e) => {
@@ -415,7 +438,7 @@ export function SessionsScreen({
               ) : (
                 <Text style={styles.rowTitle} numberOfLines={1}>{sessionDisplayName(item.session)}</Text>
               )}
-              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} />
+              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} bucketLetters={rowBucketLetters(item.session)} />
             </View>
             <Text style={styles.rowTimestamp}>{sessionRowTime(item.session, now)}</Text>
           </Pressable>
@@ -464,16 +487,28 @@ export function SessionsScreen({
         </View>
       ) : (
         <View style={styles.header}>
-          <Text style={styles.title}>Sessions</Text>
+          <View style={styles.titleCol}>
+            <Text style={styles.title} numberOfLines={1}>
+              {showRail ? selectedBucket?.name ?? "All buckets" : "Sessions"}
+            </Text>
+            {showRail && summary ? <Text style={styles.subtitle} numberOfLines={1}>{summary}</Text> : null}
+          </View>
           <View style={[styles.connDot, { backgroundColor: banner.label === "connected" ? colors.green : colors.textMuted }]} />
           <OverflowButton onPress={() => setMenuOpen(true)} />
         </View>
       )}
+      {showRail ? (
+        <BucketRail
+          tiles={tiles}
+          selectedId={selectedBucket?.id}
+          onTap={(bucketId) => updateFilter(tapBucket(filter, bucketId))}
+        />
+      ) : null}
       {searchActive && (filterCount > 0 || searchQuery) ? (
         <View style={styles.searchStatus}>
           {filterCount > 0 ? (
             <View style={styles.searchChips}>
-              {filter.bucketId ? (
+              {filter.bucketId && !showRail ? (
                 <Pressable
                   style={styles.searchChip}
                   onPress={() => updateFilter({ projectId: filter.projectId })}
@@ -522,8 +557,8 @@ export function SessionsScreen({
               <Text style={styles.clearFiltersText}>Clear filters</Text>
             </Pressable>
           ) : null}
-          <Text style={styles.filterLabel}>Bucket</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+          {showRail ? null : <Text style={styles.filterLabel}>Bucket</Text>}
+          {showRail ? null : <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
             {buckets.map((b) => {
               const id = b.id.toString();
               const selected = filter.bucketId === id;
@@ -537,7 +572,7 @@ export function SessionsScreen({
                 </Pressable>
               );
             })}
-          </ScrollView>
+          </ScrollView>}
           {filteredProjects.length > 0 ? (
             <>
               <Text style={styles.filterLabel}>Project</Text>
@@ -610,7 +645,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  title: { color: colors.textBright, fontSize: 20, fontWeight: "600", flex: 1 },
+  titleCol: { flex: 1, minWidth: 0 },
+  title: { color: colors.textBright, fontSize: 20, fontWeight: "600" },
+  subtitle: { color: colors.textMuted, fontSize: 11, marginTop: 1 },
   connDot: { width: 8, height: 8, borderRadius: 4 },
   searchInput: {
     flex: 1,

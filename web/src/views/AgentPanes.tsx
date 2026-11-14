@@ -8,65 +8,22 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { TerminalViewport } from "./WorkspacePage";
 import { paneDropRegionRect } from "@puppet-master/client-core/state/workspace";
 import { insertPaneInTree, movePaneInTree, movePositionAt, type LayoutNode, type MovePosition } from "./paneMoves";
+import { AGENT_PANE as AGENT, type PaneMeta, type SessionPaneLayout } from "@puppet-master/client-core/state/sessionLayout";
 
-interface PaneMeta {
-  id: string;
-  kind: "program" | "shell" | "page";
-  title: string;
-  terminal_id?: number;
-  command?: string;
-  page_token?: string;
-  version: number;
-  user_input: boolean;
-  exit_code?: number;
-  collapsed?: boolean;
-  /** False when nobody named the pane, which then shows its running program. */
-  titled?: boolean;
-}
+export {
+  AGENT_ONLY_LAYOUT,
+  layoutHasPanes,
+  paneTerminalIds,
+  parseSessionLayout,
+  type SessionPaneLayout,
+} from "@puppet-master/client-core/state/sessionLayout";
 
-export interface SessionPaneLayout {
-  rev: number;
-  tree: LayoutNode;
-  panes: Record<string, PaneMeta>;
-  unplaced: string[];
-  /** Shell tabs split into panes, by the tab's shell terminal id. */
-  tabs?: Record<string, LayoutNode>;
-}
-
-const AGENT = "agent";
 /** The root of a shell tab's own layout: the tab's shell. */
 const TAB = "tab";
-
-export function parseSessionLayout(json: string | undefined): SessionPaneLayout | null {
-  if (!json) return null;
-  try {
-    const layout = JSON.parse(json) as SessionPaneLayout;
-    return layout && layout.tree ? layout : null;
-  } catch {
-    return null;
-  }
-}
-
-/** A live session's layout before anything was ever placed: the agent alone. */
-export const AGENT_ONLY_LAYOUT: SessionPaneLayout = { rev: 0, tree: { pane: AGENT }, panes: {}, unplaced: [] };
-
-/** True when the layout shows anything besides the agent. */
-export function layoutHasPanes(layout: SessionPaneLayout | null): boolean {
-  return Boolean(layout && !layout.tree.pane);
-}
 
 /** A dev-server page pane's own forward, which its pane already shows. */
 export function isPaneForward(slug: string, sessionId: string): boolean {
   return slug.startsWith(`pane-${sessionId}-`);
-}
-
-/** Terminal ids that belong to panes, so the shell tab strip leaves them out. */
-export function paneTerminalIds(layout: SessionPaneLayout | null): Set<string> {
-  const ids = new Set<string>();
-  for (const pane of Object.values(layout?.panes ?? {})) {
-    if (pane.terminal_id !== undefined) ids.add(String(pane.terminal_id));
-  }
-  return ids;
 }
 
 async function paneAction(sessionId: string, pane: string, action: string): Promise<void> {

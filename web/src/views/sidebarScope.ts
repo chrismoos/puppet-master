@@ -102,39 +102,7 @@ export function olderRows<T>(
   return stale.filter((row) => !kept.has(row));
 }
 
-export interface BucketTally {
-  live: number;
-  needsInput: number;
-  needsInputUnseen: number;
-  /** Idle sessions whose finished turn has not been viewed. */
-  finishedUnseen: number;
-  /** Sessions whose agent is mid-turn. */
-  working: number;
-}
-
-/** Live and needs-you counts per bucket id, over every session that has not ended. */
-export function bucketTallies(state: Pick<AppState, "projects" | "sessions">): Map<string, BucketTally> {
-  const bucketOfProject = new Map<string, string>();
-  for (const project of state.projects.values()) {
-    bucketOfProject.set(project.id.toString(), project.bucketId.toString());
-  }
-  const tallies = new Map<string, BucketTally>();
-  for (const session of state.sessions.values()) {
-    if (sessionEnded(session)) continue;
-    const bucketId = bucketOfProject.get(session.projectId.toString());
-    if (bucketId === undefined) continue;
-    const tally = tallies.get(bucketId) ?? { live: 0, needsInput: 0, needsInputUnseen: 0, finishedUnseen: 0, working: 0 };
-    tally.live += 1;
-    if (awaitsUser(session, (id) => state.sessions.get(id))) {
-      tally.needsInput += 1;
-      if (session.needsInputUnseen) tally.needsInputUnseen += 1;
-    }
-    if (session.state === SessionState.IDLE && session.idleUnseen) tally.finishedUnseen += 1;
-    if (session.state === SessionState.WORKING) tally.working += 1;
-    tallies.set(bucketId, tally);
-  }
-  return tallies;
-}
+export { bucketTallies, type BucketTally } from "@puppet-master/client-core/state/buckets";
 
 export function bucketOfSession(
   state: Pick<AppState, "projects" | "sessions">,
