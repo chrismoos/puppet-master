@@ -111,7 +111,8 @@ describe("AlertStack", () => {
     render([alert("4", "needs-input", { title: "Codex audit", detail: "Auditing the shell tools", body: "Type into your shells?" })]);
     const card = cards()[0];
     expect(card.classList).toContain("alert-card-needs-input");
-    expect(card.querySelector(".alert-card-chip")?.textContent).toBe("needs you");
+    expect(card.getAttribute("aria-label")).toBe("needs you: Codex audit");
+    expect(card.querySelector(".alert-card-dot")?.getAttribute("title")).toBe("needs you");
     expect(card.querySelector(".alert-card-title")?.textContent).toBe("Codex audit");
     expect(card.querySelector(".alert-card-detail")?.textContent).toBe("Auditing the shell tools");
     expect(card.querySelector(".alert-card-body")?.textContent).toBe("Type into your shells?");
@@ -175,7 +176,7 @@ describe("AlertStack", () => {
       }),
     ]);
     const card = cards()[0];
-    expect(card.querySelector(".alert-card-chip")?.textContent).toBe("message");
+    expect(card.querySelector(".alert-card-dot")?.getAttribute("title")).toBe("message");
     expect(card.querySelector(".alert-card-body strong")?.textContent).toBe("Deploy finished");
     expect(card.querySelector(".alert-card-body")?.textContent).toBe("Deploy finished staging is green");
     const link = card.querySelector<HTMLAnchorElement>(".alert-card-link")!;

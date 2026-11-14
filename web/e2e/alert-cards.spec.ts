@@ -3,6 +3,7 @@ import { logIn } from "./support";
 
 const WATCHED = "browser-e2e";
 const OTHER = "browser-e2e-two";
+const ALERT_STACK_WIDTH = 480;
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("pm.notify.enabled", "1"));
@@ -19,6 +20,7 @@ test("an agent's notify_user call shows as a card that opens its session, and ca
   const stack = page.getByRole("region", { name: "Alerts" });
   const first = stack.locator(".alert-card-message");
   await expect(first).toHaveCount(1);
+  expect((await stack.boundingBox())!.width).toBe(ALERT_STACK_WIDTH);
   await expect(first.locator(".alert-card-title")).toHaveText(OTHER);
   await expect(first.locator(".alert-card-body")).toHaveText("Deploy finished staging is green");
 

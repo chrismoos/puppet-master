@@ -8,7 +8,7 @@
 
 - [Web] Pages an agent opens in a pane follow Puppet Master's dark or light appearance instead of always rendering light.
 
-- [Web] While you are looking at Puppet Master, alerts show as cards stacked at the top right instead of desktop notifications, with the session's goal and question. Click a card to open its session or × to dismiss it. Each card hides on its own unless the pointer rests on the stack, and up to three show at once. Alerts still go to the desktop while the tab is in the background.
+- [Web] While you are looking at Puppet Master, alerts show as cards stacked at the top right instead of desktop notifications, with a colored dot for the kind of alert and the session's question. Click a card to open its session or × to dismiss it. Each card hides on its own unless the pointer rests on the stack, and up to three show at once, wide enough for typical project names. Alerts still go to the desktop while the tab is in the background.
 
 - [Daemon] When you ask an agent to tell you about something, it can notify you with `notify_user`: a card in the dashboard, or a desktop or phone notification when you are away. A notification can link to a page or preview the session published, or to a board item. Each session can send one every 10 seconds.
 

@@ -172,7 +172,7 @@ function AlertCard({
     <article className={`alert-card alert-card-${alert.kind}${compact ? " is-compact" : ""}`} aria-label={`${KIND_LABEL[alert.kind]}: ${alert.title}`}>
       <button type="button" className="alert-card-open" aria-label={`Open ${alert.title}`} onClick={() => onOpen(alert)} />
       <div className="alert-card-head">
-        <span className="alert-card-chip">{KIND_LABEL[alert.kind]}</span>
+        <span className="alert-card-dot" title={KIND_LABEL[alert.kind]} aria-hidden="true" />
         <span className="alert-card-title">{alert.title}</span>
         <span className="alert-card-age">{age}</span>
         <button type="button" className="alert-card-close" aria-label="Dismiss" title="Dismiss" onClick={() => onDismiss(alert.key)}>×</button>
