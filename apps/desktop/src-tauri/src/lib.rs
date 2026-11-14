@@ -248,9 +248,15 @@ fn native_badge(app: AppHandle, count: u32) -> Result<(), String> {
 /// it is the controller's own, and opens in the browser otherwise.
 #[tauri::command]
 fn open_window(app: AppHandle, url: String) -> Result<(), String> {
-    let url = Url::parse(&url).map_err(|error| error.to_string())?;
+    open_link(&app, &url)
+}
+
+/// Opens a link as a new tab would: the controller's own pages in another
+/// app window, anything else in the default browser.
+pub(crate) fn open_link(app: &AppHandle, url: &str) -> Result<(), String> {
+    let url = Url::parse(url).map_err(|error| error.to_string())?;
     let same_origin =
-        controller::load(&app).is_some_and(|controller| controller.origin() == url.origin());
+        controller::load(app).is_some_and(|controller| controller.origin() == url.origin());
     if !same_origin {
         return app
             .opener()

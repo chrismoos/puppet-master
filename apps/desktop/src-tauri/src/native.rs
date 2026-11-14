@@ -53,11 +53,17 @@ mod platform {
     use pm_native_terminal::macos::{NativeTerminal, Placement, TerminalEvent};
     use pm_native_terminal::stream::Attach;
     use serde_json::json;
+    use tauri::Manager;
 
     use super::*;
 
     thread_local! {
         static TERMINALS: RefCell<HashMap<(String, String), NativeTerminal>> = RefCell::new(HashMap::new());
+    }
+
+    /// Web links open from here; `pm:` links name places in the page, which opens them.
+    fn is_web_link(href: &str) -> bool {
+        href.starts_with("https://") || href.starts_with("http://")
     }
 
     impl From<PlacementArg> for Placement {
@@ -82,6 +88,7 @@ mod platform {
         events: Channel<serde_json::Value>,
     ) -> Result<(), String> {
         let label = window.label().to_string();
+        let app = window.app_handle().clone();
         // A raw pointer is not Send, so it crosses to the main thread as an address.
         let parent = window.ns_view().map_err(|error| error.to_string())? as usize;
         let runtime = tauri::async_runtime::handle().inner().clone();
@@ -91,6 +98,7 @@ mod platform {
                 TERMINALS.with(|terminals| terminals.borrow_mut().remove(&key));
                 let id = request.id.clone();
                 let sink = events.clone();
+                let app = app.clone();
                 let opened = unsafe {
                     NativeTerminal::open(
                         parent as *mut std::ffi::c_void,
@@ -108,8 +116,17 @@ mod platform {
                                 TerminalEvent::Closed(reason) => {
                                     json!({ "type": "closed", "id": id, "reason": reason })
                                 }
+                                TerminalEvent::Link(href) if is_web_link(&href) => {
+                                    if let Err(error) = crate::open_link(&app, &href) {
+                                        eprintln!("could not open {href}: {error}");
+                                    }
+                                    return;
+                                }
                                 TerminalEvent::Link(href) => {
                                     json!({ "type": "link", "id": id, "href": href })
+                                }
+                                TerminalEvent::LinkHover(link) => {
+                                    json!({ "type": "hover", "id": id, "link": link })
                                 }
                                 TerminalEvent::ContextMenu { x, y } => {
                                     json!({ "type": "contextmenu", "id": id, "x": x, "y": y })

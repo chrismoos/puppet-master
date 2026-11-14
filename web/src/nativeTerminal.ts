@@ -91,6 +91,7 @@ interface Handlers {
   onLink(href: string): void;
   onCommand?(command: string): void;
   onContextMenu(x: number, y: number): void;
+  onLinkHover(link: boolean): void;
   onClosed(): void;
 }
 
@@ -101,6 +102,9 @@ interface Entry {
   placement: NativePlacement | null;
   hiddenAt: number | null;
 }
+
+/** Set on a terminal's host while ⌘ is held over a link in it. */
+export const LINK_HOVER_CLASS = "pm-native-link";
 
 /** Hidden native terminals kept attached so switching back is instant. */
 export const MAX_WARM_NATIVE_TERMINALS = 8;
@@ -115,6 +119,7 @@ function routeEvent(id: string, event: NativeTerminalEvent): void {
   } else if (event.type === "link") entry.handlers?.onLink(event.href);
   else if (event.type === "contextmenu") entry.handlers?.onContextMenu(event.x, event.y);
   else if (event.type === "command") entry.handlers?.onCommand?.(event.command);
+  else if (event.type === "hover") entry.handlers?.onLinkHover(event.link);
 }
 
 /** The hidden terminals to close so at most `limit` stay warm, oldest first. */
@@ -220,6 +225,7 @@ export function useNativeTerminal(options: NativeTerminalOptions): void {
       onContextMenu: (x, y) => {
         if (hostRef.current) dispatchContextMenu(x, y, hostRef.current);
       },
+      onLinkHover: (link) => hostRef.current?.classList.toggle(LINK_HOVER_CLASS, link),
       onClosed: () => {
         if (disposed) return;
         cancelAnimationFrame(frame);
@@ -240,6 +246,7 @@ export function useNativeTerminal(options: NativeTerminalOptions): void {
       cancelAnimationFrame(frame);
       window.clearTimeout(reattach);
       entry.handlers = null;
+      hostRef.current?.classList.remove(LINK_HOVER_CLASS);
       if (!entry.placement) {
         entries.delete(id);
         void native.close(id).catch(() => {});

@@ -10,10 +10,12 @@ use std::sync::{Arc, Mutex};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
+use objc2::{
+    define_class, msg_send, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
+};
 use objc2_app_kit::{
     NSEvent, NSEventModifierFlags, NSPasteboard, NSPasteboardTypeString, NSResponder,
-    NSTextInputClient, NSView,
+    NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSAttributedStringKey, NSObjectProtocol, NSPoint, NSRange, NSRect,
@@ -44,6 +46,11 @@ enum ViewInput {
     Paste(String),
     /// ⌘C, handled only when there is a selection to copy.
     Copy,
+    /// The pointer moved or ⌘ changed: whether a link is under it decides the cursor.
+    Hover {
+        point: NSPoint,
+        command: bool,
+    },
     Scroll {
         lines: f64,
         precise_pixels: Option<f64>,
@@ -71,6 +78,8 @@ pub enum TerminalEvent {
     Closed(String),
     /// A link was ⌘-clicked.
     Link(String),
+    /// Whether ⌘ is held over a link, which shows a pointing hand.
+    LinkHover(bool),
     /// A right click the program did not take, in page coordinates.
     ContextMenu { x: f64, y: f64 },
     /// The shell reported the program now in the foreground.
@@ -86,6 +95,8 @@ pub struct ViewIvars {
     /// Text the input method committed during the current key press.
     inserted: RefCell<Option<String>>,
     in_key_down: Cell<bool>,
+    /// The pointer's last place in the view, for a ⌘ press without a move.
+    pointer: Cell<NSPoint>,
     /// Page content over the terminal, in view coordinates: holes are drawn
     /// transparent, and the mouse goes to the page in both.
     holes: RefCell<Vec<NSRect>>,
@@ -173,6 +184,16 @@ define_class!(
                 window.makeFirstResponder(Some(responder));
             }
             self.mouse(event, MouseAction::Press, MouseButton::Left);
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            self.hover(self.local(event), event.modifierFlags());
+        }
+
+        #[unsafe(method(flagsChanged:))]
+        fn flags_changed(&self, event: &NSEvent) {
+            self.hover(self.ivars().pointer.get(), event.modifierFlags());
         }
 
         #[unsafe(method(mouseDragged:))]
@@ -399,12 +420,34 @@ impl TerminalView {
             marked: RefCell::default(),
             inserted: RefCell::new(None),
             in_key_down: Cell::new(false),
+            pointer: Cell::new(NSPoint::new(0.0, 0.0)),
             holes: RefCell::default(),
             passthrough: RefCell::default(),
             webview: RefCell::new(None),
         });
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1.0, 1.0));
-        unsafe { msg_send![super(this), initWithFrame: frame] }
+        let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        let area = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                NSRect::ZERO,
+                NSTrackingAreaOptions::MouseMoved
+                    | NSTrackingAreaOptions::ActiveInKeyWindow
+                    | NSTrackingAreaOptions::InVisibleRect,
+                Some(&view),
+                None,
+            )
+        };
+        view.addTrackingArea(&area);
+        view
+    }
+
+    fn hover(&self, point: NSPoint, flags: NSEventModifierFlags) {
+        self.ivars().pointer.set(point);
+        self.emit(ViewInput::Hover {
+            point,
+            command: flags.contains(NSEventModifierFlags::Command),
+        });
     }
 
     fn emit(&self, input: ViewInput) -> bool {
@@ -781,6 +824,7 @@ impl NativeTerminal {
         }));
         // Where a drag that selects text started.
         let anchor: Cell<Option<(u16, u16)>> = Cell::new(None);
+        let over_link = Cell::new(false);
         *self.view.ivars().sink.borrow_mut() = Some(Box::new(move |input| {
             if let ViewInput::Preedit(text) = &input {
                 painter.set_preedit(if read_only { "" } else { text });
@@ -800,6 +844,17 @@ impl NativeTerminal {
             let at = placement.get();
             match input {
                 ViewInput::Preedit(_) => true,
+                ViewInput::Hover { point, command } => {
+                    let link = command && {
+                        let cell = cell_at(vt, at, point);
+                        vt.link_at(cell.0, cell.1).is_some()
+                    };
+                    drop(guard);
+                    if over_link.replace(link) != link {
+                        on_event(TerminalEvent::LinkHover(link));
+                    }
+                    true
+                }
                 ViewInput::Text(text) => {
                     vt.clear_selection();
                     let _ = vt.scroll(isize::MAX);
@@ -905,8 +960,12 @@ impl NativeTerminal {
                         (MouseButton::Left, MouseAction::Press) if command => {
                             let link = vt.link_at(cell.0, cell.1);
                             drop(guard);
-                            if let Some(href) = link {
-                                on_event(TerminalEvent::Link(href));
+                            match link {
+                                Some(href) => on_event(TerminalEvent::Link(href)),
+                                None => eprintln!(
+                                    "native terminal: no link under the ⌘-click at column {} row {}",
+                                    cell.0, cell.1
+                                ),
                             }
                         }
                         (MouseButton::Left, MouseAction::Press) => {

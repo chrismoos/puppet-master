@@ -23,7 +23,8 @@ export type NativeTerminalEvent =
   | { type: "closed" | "failed"; id: string; reason: string }
   | { type: "link"; id: string; href: string }
   | { type: "contextmenu"; id: string; x: number; y: number }
-  | { type: "command"; id: string; command: string };
+  | { type: "command"; id: string; command: string }
+  | { type: "hover"; id: string; link: boolean };
 
 /** Terminals the desktop app draws natively over the page. */
 export interface NativeTerminals {

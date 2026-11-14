@@ -8853,3 +8853,9 @@ body.ap-moving iframe { pointer-events: none; }
   .alert-pill { animation: none; }
   .alert-pill-timer { display: none; }
 }
+
+/* The desktop app's native terminal reports ⌘ over a link here. */
+.pm-native-link,
+.pm-native-link * {
+  cursor: pointer !important;
+}

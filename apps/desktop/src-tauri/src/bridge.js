@@ -138,15 +138,29 @@
   };
 
   // A web view opens nothing for a new tab on its own. window.open answers
-  // with a stand-in so a caller that checks the result treats it as handled.
+  // with a stand-in so a caller that checks the result treats it as handled,
+  // and one that opens a blank tab first and points it somewhere later
+  // opens that place once it does.
   let pendingLink = null;
+  const openHref = (url) => {
+    const href = new URL(String(url), location.href).href;
+    if (pendingLink === href) pendingLink = null;
+    openWindow(href);
+  };
+  const standIn = () => {
+    const place = {
+      assign: openHref,
+      replace: openHref,
+      toString: () => "about:blank",
+    };
+    Object.defineProperty(place, "href", { get: () => "about:blank", set: openHref });
+    const opened = { closed: false, opener: null, close() { opened.closed = true; }, focus() {} };
+    Object.defineProperty(opened, "location", { get: () => place, set: openHref });
+    return opened;
+  };
   window.open = (url) => {
-    if (url) {
-      const href = new URL(String(url), location.href).href;
-      if (pendingLink === href) pendingLink = null;
-      openWindow(href);
-    }
-    return { closed: false, close() {}, focus() {} };
+    if (url) openHref(url);
+    return standIn();
   };
 
   // A plain target=_blank link with no script of its own still opens; one
