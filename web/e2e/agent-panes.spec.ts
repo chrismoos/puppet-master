@@ -124,3 +124,36 @@ test("terminal panes need bypass permissions while page panes do not", async ({ 
   await expect(isolatedDaemon.callAgentTool(SESSION, "send_to_pane", { id: "job", text: "x" }))
     .rejects.toThrow(/needs bypass permissions/);
 });
+
+test.describe("page panes without an emulated color scheme", () => {
+  // Emulating a scheme overrides prefers-color-scheme in every frame, masking what the iframe passes down.
+  test.use({ colorScheme: null });
+
+  test("a page pane follows the user's appearance rather than staying light", async ({ page, isolatedDaemon }) => {
+    await logIn(page);
+    await openSession(page);
+    const cwd = isolatedDaemon.session(SESSION)!.cwd;
+    await mkdir(join(cwd, "scheme"), { recursive: true });
+    await writeFile(
+      join(cwd, "scheme", "index.html"),
+      `<!doctype html><h1 id="scheme"></h1><script>
+        const query = matchMedia("(prefers-color-scheme: dark)");
+        const show = () => { document.getElementById("scheme").textContent = query.matches ? "dark" : "light"; };
+        query.addEventListener("change", show);
+        show();
+      </script>`,
+    );
+    const html = page.locator("html");
+    const toggle = page.locator(".appearance-toggle");
+    await toggle.click();
+    await expect(html).toHaveAttribute("data-appearance", "light");
+
+    await isolatedDaemon.callAgentTool(SESSION, "open_page", { id: "scheme", title: "Scheme probe", dir: "scheme" });
+    const reported = page.frameLocator(".ap-pane iframe").locator("#scheme");
+    await expect(reported).toHaveText("light");
+
+    await toggle.click();
+    await expect(html).toHaveAttribute("data-appearance", "dark");
+    await expect(reported).toHaveText("dark");
+  });
+});
