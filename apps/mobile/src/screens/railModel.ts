@@ -1,37 +1,48 @@
 import type { AppState } from "@puppet-master/client-core/state/reducer";
-import { bucketTallies, railMonograms, type BucketTally } from "@puppet-master/client-core/state/buckets";
+import { bucketTallies, railMonograms } from "@puppet-master/client-core/state/buckets";
 import type { MobileSessionFilter } from "@puppet-master/client-core/state/mobileSessionList";
 
-/** The one dot a rail tile shows, most urgent first: a session waiting on
- * you, then one mid-turn, then live sessions sitting idle. */
-export type RailDot = "needs" | "working" | "idle" | null;
+/** A bucket's own rail face, as set on the web: a picture, short text, a color. */
+export interface RailIcon {
+  text?: string;
+  color?: string;
+  image?: string;
+}
 
+/** What a rail tile shows, by the web rail's rules: a count of sessions
+ * waiting on you, a dot while one is mid-turn, and a dot for finished turns
+ * you have not looked at. */
 export interface RailTile {
   id: string;
   name: string;
   letters: string;
-  dot: RailDot;
-}
-
-export function railDot(tally: BucketTally | undefined): RailDot {
-  if (!tally) return null;
-  if (tally.needsInput > 0) return "needs";
-  if (tally.working > 0) return "working";
-  return tally.live > 0 ? "idle" : null;
+  icon?: RailIcon;
+  needs: number;
+  working: boolean;
+  finishedUnseen: boolean;
 }
 
 /** A tile per bucket, in the buckets' own order. */
 export function railTiles(state: Pick<AppState, "buckets" | "projects" | "sessions">): RailTile[] {
-  const buckets = [...state.buckets.values()]
-    .sort((a, b) => a.position - b.position)
-    .map((bucket) => ({ id: bucket.id.toString(), name: bucket.name }));
-  const letters = railMonograms(buckets);
+  const buckets = [...state.buckets.values()].sort((a, b) => a.position - b.position);
+  const letters = railMonograms(buckets.map((bucket) => ({ id: bucket.id.toString(), name: bucket.name })));
   const tallies = bucketTallies(state);
-  return buckets.map((bucket) => ({
-    ...bucket,
-    letters: letters.get(bucket.id) ?? "?",
-    dot: railDot(tallies.get(bucket.id)),
-  }));
+  return buckets.map((bucket) => {
+    const id = bucket.id.toString();
+    const tally = tallies.get(id);
+    const icon = bucket.icon && (bucket.icon.text || bucket.icon.color || bucket.icon.image)
+      ? { text: bucket.icon.text || undefined, color: bucket.icon.color || undefined, image: bucket.icon.image || undefined }
+      : undefined;
+    return {
+      id,
+      name: bucket.name,
+      letters: letters.get(id) ?? "?",
+      ...(icon ? { icon } : {}),
+      needs: tally?.needsInput ?? 0,
+      working: (tally?.working ?? 0) > 0,
+      finishedUnseen: (tally?.finishedUnseen ?? 0) > 0,
+    };
+  });
 }
 
 /** The filter after tapping a tile: the selected bucket again shows every

@@ -80,11 +80,12 @@ requirements. These commands run from the repository root.
 ## Session list and panes
 
 With more than one bucket, the session list shows a tile per bucket across
-the top. A tile's dot shows its most urgent state: amber for a session
-waiting on you, blue for one working, green for idle sessions. Tap a tile to
-list only that bucket, and tap the selected tile again to list every bucket.
-With every bucket listed, each row shows its bucket's letters. The choice is
-remembered. With a single bucket there is no rail and the list is unchanged.
+the top, with the bucket's own picture, text or color when one is set on the
+web, and its letters otherwise. Tiles carry the web rail's indicators: an
+amber count of sessions waiting on you, a blue dot while one is working, and
+a green dot for finished turns you have not looked at. Tap a tile to list
+only that bucket, and tap the selected tile again to list every bucket. The
+choice is remembered. With a single bucket there is no rail and the list is unchanged.
 Projects still filter from ⋯ → Filter.
 
 In a session with panes (shells or pages opened beside the agent on the web),

@@ -1,6 +1,6 @@
 import { create } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
-import { BucketSchema, ProjectSchema, SessionSchema, SessionState } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
+import { BucketIconSchema, BucketSchema, ProjectSchema, SessionSchema, SessionState } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
 import { initialState, type AppState } from "@puppet-master/client-core/state/reducer";
 import { railSummary, railTiles, tapBucket } from "./railModel";
 
@@ -16,7 +16,8 @@ function fleet(): AppState {
     create(SessionSchema, { id: 1n, projectId: 10n, state: SessionState.NEEDS_INPUT }),
     create(SessionSchema, { id: 2n, projectId: 10n, state: SessionState.WORKING }),
     create(SessionSchema, { id: 3n, projectId: 20n, state: SessionState.WORKING }),
-    create(SessionSchema, { id: 4n, projectId: 30n, state: SessionState.IDLE }),
+    create(SessionSchema, { id: 4n, projectId: 30n, state: SessionState.IDLE, idleUnseen: true }),
+    create(SessionSchema, { id: 6n, projectId: 40n, state: SessionState.IDLE }),
     create(SessionSchema, { id: 5n, projectId: 40n, state: SessionState.EXITED, endedAtUnixMs: 1n }),
   ];
   return {
@@ -28,13 +29,22 @@ function fleet(): AppState {
 }
 
 describe("the session list's bucket rail", () => {
-  it("shows each bucket's letters and its most urgent dot, in bucket order", () => {
-    expect(railTiles(fleet()).map(({ letters, dot }) => [letters, dot])).toEqual([
-      ["PM", "needs"],
-      ["AI", "working"],
-      ["FU", "idle"],
-      ["M6", null],
+  it("follows the web rail: a count waiting on you, working, and unseen finished turns only", () => {
+    expect(railTiles(fleet()).map(({ letters, needs, working, finishedUnseen }) => [letters, needs, working, finishedUnseen])).toEqual([
+      ["PM", 1, true, false],
+      ["AI", 0, true, false],
+      ["FU", 0, false, true],
+      ["M6", 0, false, false],
     ]);
+  });
+
+  it("shows a bucket's own icon when one is set", () => {
+    const state = fleet();
+    const bucket = state.buckets.get("2")!;
+    const withIcon = { ...state, buckets: new Map(state.buckets).set("2", { ...bucket, icon: create(BucketIconSchema, { text: "🤖", color: "#ff8800" }) }) };
+    const tile = railTiles(withIcon).find((t) => t.id === "2");
+    expect(tile?.icon).toEqual({ text: "🤖", color: "#ff8800", image: undefined });
+    expect(railTiles(fleet()).find((t) => t.id === "1")?.icon).toBeUndefined();
   });
 
   it("narrows to a tapped bucket and shows every bucket when the selected one is tapped again", () => {

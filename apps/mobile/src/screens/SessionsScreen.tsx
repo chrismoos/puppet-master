@@ -109,24 +109,19 @@ function RowSubtitle({
   session,
   workers,
   showHost,
-  bucketLetters,
 }: {
   session: Session;
   workers: ReadonlyMap<string, { hostname: string; name: string; id: bigint }>;
   showHost: boolean;
-  /** Set while every bucket is listed, so a row says which bucket it is in. */
-  bucketLetters?: string;
 }) {
   const worker = workers.get(session.workerId.toString());
   const host = worker
     ? worker.id === 0n ? "local" : worker.hostname || worker.name
     : "";
   const subtitle = sessionRowSubtitle(session, host, showHost);
-  if (!subtitle && !bucketLetters) return null;
+  if (!subtitle) return null;
   return (
     <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 1 }} numberOfLines={1}>
-      {bucketLetters ? <Text style={{ color: colors.slate, fontWeight: "600" }}>{bucketLetters}</Text> : null}
-      {bucketLetters && subtitle ? " · " : ""}
       {subtitle}
     </Text>
   );
@@ -192,18 +187,7 @@ export function SessionsScreen({
   // One bucket needs no rail: the list is already that bucket.
   const showRail = tiles.length > 1;
   const selectedBucket = tiles.find((tile) => tile.id === filter.bucketId);
-  const lettersByProject = useMemo(() => {
-    const letters = new Map(tiles.map((tile) => [tile.id, tile.letters]));
-    const byProject = new Map<string, string>();
-    for (const project of state.projects.values()) {
-      const bucketLetters = letters.get(project.bucketId.toString());
-      if (bucketLetters) byProject.set(project.id.toString(), bucketLetters);
-    }
-    return byProject;
-  }, [tiles, state.projects]);
   const summary = useMemo(() => railSummary(state, selectedBucket?.id), [state, selectedBucket?.id]);
-  const rowBucketLetters = (session: Session) =>
-    showRail && !selectedBucket ? lettersByProject.get(session.projectId.toString()) : undefined;
   const filterCount = (filter.bucketId && !showRail ? 1 : 0) + (filter.projectId ? 1 : 0);
 
   const toggleShowEnded = useCallback(() => {
@@ -377,7 +361,7 @@ export function SessionsScreen({
               ) : (
                 <Text style={styles.rowTitle} numberOfLines={1}>{sessionDisplayName(item.session)}</Text>
               )}
-              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} bucketLetters={rowBucketLetters(item.session)} />
+              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} />
             </View>
             <Text style={styles.rowTimestamp}>{sessionRowTime(item.session, now)}</Text>
           </Pressable>
@@ -405,7 +389,7 @@ export function SessionsScreen({
               ) : (
                 <Text style={styles.rowTitle} numberOfLines={1}>{sessionDisplayName(item.session)}</Text>
               )}
-              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} bucketLetters={rowBucketLetters(item.session)} />
+              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} />
             </View>
             <Pressable
               onPress={(e) => {
@@ -438,7 +422,7 @@ export function SessionsScreen({
               ) : (
                 <Text style={styles.rowTitle} numberOfLines={1}>{sessionDisplayName(item.session)}</Text>
               )}
-              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} bucketLetters={rowBucketLetters(item.session)} />
+              <RowSubtitle session={item.session} workers={state.workers} showHost={searchActive} />
             </View>
             <Text style={styles.rowTimestamp}>{sessionRowTime(item.session, now)}</Text>
           </Pressable>

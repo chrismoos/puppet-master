@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- [iOS] Bucket tiles across the top of the session list narrow it to one bucket, and tapping the selected bucket again lists every bucket.
+- [iOS] Bucket tiles across the top of the session list, with each bucket's icon and the web rail's indicators, narrow it to one bucket, and tapping the selected bucket again lists every bucket.
 
 - [iOS] In a session with panes, swipe left or right on the terminal to move between the agent, its shell panes and page panes, and double-tap or swipe right with two fingers to go back to the agent. Dots in the header show which pane is on screen, ⋯ has Agent and New shell pane, and Terminals groups the agent, panes and shell tabs.
 
