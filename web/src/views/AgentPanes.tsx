@@ -2,11 +2,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { createPortal, flushSync } from "react-dom";
 import { authedFetch } from "../api/token";
 import { useAppState } from "../state/hooks";
+import { sessionDisplayName } from "@puppet-master/client-core/format";
 import type { TerminalStage } from "../ws/terminal";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TerminalViewport } from "./WorkspacePage";
-
-type LayoutNode = { pane?: string; row?: LayoutNode[]; column?: LayoutNode[]; size?: number };
+import { paneDropRegionRect } from "@puppet-master/client-core/state/workspace";
+import { movePaneInTree, movePositionAt, type LayoutNode, type MovePosition } from "./paneMoves";
 
 interface PaneMeta {
   id: string;
@@ -157,6 +158,19 @@ function stripSizes(node: LayoutNode): LayoutNode {
 
 const HEAD_PX = 24;
 const GUTTER_PX = 1;
+/** How far the pointer travels on a pane header before a press becomes a move. */
+const MOVE_THRESHOLD_PX = 4;
+/** Where the pointer holds the move ghost, as the workspace drag image does. */
+const GHOST_OFFSET_PX = 12;
+
+interface MoveDrag {
+  id: string;
+  title: string;
+  x: number;
+  y: number;
+  target: string | null;
+  position: MovePosition | null;
+}
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface Placed { rect: Rect; axis: "row" | "column" | null }
@@ -253,6 +267,7 @@ export function AgentPanes({
    * and connected but hidden, so returning to its session shows it at once. */
   active: boolean;
 }) {
+  const state = useAppState();
   const rootRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [draft, setDraft] = useState<LayoutNode | null>(null);
@@ -288,6 +303,19 @@ export function AgentPanes({
   };
   const abandonPress = () => stage.cancelAnticipation(sessionKey);
 
+  const [moving, setMoving] = useState<MoveDrag | null>(null);
+  // Zooming is a view of this browser only, never saved to the layout.
+  const [zoomed, setZoomed] = useState<string | null>(null);
+  const toggleZoom = (pane: string) => setZoomed((current) => (current === pane ? null : pane));
+  useEffect(() => {
+    if (!zoomed) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setZoomed(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomed]);
+
   // Measured again whenever the layout becomes active: its area can differ
   // from the session shown while it was hidden, such as one without a
   // forwards bar, and the agent's terminal must be placed at the real size
@@ -312,6 +340,11 @@ export function AgentPanes({
   const panes = new Map<string, Placed>();
   const gutters: Gutter[] = [];
   if (size) measure(tree, { x: 0, y: 0, w: size.w, h: size.h }, null, [], layout, panes, gutters);
+  const zoomedPane = zoomed && panes.has(zoomed) && !layout.panes[zoomed]?.collapsed ? zoomed : null;
+  const agentZoomed = zoomedPane === AGENT;
+  useEffect(() => {
+    if (zoomed && !zoomedPane) setZoomed(null);
+  }, [zoomed, zoomedPane]);
 
   // Placed from the area as it is now, not the last stored measurement: the
   // agent's terminal is shown in this same commit, and a stale height would
@@ -320,9 +353,10 @@ export function AgentPanes({
     const host = hostRef.current;
     const root = rootRef.current;
     if (!host || !root || !active) return;
+    host.style.visibility = zoomedPane && !agentZoomed ? "hidden" : "";
     const fresh = new Map<string, Placed>();
     measure(tree, { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight }, null, [], layout, fresh, []);
-    const rect = fresh.get(AGENT)?.rect;
+    const rect = agentZoomed ? { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight } : fresh.get(AGENT)?.rect;
     if (!rect) return;
     const next = { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.w}px`, height: `${rect.h}px` };
     if (
@@ -336,7 +370,7 @@ export function AgentPanes({
     const host = hostRef.current;
     if (!active) return;
     return () => {
-      if (host) for (const key of ["position", "left", "top", "width", "height", "flex"]) host.style.removeProperty(key);
+      if (host) for (const key of ["position", "left", "top", "width", "height", "flex", "visibility"]) host.style.removeProperty(key);
     };
   }, [hostRef, active]);
 
@@ -406,27 +440,121 @@ export function AgentPanes({
     window.addEventListener("pointercancel", up);
   };
 
+  // The header keeps the pointer captured while moving, so the move follows
+  // it over page panes' iframes and the agent's terminal alike.
+  const startMove = (id: string, title: string) => (event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || zoomedPane) return;
+    if ((event.target as HTMLElement).closest("button, a, select, input")) return;
+    const head = event.currentTarget;
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const base = tree;
+    let started = false;
+    let drop: { target: string; position: MovePosition } | null = null;
+    const hit = (clientX: number, clientY: number) => {
+      const root = rootRef.current;
+      if (!root) return null;
+      const bounds = root.getBoundingClientRect();
+      const x = clientX - bounds.left;
+      const y = clientY - bounds.top;
+      const placed = new Map<string, Placed>();
+      measure(base, { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight }, null, [], layout, placed, []);
+      for (const [target, { rect }] of placed) {
+        if (target === id || x < rect.x || x > rect.x + rect.w || y < rect.y || y > rect.y + rect.h) continue;
+        return { target, position: movePositionAt((x - rect.x) / (rect.w || 1), (y - rect.y) / (rect.h || 1)) };
+      }
+      return null;
+    };
+    const move = (moveEvent: PointerEvent) => {
+      if (!started) {
+        if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < MOVE_THRESHOLD_PX) return;
+        started = true;
+        head.setPointerCapture(pointerId);
+        document.body.classList.add("ap-moving");
+      }
+      drop = hit(moveEvent.clientX, moveEvent.clientY);
+      setMoving({ id, title, x: moveEvent.clientX, y: moveEvent.clientY, target: drop?.target ?? null, position: drop?.position ?? null });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (!started) return;
+      document.body.classList.remove("ap-moving");
+      setMoving(null);
+      if (!drop) return;
+      const next = movePaneInTree(base, id, drop.target, drop.position);
+      if (JSON.stringify(next) === JSON.stringify(base)) return;
+      setDraft(next);
+      void commit(base, next);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+
+  const dropTarget = moving?.target && moving.position ? panes.get(moving.target)?.rect : undefined;
+  const dropRegion = moving?.position ? paneDropRegionRect(moving.position) : null;
+
   const ids = Object.keys(layout.panes).sort();
+  const full = size ? { x: 0, y: 0, w: size.w, h: size.h } : null;
+  const agentRect = agentZoomed ? full : zoomedPane ? null : panes.get(AGENT)?.rect ?? null;
+  const session = state.sessions.get(sessionId);
+  const agentTitle = session ? sessionDisplayName(session) : "Agent";
   return (
-    <div className={`ap-root${active ? "" : " is-warm"}`} ref={rootRef} aria-hidden={active ? undefined : true}>
+    <div className={`ap-root${active ? "" : " is-warm"}${zoomedPane ? " is-zoomed" : ""}`} ref={rootRef} aria-hidden={active ? undefined : true}>
       {ids.map((id) => {
         const placed = panes.get(id);
         if (!placed) return null;
+        const isZoomed = zoomedPane === id;
         return (
           <PaneView
             key={id}
             meta={layout.panes[id]}
             sessionId={sessionId}
-            rect={placed.rect}
-            axis={placed.axis}
+            rect={isZoomed && full ? full : placed.rect}
+            axis={isZoomed ? null : placed.axis}
             active={active}
+            zoomed={isZoomed}
+            behindZoom={Boolean(zoomedPane) && !isZoomed}
+            moving={moving?.id === id}
             onPressCollapse={pressCollapse}
             onToggleCollapse={toggleCollapse}
             onAbandonPress={abandonPress}
+            onHeadPointerDown={startMove(id, layout.panes[id].title)}
+            onToggleZoom={toggleZoom}
           />
         );
       })}
-      {gutters.map((gutter) => (
+      {dropTarget && dropRegion && moving?.position && (
+        <div key={moving.target} className="ap-drop-target" style={rectStyle(dropTarget)} aria-hidden="true">
+          <div className="pane-drop-overlay">
+            <div
+              className={`pane-drop-region drop-${moving.position}`}
+              style={{ left: `${dropRegion.left}%`, top: `${dropRegion.top}%`, width: `${dropRegion.width}%`, height: `${dropRegion.height}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {moving && createPortal(
+        <div className="pane-drag-ghost ap-move-ghost" style={{ left: moving.x - GHOST_OFFSET_PX, top: moving.y - GHOST_OFFSET_PX }} aria-hidden="true">
+          <span className="pane-drag-ghost-icon">&gt;_</span>
+          <span className="pane-drag-ghost-label">{moving.title}</span>
+        </div>,
+        document.body,
+      )}
+      {agentRect && (
+        <AgentGrip
+          rect={agentRect}
+          title={agentTitle}
+          zoomed={agentZoomed}
+          moving={moving?.id === AGENT}
+          onPointerDown={startMove(AGENT, agentTitle)}
+          onToggleZoom={() => toggleZoom(AGENT)}
+        />
+      )}
+      {!zoomedPane && gutters.map((gutter) => (
         <div
           key={gutter.key}
           className={`ap-gutter ap-gutter-${gutter.axis}`}
@@ -434,6 +562,43 @@ export function AgentPanes({
           onPointerDown={startDrag(gutter)}
         />
       ))}
+    </div>
+  );
+}
+
+/** A header over the top edge of the agent's terminal that shows on hover, so
+ * the agent can be moved and zoomed like a pane. It overlays the terminal
+ * rather than taking a row from it, so showing it never resizes the terminal. */
+function AgentGrip({
+  rect,
+  title,
+  zoomed,
+  moving,
+  onPointerDown,
+  onToggleZoom,
+}: {
+  rect: Rect;
+  title: string;
+  zoomed: boolean;
+  moving: boolean;
+  onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+  onToggleZoom: () => void;
+}) {
+  return (
+    <div
+      className={`ap-agent-grip${moving ? " is-moving" : ""}${zoomed ? " is-zoomed" : ""}`}
+      style={{ left: rect.x, top: rect.y, width: rect.w }}
+    >
+      <div
+        className="ap-head ap-agent-head"
+        title={zoomed ? "Drag to move pane. Double-click empty space or press Esc to restore." : "Drag to move pane. Double-click empty space to zoom."}
+        onPointerDown={onPointerDown}
+        onDoubleClick={onToggleZoom}
+      >
+        <span className="ap-agent-glyph" aria-hidden="true">&gt;_</span>
+        <span className="ap-title">{title}</span>
+        <span className="ap-status ap-dim">agent</span>
+      </div>
     </div>
   );
 }
@@ -449,15 +614,26 @@ function PaneView({
   rect,
   axis,
   active,
+  zoomed,
+  behindZoom,
+  moving,
   onPressCollapse,
   onToggleCollapse,
   onAbandonPress,
+  onHeadPointerDown,
+  onToggleZoom,
 }: {
   meta: PaneMeta;
   sessionId: string;
   rect: Rect;
   axis: "row" | "column" | null;
   active: boolean;
+  zoomed: boolean;
+  /** Another pane is zoomed over this one. */
+  behindZoom: boolean;
+  moving: boolean;
+  onHeadPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+  onToggleZoom: (pane: string) => void;
   /** Pointerdown on the collapse toggle, with the state a click would set. */
   onPressCollapse: (pane: string, collapsed: boolean) => void;
   onToggleCollapse: (pane: string, collapsed: boolean) => void;
@@ -494,10 +670,18 @@ function PaneView({
   const pageUrl = meta.page_token ? `pane-pages/${meta.page_token}/?v=${meta.version}.${localReload}` : "";
   return (
     <div
-      className={`ap-pane ap-${meta.kind}${collapsed ? " is-collapsed" : ""}${sideways ? " is-sideways" : ""}`}
+      className={`ap-pane ap-${meta.kind}${collapsed ? " is-collapsed" : ""}${sideways ? " is-sideways" : ""}${zoomed ? " is-zoomed" : ""}${behindZoom ? " is-behind-zoom" : ""}${moving ? " is-moving" : ""}`}
       style={rectStyle(rect)}
     >
-      <div className="ap-head">
+      <div
+        className="ap-head"
+        title={collapsed ? "Drag to move pane." : zoomed ? "Drag to move pane. Double-click empty space or press Esc to restore." : "Drag to move pane. Double-click empty space to zoom."}
+        onPointerDown={onHeadPointerDown}
+        onDoubleClick={(event) => {
+          if ((event.target as HTMLElement).closest("button, a")) return;
+          if (!collapsed) onToggleZoom(meta.id);
+        }}
+      >
         <button
           type="button"
           className={`ap-glyph ap-glyph-${meta.kind}`}

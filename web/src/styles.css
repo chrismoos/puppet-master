@@ -8716,3 +8716,43 @@ svg.sb-rail-glyph.sb-rail-all-glyph {
 .sb-rail-mini {
   width: 40px;
 }
+.ap-head { cursor: grab; }
+.ap-head:active { cursor: grabbing; }
+.ap-head button, .ap-head a { cursor: pointer; }
+body.ap-moving, body.ap-moving * { cursor: grabbing !important; user-select: none; }
+body.ap-moving iframe { pointer-events: none; }
+.ap-pane.is-moving .ap-head,
+.ap-pane.is-moving .ap-body { opacity: 0.6; }
+.ap-pane.is-zoomed { z-index: 3; }
+.ap-pane.is-behind-zoom { visibility: hidden; }
+.ap-drop-target {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--blue), 0 0 18px color-mix(in srgb, var(--blue) 18%, transparent);
+}
+.pane-drag-ghost.ap-move-ghost { pointer-events: none; z-index: 1000; opacity: 0.9; }
+.ap-agent-grip {
+  position: absolute;
+  z-index: 2;
+  height: 6px;
+  overflow: hidden;
+  pointer-events: auto;
+}
+.ap-agent-grip:hover,
+.ap-agent-grip.is-moving { height: 24px; }
+.ap-agent-head {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+  box-shadow: 0 1px 6px color-mix(in srgb, black 25%, transparent);
+}
+.ap-agent-grip:hover .ap-agent-head,
+.ap-agent-grip.is-moving .ap-agent-head { opacity: 1; }
+.ap-agent-grip.is-moving .ap-agent-head { opacity: 0.6; }
+.ap-agent-glyph {
+  flex: none;
+  width: 20px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--blue);
+}

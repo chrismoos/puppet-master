@@ -119,6 +119,9 @@ import { ApprovalsButton, ApprovalsPage } from "./views/ApprovalsPage";
 import { usePendingApprovals } from "./state/pendingApprovals";
 import { approvalRoutePath } from "@puppet-master/client-core/router";
 import { removeWorkspaceFromTabs, WorkspaceTabs } from "./views/WorkspaceTabs";
+
+/** Saved workspaces stay reachable by their URLs while the tab bar is hidden. */
+const SHOW_WORKSPACE_TABS = false;
 import { PmClient } from "@puppet-master/client-core/ws/client";
 import { TerminalStage } from "./ws/terminal";
 import { releaseEndedOrRemovedSessions, releaseRemovedTerminals } from "@puppet-master/client-core/ws/terminalLifecycle";
@@ -1158,7 +1161,7 @@ function Shell({
               inert={!activeView ? true : undefined}
             >
               <ErrorBoundary key={displayedView.name} resetKey={displayedView.id}>
-                <WorkspaceTabs route={displayedView} workspaces={workspaces} onCreate={newWorkspace} onDelete={setWorkspaceDelete} onRename={(workspace) => setWorkspaceDialog({ kind: "rename", workspace })} onReorder={reorderWorkspaceTabs} />
+                {SHOW_WORKSPACE_TABS && <WorkspaceTabs route={displayedView} workspaces={workspaces} onCreate={newWorkspace} onDelete={setWorkspaceDelete} onRename={(workspace) => setWorkspaceDialog({ kind: "rename", workspace })} onReorder={reorderWorkspaceTabs} />}
                 {workspaceError && <div className="flash-error workspace-flash" role="alert">{workspaceError}</div>}
                 {displayedView.name === "session" && (
                   <SessionPane
@@ -1189,7 +1192,7 @@ function Shell({
           )}
           {!activeView && workspaceError && <div className="flash-error workspace-flash" role="alert">{workspaceError}</div>}
           <ErrorBoundary key={`${route.name}:${"id" in route ? route.id : "bucketId" in route ? route.bucketId : ""}`}>
-          {route.name === "home" && (
+          {SHOW_WORKSPACE_TABS && route.name === "home" && (
             <WorkspaceTabs route={route} workspaces={workspaces} onCreate={newWorkspace} onDelete={setWorkspaceDelete} onRename={(workspace) => setWorkspaceDialog({ kind: "rename", workspace })} onReorder={reorderWorkspaceTabs} />
           )}
           {route.name === "settings" && (

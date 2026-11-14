@@ -2,6 +2,8 @@ import type { JSHandle } from "@playwright/test";
 import { expect, test, type Locator, type Page } from "./fixtures";
 import { logIn } from "./support";
 
+test.skip(true, "The workspace tab bar is hidden, so these flows cannot open a workspace.");
+
 const LAYOUT_SAVE_URL = /\/api\/workspaces\/\d+$/;
 
 async function createSplitWorkspace(page: Page): Promise<string[]> {

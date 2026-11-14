@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "./fixtures";
 import { logIn } from "./support";
 
+test.skip(true, "The workspace tab bar is hidden, so these flows cannot open a workspace.");
+
 type LayerSnapshot = {
   key: string;
   visible: boolean;

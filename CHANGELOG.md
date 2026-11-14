@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [Web] Drag a pane by its header, or the agent by the header that shows when you hover its top edge, to move it beside another pane or swap the two. Double-click a header to zoom that pane or the agent over the others, and press Esc to restore.
+
+- [Web] The saved workspaces tab bar is hidden. Saved workspaces still open from their links.
+
 - [Web] The session list collapses to the bucket rail with the button at the top of the rail, or with ⌘\ (Ctrl+Shift+\ elsewhere), and stays collapsed across reloads. The rail no longer has a Needs you button, All buckets shows a grid icon, and search is a quiet magnifier under the collapse button.
 
 - [Web] A terminal changes size in the same frame as the layout around it when you collapse the session list, collapse or expand a pane, or resize the window, and an agent's redraw at the new size lands with the change instead of jumping in afterwards.
