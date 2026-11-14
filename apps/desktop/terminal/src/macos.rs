@@ -48,6 +48,8 @@ enum ViewInput {
     Paste(String),
     /// ⌘C, handled only when there is a selection to copy.
     Copy,
+    /// ⌘+, ⌘− or ⌘0, which zoom the page and every terminal with it.
+    Zoom(i32),
     /// The pointer moved or ⌘ changed: whether a link is under it decides the cursor.
     Hover {
         point: NSPoint,
@@ -84,6 +86,8 @@ pub enum TerminalEvent {
     Link(String),
     /// Whether ⌘ is held over a link, which shows a pointing hand.
     LinkHover(bool),
+    /// ⌘+ (1), ⌘− (-1) or ⌘0 (0) was pressed in the terminal.
+    Zoom(i32),
     /// A right click the program did not take, in page coordinates.
     ContextMenu { x: f64, y: f64 },
     /// The shell reported the program now in the foreground.
@@ -344,6 +348,9 @@ define_class!(
                     Bool::YES
                 }
                 KVK_ANSI_C => Bool::new(self.emit(ViewInput::Copy)),
+                KVK_ANSI_EQUAL => Bool::new(self.emit(ViewInput::Zoom(ZOOM_IN))),
+                KVK_ANSI_MINUS => Bool::new(self.emit(ViewInput::Zoom(ZOOM_OUT))),
+                KVK_ANSI_0 => Bool::new(self.emit(ViewInput::Zoom(ZOOM_RESET))),
                 _ => Bool::NO,
             }
         }
@@ -516,6 +523,14 @@ impl TerminalView {
 // whatever the keyboard layout.
 const KVK_ANSI_V: u16 = 0x09;
 const KVK_ANSI_C: u16 = 0x08;
+const KVK_ANSI_EQUAL: u16 = 0x18;
+const KVK_ANSI_MINUS: u16 = 0x1B;
+const KVK_ANSI_0: u16 = 0x1D;
+
+/// Zoom steps, as the app's zoom command takes them: in, out, or back to 100%.
+const ZOOM_IN: i32 = 1;
+const ZOOM_OUT: i32 = -1;
+const ZOOM_RESET: i32 = 0;
 
 fn key_for(code: u16) -> Key {
     match code {
@@ -880,6 +895,10 @@ impl NativeTerminal {
         let last_anchor: Cell<Option<(u16, u32)>> = Cell::new(None);
         let over_link = Cell::new(false);
         *self.view.ivars().sink.borrow_mut() = Some(Box::new(move |input| {
+            if let ViewInput::Zoom(step) = input {
+                on_event(TerminalEvent::Zoom(step));
+                return true;
+            }
             if let ViewInput::Preedit(text) = &input {
                 painter.set_preedit(if read_only { "" } else { text });
                 return true;
@@ -897,7 +916,7 @@ impl NativeTerminal {
             };
             let at = placement.get();
             match input {
-                ViewInput::Preedit(_) => true,
+                ViewInput::Preedit(_) | ViewInput::Zoom(_) => true,
                 ViewInput::Hover { point, command } => {
                     let link = command && {
                         let cell = cell_at(vt, at, point);

@@ -177,6 +177,7 @@ mod platform {
                 let id = request.id.clone();
                 let sink = events.clone();
                 let app = app.clone();
+                let zoom_label = key.0.clone();
                 let opened = unsafe {
                     NativeTerminal::open(
                         parent as *mut std::ffi::c_void,
@@ -210,6 +211,14 @@ mod platform {
                                 }
                                 TerminalEvent::Link(href) => {
                                     json!({ "type": "link", "id": id, "href": href })
+                                }
+                                TerminalEvent::Zoom(step) => {
+                                    if let Some(window) = app.get_webview_window(&zoom_label) {
+                                        if let Err(error) = crate::zoom_window(&window, step) {
+                                            eprintln!("could not zoom: {error}");
+                                        }
+                                    }
+                                    return;
                                 }
                                 TerminalEvent::LinkHover(link) => {
                                     json!({ "type": "hover", "id": id, "link": link })

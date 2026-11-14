@@ -223,14 +223,21 @@ async fn a_replay_reports_online_and_a_refusal_carries_its_close_code() {
     let port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
-        let mut socket = tokio_tungstenite::accept_hdr_async(tcp, |_: &Request, mut response: Response| {
-            response.headers_mut().insert("Sec-WebSocket-Protocol", protocol::SUBPROTOCOL.parse().unwrap());
-            Ok(response)
-        })
-        .await
-        .unwrap();
+        let mut socket =
+            tokio_tungstenite::accept_hdr_async(tcp, |_: &Request, mut response: Response| {
+                response.headers_mut().insert(
+                    "Sec-WebSocket-Protocol",
+                    protocol::SUBPROTOCOL.parse().unwrap(),
+                );
+                Ok(response)
+            })
+            .await
+            .unwrap();
         socket
-            .send(output(FLAG_REPLAY | FLAG_REPLAY_START | FLAG_REPLAY_END, b"$ "))
+            .send(output(
+                FLAG_REPLAY | FLAG_REPLAY_START | FLAG_REPLAY_END,
+                b"$ ",
+            ))
             .await
             .unwrap();
         socket
@@ -252,7 +259,14 @@ async fn a_replay_reports_online_and_a_refusal_carries_its_close_code() {
         },
         move |event| log.lock().unwrap().push(event),
     );
-    eventually("the close", || events.lock().unwrap().iter().any(|e| matches!(e, Event::Closed { .. }))).await;
+    eventually("the close", || {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, Event::Closed { .. }))
+    })
+    .await;
     let events = events.lock().unwrap();
     assert!(events.contains(&Event::Online));
     assert!(events.contains(&Event::Closed {

@@ -3,5 +3,5 @@
   "description": "The bundled connect page, which only picks the controller.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-toggle-maximize", "core:window:allow-minimize", "core:window:allow-close", "core:window:allow-is-fullscreen", "core:window:allow-set-fullscreen", "allow-connect", "allow-saved-controller", "allow-open-window", "allow-native-terminal-close-all"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-toggle-maximize", "core:window:allow-minimize", "core:window:allow-close", "core:window:allow-is-fullscreen", "core:window:allow-set-fullscreen", "allow-connect", "allow-saved-controller", "allow-open-window", "allow-native-terminal-close-all", "allow-zoom"]
 }

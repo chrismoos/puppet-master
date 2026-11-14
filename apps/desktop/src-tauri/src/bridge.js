@@ -125,6 +125,20 @@
     return `__CHANNEL__:${id}`;
   };
 
+  // ⌘+, ⌘− and ⌘0 zoom the page, and the native terminals with it. A
+  // terminal with the keyboard sends the same steps from its own view.
+  const ZOOM_KEYS = { "=": 1, "+": 1, "-": -1, "_": -1, "0": 0 };
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (!event.metaKey || event.ctrlKey || event.altKey || !(event.key in ZOOM_KEYS)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      invoke("zoom", { step: ZOOM_KEYS[event.key] }).catch(() => {});
+    },
+    true,
+  );
+
   // Native terminals outlive a page load. The new page opened none of them,
   // so any still drawn belong to the page before it.
   if (window.__PM_NATIVE_TERMINALS__) invoke("native_terminal_close_all").catch(() => {});

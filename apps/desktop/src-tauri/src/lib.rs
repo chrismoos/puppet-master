@@ -55,7 +55,8 @@ pub fn run() {
             native::native_terminal_close,
             native::native_terminal_regions,
             native::native_terminal_close_all,
-            native::native_terminal_theme
+            native::native_terminal_theme,
+            zoom
         ])
         .menu(|app| {
             let menu = Menu::default(app)?;
@@ -98,7 +99,6 @@ fn framed<'a>(
         .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
         .initialization_script(BRIDGE_SCRIPT)
-        .zoom_hotkeys_enabled(true)
         // Tauri's own handler takes dropped files, so the page never sees them.
         .disable_drag_drop_handler();
     #[cfg(target_os = "macos")]
@@ -215,6 +215,7 @@ const CONTROLLER_PERMISSIONS: &[&str] = &[
     "allow-native-terminal-regions",
     "allow-native-terminal-close-all",
     "allow-native-terminal-theme",
+    "allow-zoom",
 ];
 
 fn show_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
@@ -294,6 +295,40 @@ fn open_in_browser(app: &AppHandle, url: &Url) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Page zoom levels per window, which ⌘+, ⌘− and ⌘0 step through.
+static ZOOM: std::sync::Mutex<Option<std::collections::HashMap<String, f64>>> =
+    std::sync::Mutex::new(None);
+/// Each zoom step scales by this much.
+const ZOOM_STEP: f64 = 1.1;
+const ZOOM_MIN: f64 = 0.5;
+const ZOOM_MAX: f64 = 3.0;
+
+/// The zoom after one step: in for a positive step, out for a negative one,
+/// back to 100% for zero.
+fn zoom_after(level: f64, step: i32) -> f64 {
+    if step == 0 {
+        return 1.0;
+    }
+    (level * ZOOM_STEP.powi(step.signum())).clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
+/// Zooms a window's page, and the native terminals in it with it.
+pub(crate) fn zoom_window(window: &WebviewWindow, step: i32) -> Result<(), String> {
+    let level = {
+        let mut zooms = ZOOM.lock().unwrap();
+        let zooms = zooms.get_or_insert_with(Default::default);
+        let level = zooms.entry(window.label().to_string()).or_insert(1.0);
+        *level = zoom_after(*level, step);
+        *level
+    };
+    window.set_zoom(level).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn zoom(window: WebviewWindow, step: i32) -> Result<(), String> {
+    zoom_window(&window, step)
+}
+
 /// Opens a link as a new tab would: the controller's own pages in another
 /// app window, anything else in the default browser.
 pub(crate) fn open_link(app: &AppHandle, url: &str) -> Result<(), String> {
@@ -331,6 +366,15 @@ mod tests {
         permission
             .strip_prefix("allow-")
             .map(|name| name.replace('-', "_"))
+    }
+
+    #[test]
+    fn zoom_steps_in_and_out_within_bounds_and_resets() {
+        assert!((zoom_after(1.0, 1) - ZOOM_STEP).abs() < 1e-9);
+        assert!((zoom_after(1.0, -1) - 1.0 / ZOOM_STEP).abs() < 1e-9);
+        assert_eq!(zoom_after(ZOOM_MAX, 1), ZOOM_MAX);
+        assert_eq!(zoom_after(ZOOM_MIN, -1), ZOOM_MIN);
+        assert_eq!(zoom_after(2.0, 0), 1.0);
     }
 
     #[test]
