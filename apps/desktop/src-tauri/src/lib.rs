@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::ipc::CapabilityBuilder;
 use tauri::menu::{Menu, MenuItem, Submenu};
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -68,36 +68,55 @@ pub fn run() {
         .expect("Puppet Master could not start");
 }
 
-fn main_builder<'a>(
-    app: &'a AppHandle,
-    url: WebviewUrl,
-) -> WebviewWindowBuilder<'a, tauri::Wry, AppHandle> {
-    WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
+/// The bundled connect page's address, which differs by platform.
+fn connect_page_url() -> Url {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let base = "tauri://localhost/";
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let base = "http://tauri.localhost/";
+    Url::parse(base)
+        .and_then(|base| base.join(CONNECT_PAGE))
+        .expect("the connect page address is valid")
+}
+
+/// Shows `url` in the main window, navigating the existing window rather
+/// than replacing it: a destroyed window lets go of its label only later,
+/// so a new one under the same label would be refused.
+fn show_in_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        window.navigate(url)?;
+        return Ok(());
+    }
+    let start = if url == connect_page_url() {
+        WebviewUrl::App(CONNECT_PAGE.into())
+    } else {
+        WebviewUrl::External(url)
+    };
+    WebviewWindowBuilder::new(app, MAIN_WINDOW, start)
         .title("Puppet Master")
         .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
-}
-
-fn replace_main(app: &AppHandle, url: WebviewUrl) -> tauri::Result<WebviewWindow> {
-    if let Some(existing) = app.get_webview_window(MAIN_WINDOW) {
-        existing.destroy()?;
-    }
-    main_builder(app, url)
         .initialization_script(BRIDGE_SCRIPT)
-        .build()
-}
-
-fn show_connect(app: &AppHandle) -> tauri::Result<()> {
-    replace_main(app, WebviewUrl::App(CONNECT_PAGE.into()))?;
+        .build()?;
     Ok(())
 }
 
+fn show_connect(app: &AppHandle) -> tauri::Result<()> {
+    show_in_main(app, connect_page_url())
+}
+
 /// Lets pages from the controller's origin call the app's commands. Only
-/// that origin is granted, so a page it links to cannot reach them.
+/// that origin is granted, so a page it links to cannot reach them. Each
+/// origin gets its own capability, so switching controllers adds rather than
+/// collides.
 fn grant_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
     let origin = url.origin().ascii_serialization();
+    let id: String = origin
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
     app.add_capability(
-        CapabilityBuilder::new("controller")
+        CapabilityBuilder::new(format!("controller-{id}"))
             .remote(format!("{origin}/*"))
             .window("*")
             .permission("core:default"),
@@ -105,9 +124,10 @@ fn grant_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
 }
 
 fn show_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
-    grant_controller(app, url)?;
-    replace_main(app, WebviewUrl::External(url.clone()))?;
-    Ok(())
+    if let Err(error) = grant_controller(app, url) {
+        eprintln!("could not grant the controller's origin: {error}");
+    }
+    show_in_main(app, url.clone())
 }
 
 #[tauri::command]
