@@ -15,7 +15,9 @@ mod ffi {
 
 pub mod atlas;
 pub mod font;
+pub mod protocol;
 pub mod renderer;
+pub mod stream;
 pub mod vt;
 
 // Links the pinned libghostty-vt archive the bindings call into.
