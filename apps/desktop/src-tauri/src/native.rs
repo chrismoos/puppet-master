@@ -117,10 +117,17 @@ mod platform {
                                     json!({ "type": "closed", "id": id, "reason": reason })
                                 }
                                 TerminalEvent::Link(href) if is_web_link(&href) => {
-                                    if let Err(error) = crate::open_link(&app, &href) {
-                                        eprintln!("could not open {href}: {error}");
+                                    match crate::open_link(&app, &href) {
+                                        Ok(()) => return,
+                                        Err(error) => {
+                                            eprintln!("could not open {href}: {error}");
+                                            json!({
+                                                "type": "linkfailed",
+                                                "id": id,
+                                                "reason": format!("Could not open {href}: {error}"),
+                                            })
+                                        }
                                     }
-                                    return;
                                 }
                                 TerminalEvent::Link(href) => {
                                     json!({ "type": "link", "id": id, "href": href })

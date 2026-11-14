@@ -20,7 +20,7 @@ export interface NativeRect {
 }
 
 export type NativeTerminalEvent =
-  | { type: "closed" | "failed"; id: string; reason: string }
+  | { type: "closed" | "failed" | "linkfailed"; id: string; reason: string }
   | { type: "link"; id: string; href: string }
   | { type: "contextmenu"; id: string; x: number; y: number }
   | { type: "command"; id: string; command: string }

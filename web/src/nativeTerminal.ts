@@ -2,6 +2,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import type { Terminal } from "@puppet-master/client-core/gen/pm/v1/pm_pb";
 import { nativeBridge, nativeTerminalsAvailable, type NativePlacement, type NativeRect, type NativeTerminalEvent, type NativeTerminals } from "./native";
 import { mintSocketTicket, withTicket } from "./ws/socketTicket";
+import { TERMINAL_PM_LINK_ERROR_EVENT } from "./ws/terminalLinks";
 import type { TerminalStage } from "./ws/terminal";
 
 /** Wait before attaching again after the native terminal's socket closed. */
@@ -113,6 +114,10 @@ const entries = new Map<string, Entry>();
 function routeEvent(id: string, event: NativeTerminalEvent): void {
   const entry = entries.get(id);
   if (!entry) return;
+  if (event.type === "linkfailed") {
+    window.dispatchEvent(new CustomEvent<string>(TERMINAL_PM_LINK_ERROR_EVENT, { detail: event.reason }));
+    return;
+  }
   if (event.type === "closed" || event.type === "failed") {
     if (entry.handlers) entry.handlers.onClosed();
     else entries.delete(id);

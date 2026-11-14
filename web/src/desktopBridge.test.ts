@@ -10,6 +10,7 @@ describe("the desktop app's window.open", () => {
   beforeAll(() => {
     (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
       invoke: (command: string, args: { url?: string }) => {
+        if (command === "open_window" && args.url?.includes("refused")) return Promise.reject("macOS found no app to open it");
         if (command === "open_window" && args.url) opened.push(args.url);
         return Promise.resolve(false);
       },
@@ -33,5 +34,13 @@ describe("the desktop app's window.open", () => {
     const other = window.open("", "_blank")!;
     (other as unknown as { location: string }).location = "/relative";
     expect(opened).toEqual(["https://share.example.com/forward", new URL("/relative", location.href).href]);
+  });
+
+  it("shows a link that could not be opened as a link error", async () => {
+    const errors: string[] = [];
+    window.addEventListener("pm-terminal-link-error", (event) => errors.push((event as CustomEvent<string>).detail));
+    window.open("https://refused.example.com/", "_blank");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(errors).toEqual(["Could not open https://refused.example.com/: macOS found no app to open it"]);
   });
 });

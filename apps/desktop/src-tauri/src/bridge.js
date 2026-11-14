@@ -4,7 +4,14 @@
     const internals = window.__TAURI_INTERNALS__;
     return internals ? internals.invoke(command, args) : Promise.reject(new Error("not in the desktop app"));
   };
-  const openWindow = (url) => invoke("open_window", { url: new URL(String(url), location.href).href }).catch(() => {});
+  // A failure shows in the page as a link error rather than nothing happening.
+  const openWindow = (url) => {
+    const href = new URL(String(url), location.href).href;
+    return invoke("open_window", { url: href }).catch((error) => {
+      console.error("could not open", href, error);
+      window.dispatchEvent(new CustomEvent("pm-terminal-link-error", { detail: `Could not open ${href}: ${error}` }));
+    });
+  };
 
   document.documentElement.classList.add("pm-desktop");
 

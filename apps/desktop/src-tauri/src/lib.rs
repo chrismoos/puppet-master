@@ -11,6 +11,7 @@ use tauri::ipc::CapabilityBuilder;
 use tauri::menu::{Menu, MenuItem, Submenu};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_notification::NotificationExt;
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_opener::OpenerExt;
 
 const MAIN_WINDOW: &str = "main";
@@ -251,6 +252,26 @@ fn open_window(app: AppHandle, url: String) -> Result<(), String> {
     open_link(&app, &url)
 }
 
+#[cfg(target_os = "macos")]
+fn open_in_browser(_: &AppHandle, url: &Url) -> Result<(), String> {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSString, NSURL};
+    let address = NSString::from_str(url.as_str());
+    let target = NSURL::URLWithString(&address).ok_or("macOS does not accept it as a URL")?;
+    if NSWorkspace::sharedWorkspace().openURL(&target) {
+        Ok(())
+    } else {
+        Err("macOS found no app to open it".into())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_in_browser(app: &AppHandle, url: &Url) -> Result<(), String> {
+    app.opener()
+        .open_url(url.as_str(), None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 /// Opens a link as a new tab would: the controller's own pages in another
 /// app window, anything else in the default browser.
 pub(crate) fn open_link(app: &AppHandle, url: &str) -> Result<(), String> {
@@ -258,10 +279,8 @@ pub(crate) fn open_link(app: &AppHandle, url: &str) -> Result<(), String> {
     let same_origin =
         controller::load(app).is_some_and(|controller| controller.origin() == url.origin());
     if !same_origin {
-        return app
-            .opener()
-            .open_url(url.as_str(), None::<&str>)
-            .map_err(|error| error.to_string());
+        eprintln!("opening {url} in the default browser");
+        return open_in_browser(app, &url);
     }
     let label = format!(
         "window-{}",
