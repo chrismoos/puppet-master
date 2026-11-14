@@ -8779,7 +8779,7 @@ body.ap-moving iframe { pointer-events: none; }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: min(404px, calc(100vw - 28px));
+  width: min(480px, calc(100vw - 28px));
   font-size: 12px;
 }
 .alert-card {
@@ -8826,16 +8826,13 @@ body.ap-moving iframe { pointer-events: none; }
   gap: 8px;
   padding: 11px 12px 0 14px;
 }
-.alert-card-chip {
+.alert-card-dot {
   flex: none;
-  padding: 2px 7px;
-  border-radius: 5px;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--alert-color);
-  background: color-mix(in srgb, var(--alert-color) 14%, transparent);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--alert-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--alert-color) 20%, transparent);
 }
 .alert-card-title {
   min-width: 0;

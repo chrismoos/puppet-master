@@ -6,11 +6,13 @@
 
 - [iOS] In a session with panes, swipe left or right with two fingers to move between the agent, its shell panes and page panes, and double-tap the header to go back to the agent. Dots in the header show which pane is on screen, ⋯ has Agent and New shell pane, and Terminals groups the agent, panes and shell tabs.
 
+- [Daemon] A shell you open in a pane is your own: opening it, stopping it, typing in it or exiting it no longer sends the agent a message. Hiding or restoring any pane no longer messages the agent either.
+
 - [macOS] A desktop app opens your controller in its own window, with no title bar or native window buttons, desktop notifications, a Dock badge for sessions waiting on you, and new windows for pages that would open in a new tab. The window has its own close, minimize and full screen buttons on the top bar. Every terminal is drawn natively with Metal in your terminal theme, with selection, copy, ⌘-click links, input methods, mouse support for programs that ask for it, file drops, page zoom, connection status, a scrollbar, VoiceOver, and instant switching back to recent terminals. Build it with `make desktop-build`.
 
 - [Web] Pages an agent opens in a pane follow Puppet Master's dark or light appearance instead of always rendering light.
 
-- [Web] While you are looking at Puppet Master, alerts show as cards stacked at the top right instead of desktop notifications, with the session's goal and question. Click a card to open its session or × to dismiss it. Each card hides on its own unless the pointer rests on the stack, and up to three show at once. Alerts still go to the desktop while the tab is in the background.
+- [Web] While you are looking at Puppet Master, alerts show as cards stacked at the top right instead of desktop notifications, with a colored dot for the kind of alert and the session's question. Click a card to open its session or × to dismiss it. Each card hides on its own unless the pointer rests on the stack, and up to three show at once, wide enough for typical project names. Alerts still go to the desktop while the tab is in the background.
 
 - [Daemon] When you ask an agent to tell you about something, it can notify you with `notify_user`: a card in the dashboard, or a desktop or phone notification when you are away. A notification can link to a page or preview the session published, or to a board item. Each session can send one every 10 seconds.
 
