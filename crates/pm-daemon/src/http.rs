@@ -457,6 +457,7 @@ fn dashboard_router(daemon: Arc<Daemon>) -> Router {
         .route("/api/workers/{id}/update", post(update_worker))
         .route("/api/buckets/{id}/worker", post(set_bucket_worker))
         .route("/api/sessions/{id}/layout", post(set_session_layout))
+        .route("/api/sessions/{id}/panes", post(open_session_shell))
         .route(
             "/api/sessions/{id}/panes/{pane}/output",
             get(session_pane_output),
@@ -2236,6 +2237,8 @@ async fn set_bucket_worker(
 struct LayoutChange {
     base_rev: u64,
     layout: serde_json::Value,
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 fn pane_error(error: String) -> Response {
@@ -2256,7 +2259,31 @@ async fn set_session_layout(
     if authed_user(&daemon, &headers).is_none() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match crate::panes::user_set_layout(&daemon, id, body.base_rev, body.layout).await {
+    match crate::panes::user_set_layout(&daemon, id, body.base_rev, body.layout, body.tab.as_deref()).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => pane_error(error),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ShellPane {
+    id: String,
+    base_rev: u64,
+    layout: serde_json::Value,
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+async fn open_session_shell(
+    State(daemon): State<Arc<Daemon>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+    Json(body): Json<ShellPane>,
+) -> Response {
+    if authed_user(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match crate::panes::user_open_shell(&daemon, id, &body.id, body.base_rev, body.layout, body.tab.as_deref()).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => pane_error(error),
     }

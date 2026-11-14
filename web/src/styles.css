@@ -2395,6 +2395,17 @@ body.resizing-col {
   }
 }
 
+.sb-rail-working {
+  position: absolute;
+  left: -3px;
+  bottom: -3px;
+  width: 10px;
+  height: 10px;
+  background: var(--blue);
+  border: 2px solid var(--panel-3);
+  border-radius: 50%;
+}
+
 .sb-rail-finished {
   position: absolute;
   right: -3px;
@@ -2446,11 +2457,13 @@ body.resizing-col {
 }
 
 span.sb-rail-glyph {
+  font-size: 16px;
   line-height: 1;
+  letter-spacing: -0.03em;
 }
 
 span.sb-rail-glyph.is-long {
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: -0.02em;
 }
 
@@ -8756,3 +8769,4 @@ body.ap-moving iframe { pointer-events: none; }
   font-size: 10px;
   color: var(--blue);
 }
+.popover-menu.ap-menu { top: auto; z-index: 1000; min-width: 180px; }

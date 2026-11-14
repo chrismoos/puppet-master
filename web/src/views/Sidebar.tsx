@@ -946,6 +946,7 @@ export function Sidebar({
       needsInput: tally?.needsInput ?? 0,
       needsInputUnseen: tally?.needsInputUnseen ?? 0,
       finishedUnseen: tally?.finishedUnseen ?? 0,
+      working: tally?.working ?? 0,
       icon: bucket.icon,
     };
   });

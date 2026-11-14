@@ -13,6 +13,8 @@ use crate::daemon::Daemon;
 
 pub const MAX_PANES: usize = 6;
 pub const AGENT_PANE: &str = "agent";
+/// The root leaf of a shell tab's own layout: the tab's shell.
+pub const TAB_PANE: &str = "tab";
 const EXIT_MARKER: &str = "[pane exited with status ";
 const WATCH_INTERVAL: Duration = Duration::from_secs(1);
 const WAIT_POLL: Duration = Duration::from_millis(250);
@@ -29,6 +31,30 @@ pub struct Layout {
     pub tree: Value,
     pub panes: BTreeMap<String, Pane>,
     pub unplaced: Vec<String>,
+    /// Shell tabs split into panes, by the tab's shell terminal id. The user
+    /// arranges these, and the agent's own layout never holds their panes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tabs: BTreeMap<String, Value>,
+}
+
+impl Layout {
+    /// The shell tab holding a pane, if it is in one.
+    fn tab_of(&self, id: &str) -> Option<String> {
+        let mut leaves = Vec::new();
+        self.tabs.iter().find_map(|(tab, tree)| {
+            leaves.clear();
+            collect_leaves(tree, &mut leaves).ok()?;
+            leaves.iter().any(|leaf| leaf == id).then(|| tab.clone())
+        })
+    }
+
+    fn tab_panes(&self) -> std::collections::HashSet<String> {
+        let mut leaves = Vec::new();
+        for tree in self.tabs.values() {
+            let _ = collect_leaves(tree, &mut leaves);
+        }
+        leaves.into_iter().filter(|id| id != TAB_PANE).collect()
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -62,8 +88,17 @@ pub struct Pane {
     /// Shrunk to its header by the user; the program keeps running.
     #[serde(default)]
     pub collapsed: bool,
+    /// The title was given explicitly. An untitled terminal pane shows its
+    /// running program's name instead.
+    #[serde(default = "titled_by_default")]
+    pub titled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+}
+
+/// A pane stored before titles were tracked keeps showing the title it had.
+fn titled_by_default() -> bool {
+    true
 }
 
 /// One row per session that has arranged panes. A row goes with its session.
@@ -171,6 +206,7 @@ impl Panes {
                 tree: json!({ "pane": AGENT_PANE }),
                 panes: BTreeMap::new(),
                 unplaced: Vec::new(),
+                tabs: BTreeMap::new(),
             })
     }
 
@@ -188,6 +224,7 @@ impl Panes {
             tree: json!({ "pane": AGENT_PANE }),
             panes: BTreeMap::new(),
             unplaced: Vec::new(),
+            tabs: BTreeMap::new(),
         });
         let value = change(&mut layout)?;
         layout.rev += 1;
@@ -281,17 +318,21 @@ fn collect_leaves(node: &Value, out: &mut Vec<String>) -> Result<(), String> {
 }
 
 fn validate(tree: &Value, panes: &BTreeMap<String, Pane>) -> Result<Vec<String>, String> {
+    validate_rooted(tree, panes, AGENT_PANE)
+}
+
+fn validate_rooted(tree: &Value, panes: &BTreeMap<String, Pane>, root: &str) -> Result<Vec<String>, String> {
     let mut leaves = Vec::new();
     collect_leaves(tree, &mut leaves)?;
-    if leaves.iter().filter(|id| *id == AGENT_PANE).count() != 1 {
-        return Err("the layout must contain the \"agent\" pane exactly once".into());
+    if leaves.iter().filter(|id| *id == root).count() != 1 {
+        return Err(format!("the layout must contain the {root:?} pane exactly once"));
     }
     let mut seen = std::collections::HashSet::new();
     for id in &leaves {
         if !seen.insert(id.clone()) {
             return Err(format!("pane {id:?} appears more than once"));
         }
-        if id != AGENT_PANE && !panes.contains_key(id) {
+        if id != root && !panes.contains_key(id) {
             return Err(format!("no pane named {id:?}; open it first"));
         }
     }
@@ -302,10 +343,14 @@ fn validate(tree: &Value, panes: &BTreeMap<String, Pane>) -> Result<Vec<String>,
 }
 
 fn place(tree: &Value, id: &str) -> Value {
+    place_rooted(tree, id, AGENT_PANE)
+}
+
+fn place_rooted(tree: &Value, id: &str, root: &str) -> Value {
     let leaf = json!({ "pane": id });
-    if leaf_id(tree) == Some(AGENT_PANE) {
+    if leaf_id(tree) == Some(root) {
         return json!({ "row": [
-            { "pane": AGENT_PANE, "size": 100 - DEFAULT_NEW_PANE_SIZE },
+            { "pane": root, "size": 100 - DEFAULT_NEW_PANE_SIZE },
             { "pane": id, "size": DEFAULT_NEW_PANE_SIZE }
         ]});
     }
@@ -318,7 +363,7 @@ fn place(tree: &Value, id: &str) -> Value {
             let mut node = last.clone();
             node["column"] = Value::Array(column);
             items.push(node);
-        } else if leaf_id(&last).is_some_and(|last_id| last_id != AGENT_PANE) {
+        } else if leaf_id(&last).is_some_and(|last_id| last_id != root) {
             let mut node = json!({ "column": [ { "pane": leaf_id(&last).unwrap() }, leaf ] });
             if let Some(size) = last.get("size") {
                 node["size"] = size.clone();
@@ -661,6 +706,7 @@ pub async fn call_tool(
                     return Err(format!("at most {MAX_PANES} panes; close one first"));
                 }
             }
+            let titled = args["title"].as_str().is_some_and(|t| !t.trim().is_empty());
             let (terminal_id, launch) =
                 start_terminal(daemon, session_id, &title, command.as_deref(), cwd, &env)?;
             let pane = Pane {
@@ -684,6 +730,7 @@ pub async fn call_tool(
                 version: 0,
                 user_input: command.is_none(),
                 collapsed: false,
+                titled,
                 exit_code: None,
             };
             let (layout, ()) = panes.update(daemon.storage(), session_id, |layout| {
@@ -779,6 +826,7 @@ pub async fn call_tool(
                         version: 0,
                         user_input: true,
                         collapsed: false,
+                        titled: true,
                         exit_code: None,
                     },
                 );
@@ -807,9 +855,13 @@ pub async fn call_tool(
                     ));
                 }
                 let leaves = validate(&tree, &layout.panes)?;
+                let in_tabs = layout.tab_panes();
+                if let Some(id) = leaves.iter().find(|id| in_tabs.contains(*id)) {
+                    return Err(format!("pane {id:?} is in one of the user's shell tabs"));
+                }
                 layout.unplaced.retain(|id| !leaves.contains(id));
                 for id in layout.panes.keys() {
-                    if !leaves.contains(id) && !layout.unplaced.contains(id) {
+                    if !leaves.contains(id) && !layout.unplaced.contains(id) && !in_tabs.contains(id) {
                         layout.unplaced.push(id.clone());
                     }
                 }
@@ -1013,6 +1065,7 @@ pub async fn call_tool(
                     .get_mut(&id)
                     .ok_or_else(|| format!("no pane named {id:?}"))?;
                 entry.title = title.clone();
+                entry.titled = true;
                 Ok(())
             })?;
             publish(daemon, session_id, &layout);
@@ -1093,6 +1146,13 @@ fn remove_pane(daemon: &Daemon, session_id: u64, id: &str) -> Result<(Layout, Pa
             .ok_or_else(|| format!("no pane named {id:?}"))?;
         layout.tree = remove(&layout.tree, id).unwrap_or_else(|| json!({ "pane": AGENT_PANE }));
         layout.unplaced.retain(|other| other != id);
+        layout.tabs = std::mem::take(&mut layout.tabs)
+            .into_iter()
+            .filter_map(|(tab, tree)| {
+                let kept = remove(&tree, id)?;
+                (leaf_id(&kept) != Some(TAB_PANE)).then_some((tab, kept))
+            })
+            .collect();
         Ok(pane)
     })
 }
@@ -1141,10 +1201,10 @@ fn spawn_watcher(daemon: Arc<Daemon>, session_id: u64, id: String) {
                 return;
             }
             watched_terminal = Some(terminal_id);
-            if pane.exit_code.is_some() {
+            if pane.exit_code.is_some() && pane.kind != "shell" {
                 continue;
             }
-            let ended = terminal_exit(&daemon, terminal_id);
+            let ended = terminal_exit(&daemon, terminal_id).or(pane.exit_code);
             let typed_exit = if ended.is_none() && pane.launch.is_some() {
                 terminal_text(&daemon, terminal_id)
                     .await
@@ -1153,6 +1213,26 @@ fn spawn_watcher(daemon: Arc<Daemon>, session_id: u64, id: String) {
             } else {
                 None
             };
+            let layout_now = daemon.panes.get(session_id);
+            let tab_ended = layout_now
+                .tab_of(&id)
+                .and_then(|tab| tab.parse::<u64>().ok())
+                .is_some_and(|tab| terminal_exit(&daemon, tab).is_some());
+            if tab_ended {
+                if let Ok((layout, pane)) = remove_pane(&daemon, session_id, &id) {
+                    release(&daemon, &pane);
+                    publish(&daemon, session_id, &layout);
+                }
+                return;
+            }
+            if pane.kind == "shell" && ended.is_some() {
+                if let Ok((layout, pane)) = remove_pane(&daemon, session_id, &id) {
+                    release(&daemon, &pane);
+                    publish(&daemon, session_id, &layout);
+                    notify(&daemon, session_id, format!("Shell pane \"{id}\" exited and was closed.")).await;
+                }
+                return;
+            }
             if let Some(code) = ended.or(typed_exit) {
                 if let Ok((layout, ())) =
                     daemon.panes.update(daemon.storage(), session_id, |layout| {
@@ -1171,11 +1251,13 @@ fn spawn_watcher(daemon: Arc<Daemon>, session_id: u64, id: String) {
 
 // ---- user actions from the web ----
 
+/// Lays out the agent's view, or with `tab` that shell tab's own view.
 pub async fn user_set_layout(
     daemon: &Arc<Daemon>,
     session_id: u64,
     base_rev: u64,
     tree: Value,
+    tab: Option<&str>,
 ) -> Result<Value, String> {
     let (layout, ()) = daemon
         .panes
@@ -1183,15 +1265,119 @@ pub async fn user_set_layout(
             if layout.rev != base_rev {
                 return Err("conflict".into());
             }
-            let leaves = validate(&tree, &layout.panes)?;
+            let root = if tab.is_some() { TAB_PANE } else { AGENT_PANE };
+            let leaves = validate_rooted(&tree, &layout.panes, root)?;
             if leaves.iter().any(|id| layout.unplaced.contains(id)) {
                 return Err("hidden panes cannot be placed by a resize".into());
             }
-            layout.tree = tree.clone();
+            if leaves.iter().any(|id| id != root && layout.tab_of(id).as_deref() != tab) {
+                return Err("a pane can only be arranged in the view it is in".into());
+            }
+            match tab {
+                Some(tab) => {
+                    layout.tabs.insert(tab.to_string(), tree.clone());
+                }
+                None => layout.tree = tree.clone(),
+            }
             Ok(())
         })?;
     publish(daemon, session_id, &layout);
     Ok(json!({ "rev": layout.rev }))
+}
+
+/// Opens a shell pane the user asked for, in the agent's view or with `tab`
+/// in that shell tab's view. The layout places it, unless the layout changed
+/// since `base_rev`, in which case it is placed the way an agent's new pane is.
+pub async fn user_open_shell(
+    daemon: &Arc<Daemon>,
+    session_id: u64,
+    id: &str,
+    base_rev: u64,
+    tree: Value,
+    tab: Option<&str>,
+) -> Result<Value, String> {
+    if let Some(tab) = tab {
+        let owned = tab
+            .parse::<u64>()
+            .ok()
+            .and_then(|terminal_id| daemon.storage().get_terminal(terminal_id).ok())
+            .is_some_and(|terminal| terminal.session_id == session_id && terminal_exit(daemon, terminal.id).is_none());
+        if !owned {
+            return Err("that shell tab is not open in this session".into());
+        }
+    }
+    let id = id.trim();
+    if id.is_empty() || id == AGENT_PANE {
+        return Err("a shell pane needs an id other than \"agent\"".into());
+    }
+    {
+        let current = daemon.panes.get(session_id);
+        if current.panes.contains_key(id) {
+            return Err(format!("a pane named {id:?} already exists"));
+        }
+        if current.panes.len() >= MAX_PANES {
+            return Err(format!("at most {MAX_PANES} panes; close one first"));
+        }
+    }
+    let title = format!("shell {}", id.trim_start_matches("shell-"));
+    let (terminal_id, _) = start_terminal(daemon, session_id, &title, None, None, &BTreeMap::new())?;
+    let pane = Pane {
+        id: id.to_string(),
+        kind: "shell".into(),
+        title,
+        terminal_id: Some(terminal_id),
+        command: None,
+        launch: None,
+        cwd: None,
+        env: BTreeMap::new(),
+        page_token: None,
+        page_dir: None,
+        page_port: None,
+        page_forward: None,
+        version: 0,
+        user_input: true,
+        collapsed: false,
+        titled: false,
+        exit_code: None,
+    };
+    let placed = daemon.panes.update(daemon.storage(), session_id, |layout| {
+        let mut panes = layout.panes.clone();
+        panes.insert(id.to_string(), pane.clone());
+        let root = if tab.is_some() { TAB_PANE } else { AGENT_PANE };
+        let current = match tab {
+            Some(tab) => layout.tabs.get(tab).cloned().unwrap_or_else(|| json!({ "pane": TAB_PANE })),
+            None => layout.tree.clone(),
+        };
+        let fits = layout.rev == base_rev
+            && validate_rooted(&tree, &panes, root).is_ok_and(|leaves| {
+                leaves.iter().any(|leaf| leaf == id)
+                    && leaves.iter().all(|leaf| leaf == root || leaf == id || layout.tab_of(leaf).as_deref() == tab)
+            });
+        let next = if fits { tree.clone() } else { place_rooted(&current, id, root) };
+        match tab {
+            Some(tab) => {
+                layout.tabs.insert(tab.to_string(), next);
+            }
+            None => layout.tree = next,
+        }
+        layout.panes = panes;
+        Ok(())
+    });
+    let (layout, ()) = match placed {
+        Ok(placed) => placed,
+        Err(error) => {
+            let _ = daemon.close_terminal(terminal_id);
+            return Err(error);
+        }
+    };
+    publish(daemon, session_id, &layout);
+    spawn_watcher(daemon.clone(), session_id, id.to_string());
+    if tab.is_none() {
+        let notice = format!("The user opened a shell in pane \"{id}\" for their own use.");
+        let notifier = daemon.clone();
+        tokio::spawn(async move { notify(&notifier, session_id, notice).await });
+    }
+    Ok(json!({ "ok": true, "id": id, "rev": layout.rev }))
 }
 
 pub async fn user_pane_action(
@@ -1206,6 +1392,9 @@ pub async fn user_pane_action(
             let (layout, ()) = panes.update(daemon.storage(), session_id, |layout| {
                 if !layout.panes.contains_key(id) {
                     return Err(format!("no pane named {id:?}"));
+                }
+                if layout.tab_of(id).is_some() {
+                    return Err("a pane in a shell tab can be stopped but not hidden".into());
                 }
                 layout.tree =
                     remove(&layout.tree, id).unwrap_or_else(|| json!({ "pane": AGENT_PANE }));
@@ -1318,6 +1507,7 @@ mod tests {
             version: 0,
             user_input: false,
             collapsed: false,
+            titled: true,
             exit_code: None,
         }
     }
@@ -1411,6 +1601,7 @@ mod tests {
             tree: json!({ "pane": "agent" }),
             panes: panes(&["a"]),
             unplaced: vec![],
+            tabs: BTreeMap::new(),
         };
         let json = record(9, &layout).json;
         assert!(

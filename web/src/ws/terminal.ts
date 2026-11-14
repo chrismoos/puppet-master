@@ -241,10 +241,16 @@ export class TerminalStage {
     this.disposeLayer(`t:${terminalId}`);
   }
 
+  /** True when the program in a terminal takes mouse clicks itself. Layer
+   * keys are `s:<session id>` for an agent and `t:<terminal id>` for a shell. */
+  reportsMouse(key: string): boolean {
+    return (this.layers.get(key)?.term.modes.mouseTrackingMode ?? "none") !== "none";
+  }
+
   /** Asks the PTY now for the size a session's shown terminal is about to
    * take, such as on pointerdown before a click that resizes its host. */
-  anticipate(sessionId: bigint, width: number, height: number): void {
-    const layer = this.layers.get(`s:${sessionId}`);
+  anticipate(key: string, width: number, height: number): void {
+    const layer = this.layers.get(key);
     if (!layer?.handle || this.visibleId !== layer.key) return;
     if (!layer.replayPainted || layer.initialReplayPending) return;
     const grid = layer.term.gridFor(width, height);
@@ -261,8 +267,8 @@ export class TerminalStage {
   }
 
   /** The anticipated resize did not happen: the size on screen is asked for again. */
-  cancelAnticipation(sessionId: bigint): void {
-    const layer = this.layers.get(`s:${sessionId}`);
+  cancelAnticipation(key: string): void {
+    const layer = this.layers.get(key);
     if (!layer?.anticipated) return;
     this.dropAnticipation(layer);
     if (this.visibleId === layer.key) this.layoutVisibleLayer(layer);

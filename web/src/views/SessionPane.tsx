@@ -1,5 +1,5 @@
 import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AgentPanes, HiddenPaneTray, isPaneForward, layoutHasPanes, paneTerminalIds, parseSessionLayout } from "./AgentPanes";
+import { AGENT_ONLY_LAYOUT, AgentPanes, HiddenPaneTray, isPaneForward, layoutHasPanes, paneTerminalIds, parseSessionLayout } from "./AgentPanes";
 import { ContextPanel } from "../components/ContextPanel";
 import { sessionRoutePath } from "@puppet-master/client-core/router";
 import { navigate } from "../router";
@@ -605,12 +605,24 @@ export function SessionPane({
             {...fileDrop.handlers}
           >
             <div className="term-host" ref={hostRef} />
-            {warmPaneSessions.map((id) => {
-              const layout = parseSessionLayout(state.sessionLayouts.get(id));
-              if (!layout || !layoutHasPanes(layout)) return null;
+            {/* Every live session lays its agent out the same way, alone or
+                beside panes. Only sessions with panes stay mounted once hidden. */}
+            {[...(ended || warmPaneSessions.includes(sessionId) ? [] : [sessionId]), ...warmPaneSessions].map((id) => {
+              const layout = parseSessionLayout(state.sessionLayouts.get(id)) ?? AGENT_ONLY_LAYOUT;
               const shown = id === sessionId && selectedTerminal === "agent" && !ended;
               return <AgentPanes key={id} sessionId={id} layout={layout} hostRef={hostRef} active={shown} stage={stage} />;
             })}
+            {active && !ended && selected?.kind === TerminalKind.SHELL && (
+              <AgentPanes
+                key={`t:${selected.id}`}
+                sessionId={sessionId}
+                layout={paneLayout ?? AGENT_ONLY_LAYOUT}
+                hostRef={hostRef}
+                active
+                stage={stage}
+                tab={selected.id.toString()}
+              />
+            )}
             <SessionDropOverlay state={fileDrop.state} />
             {session && ended && selectedTerminal === "agent" && (
               <div className="term-overlay">

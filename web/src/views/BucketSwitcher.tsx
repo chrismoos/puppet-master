@@ -10,6 +10,8 @@ export interface SwitcherBucket {
   needsInputUnseen?: number;
   /** Idle sessions whose finished turn has not been viewed. */
   finishedUnseen?: number;
+  /** Sessions whose agent is mid-turn. */
+  working?: number;
   icon?: RailIcon;
 }
 

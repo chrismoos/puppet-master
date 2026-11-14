@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- [Web] Right-click an agent's terminal, a pane's header or the agent's hover header to open a new shell beside it, in any direction. A shell tab splits the same way, and the shells inside it close with the tab. Every live session shows the hover header, including one with no panes yet.
+
+- [Web] A shell or program pane nobody named shows the program it is running, such as bash or vim, until it is given a title.
+
+- [Daemon] A shell pane closes when its shell exits.
+
+- [Web] A bucket with a session mid-turn shows a blue dot on its rail button, and bucket letters on the rail are larger.
+
 - [Web] Drag a pane by its header, or the agent by the header that shows when you hover its top edge, to move it beside another pane or swap the two. Double-click a header to zoom that pane or the agent over the others, and press Esc to restore.
 
 - [Web] The saved workspaces tab bar is hidden. Saved workspaces still open from their links.

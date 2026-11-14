@@ -95,6 +95,12 @@ function insertBeside(node: LayoutNode, target: string, source: string, axis: Ax
   return build(parts.axis, parts.items.map((item) => insertBeside(item, target, source, axis, before)), node.size);
 }
 
+/** The tree with a new leaf `id` beside `target`. */
+export function insertPaneInTree(tree: LayoutNode, id: string, target: string, position: Exclude<MovePosition, "swap">): LayoutNode {
+  const axis: Axis = position === "left" || position === "right" ? "row" : "column";
+  return insertBeside(tree, target, id, axis, position === "left" || position === "above");
+}
+
 /** The tree with `source` moved beside `target`, or the two exchanged. */
 export function movePaneInTree(tree: LayoutNode, source: string, target: string, position: MovePosition): LayoutNode {
   if (source === target) return tree;

@@ -7,7 +7,7 @@ import type { TerminalStage } from "../ws/terminal";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TerminalViewport } from "./WorkspacePage";
 import { paneDropRegionRect } from "@puppet-master/client-core/state/workspace";
-import { movePaneInTree, movePositionAt, type LayoutNode, type MovePosition } from "./paneMoves";
+import { insertPaneInTree, movePaneInTree, movePositionAt, type LayoutNode, type MovePosition } from "./paneMoves";
 
 interface PaneMeta {
   id: string;
@@ -20,6 +20,8 @@ interface PaneMeta {
   user_input: boolean;
   exit_code?: number;
   collapsed?: boolean;
+  /** False when nobody named the pane, which then shows its running program. */
+  titled?: boolean;
 }
 
 export interface SessionPaneLayout {
@@ -27,9 +29,13 @@ export interface SessionPaneLayout {
   tree: LayoutNode;
   panes: Record<string, PaneMeta>;
   unplaced: string[];
+  /** Shell tabs split into panes, by the tab's shell terminal id. */
+  tabs?: Record<string, LayoutNode>;
 }
 
 const AGENT = "agent";
+/** The root of a shell tab's own layout: the tab's shell. */
+const TAB = "tab";
 
 export function parseSessionLayout(json: string | undefined): SessionPaneLayout | null {
   if (!json) return null;
@@ -40,6 +46,9 @@ export function parseSessionLayout(json: string | undefined): SessionPaneLayout 
     return null;
   }
 }
+
+/** A live session's layout before anything was ever placed: the agent alone. */
+export const AGENT_ONLY_LAYOUT: SessionPaneLayout = { rev: 0, tree: { pane: AGENT }, panes: {}, unplaced: [] };
 
 /** True when the layout shows anything besides the agent. */
 export function layoutHasPanes(layout: SessionPaneLayout | null): boolean {
@@ -258,11 +267,14 @@ export function AgentPanes({
   hostRef,
   active,
   stage,
+  tab,
 }: {
   sessionId: string;
   layout: SessionPaneLayout;
   hostRef: RefObject<HTMLDivElement | null>;
   stage: TerminalStage;
+  /** Lays out this shell tab, rooted at its shell, instead of the agent's view. */
+  tab?: string;
   /** Shown and placing the agent's terminal. An inactive layout stays mounted
    * and connected but hidden, so returning to its session shows it at once. */
   active: boolean;
@@ -271,7 +283,9 @@ export function AgentPanes({
   const rootRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [draft, setDraft] = useState<LayoutNode | null>(null);
-  const tree = draft ?? servedLayout.tree;
+  const rootId = tab ? TAB : AGENT;
+  const treeOf = (of: SessionPaneLayout): LayoutNode => (tab ? of.tabs?.[tab] ?? { pane: TAB } : of.tree);
+  const tree = draft ?? treeOf(servedLayout);
   // Collapse and expand apply locally on click rather than after the daemon answers.
   const [collapseDraft, setCollapseDraft] = useState<Record<string, boolean>>({});
   useEffect(() => {
@@ -279,18 +293,18 @@ export function AgentPanes({
     setCollapseDraft({});
   }, [servedLayout.rev]);
   const layout = withCollapsed(servedLayout, collapseDraft);
-  const sessionKey = BigInt(sessionId);
+  const layerKey = tab ? `t:${tab}` : `s:${sessionId}`;
 
   const agentRectIf = (pane: string, collapsed: boolean) => {
     const root = rootRef.current;
     if (!root) return undefined;
     const placed = new Map<string, Placed>();
     measure(tree, { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight }, null, [], withCollapsed(layout, { [pane]: collapsed }), placed, []);
-    return placed.get(AGENT)?.rect;
+    return placed.get(rootId)?.rect;
   };
   const pressCollapse = (pane: string, collapsed: boolean) => {
     const rect = agentRectIf(pane, collapsed);
-    if (rect) stage.anticipate(sessionKey, rect.w, rect.h);
+    if (rect) stage.anticipate(layerKey, rect.w, rect.h);
   };
   const toggleCollapse = (pane: string, collapsed: boolean) => {
     setCollapseDraft((current) => ({ ...current, [pane]: collapsed }));
@@ -301,9 +315,40 @@ export function AgentPanes({
       });
     });
   };
-  const abandonPress = () => stage.cancelAnticipation(sessionKey);
+  const abandonPress = () => stage.cancelAnticipation(layerKey);
 
   const [moving, setMoving] = useState<MoveDrag | null>(null);
+  const [menu, setMenu] = useState<{ pane: string; x: number; y: number } | null>(null);
+  const openMenu = (pane: string) => (event: { clientX: number; clientY: number; preventDefault: () => void }) => {
+    event.preventDefault();
+    setMenu({ pane, x: event.clientX, y: event.clientY });
+  };
+  const openShell = (target: string, position: Exclude<MovePosition, "swap">) => {
+    const current = latest.current;
+    let n = 1;
+    while (current.panes[`shell-${n}`]) n += 1;
+    const id = `shell-${n}`;
+    void authedFetch(`/api/sessions/${sessionId}/panes`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, base_rev: current.rev, layout: insertPaneInTree(treeOf(current), id, target, position), tab }),
+    });
+  };
+  // The agent's terminal lives outside this tree, so its right-click is
+  // caught on the host. A program reading the mouse keeps its own clicks.
+  const openMenuRef = useRef(openMenu);
+  openMenuRef.current = openMenu;
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !active) return;
+    const onMenu = (event: MouseEvent) => {
+      const modified = event.shiftKey || event.altKey || event.ctrlKey || event.metaKey;
+      if (!modified && stage.reportsMouse(layerKey)) return;
+      openMenuRef.current(rootId)(event);
+    };
+    host.addEventListener("contextmenu", onMenu);
+    return () => host.removeEventListener("contextmenu", onMenu);
+  }, [hostRef, active, stage, layerKey, rootId]);
   // Zooming is a view of this browser only, never saved to the layout.
   const [zoomed, setZoomed] = useState<string | null>(null);
   const toggleZoom = (pane: string) => setZoomed((current) => (current === pane ? null : pane));
@@ -341,7 +386,7 @@ export function AgentPanes({
   const gutters: Gutter[] = [];
   if (size) measure(tree, { x: 0, y: 0, w: size.w, h: size.h }, null, [], layout, panes, gutters);
   const zoomedPane = zoomed && panes.has(zoomed) && !layout.panes[zoomed]?.collapsed ? zoomed : null;
-  const agentZoomed = zoomedPane === AGENT;
+  const agentZoomed = zoomedPane === rootId;
   useEffect(() => {
     if (zoomed && !zoomedPane) setZoomed(null);
   }, [zoomed, zoomedPane]);
@@ -356,7 +401,7 @@ export function AgentPanes({
     host.style.visibility = zoomedPane && !agentZoomed ? "hidden" : "";
     const fresh = new Map<string, Placed>();
     measure(tree, { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight }, null, [], layout, fresh, []);
-    const rect = agentZoomed ? { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight } : fresh.get(AGENT)?.rect;
+    const rect = agentZoomed ? { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight } : fresh.get(rootId)?.rect;
     if (!rect) return;
     const next = { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.w}px`, height: `${rect.h}px` };
     if (
@@ -382,18 +427,18 @@ export function AgentPanes({
   const commit = useCallback(
     async (dragged: LayoutNode, next: LayoutNode) => {
       const current = latest.current;
-      if (JSON.stringify(stripSizes(current.tree)) !== JSON.stringify(stripSizes(dragged))) {
+      if (JSON.stringify(stripSizes(treeOf(current))) !== JSON.stringify(stripSizes(dragged))) {
         setDraft(null);
         return;
       }
       const response = await authedFetch(`/api/sessions/${sessionId}/layout`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ base_rev: current.rev, layout: next }),
+        body: JSON.stringify({ base_rev: current.rev, layout: next, tab }),
       });
       if (!response.ok) setDraft(null);
     },
-    [sessionId],
+    [sessionId, tab],
   );
 
   // A drag resizes live, at most once per animation frame, and commits the
@@ -499,9 +544,9 @@ export function AgentPanes({
 
   const ids = Object.keys(layout.panes).sort();
   const full = size ? { x: 0, y: 0, w: size.w, h: size.h } : null;
-  const agentRect = agentZoomed ? full : zoomedPane ? null : panes.get(AGENT)?.rect ?? null;
+  const agentRect = agentZoomed ? full : zoomedPane ? null : panes.get(rootId)?.rect ?? null;
   const session = state.sessions.get(sessionId);
-  const agentTitle = session ? sessionDisplayName(session) : "Agent";
+  const agentTitle = tab ? "shell" : session ? sessionDisplayName(session) : "Agent";
   return (
     <div className={`ap-root${active ? "" : " is-warm"}${zoomedPane ? " is-zoomed" : ""}`} ref={rootRef} aria-hidden={active ? undefined : true}>
       {ids.map((id) => {
@@ -523,6 +568,7 @@ export function AgentPanes({
             onToggleCollapse={toggleCollapse}
             onAbandonPress={abandonPress}
             onHeadPointerDown={startMove(id, layout.panes[id].title)}
+            onHeadContextMenu={openMenu(id)}
             onToggleZoom={toggleZoom}
           />
         );
@@ -549,9 +595,24 @@ export function AgentPanes({
           rect={agentRect}
           title={agentTitle}
           zoomed={agentZoomed}
-          moving={moving?.id === AGENT}
-          onPointerDown={startMove(AGENT, agentTitle)}
-          onToggleZoom={() => toggleZoom(AGENT)}
+          kind={tab ? "shell" : "agent"}
+          moving={moving?.id === rootId}
+          onPointerDown={startMove(rootId, agentTitle)}
+          onToggleZoom={() => toggleZoom(rootId)}
+          onContextMenu={openMenu(rootId)}
+        />
+      )}
+      {menu && (
+        <PaneMenu
+          x={menu.x}
+          y={menu.y}
+          zoomed={zoomedPane === menu.pane}
+          canZoom={!tree.pane && (menu.pane === rootId || !layout.panes[menu.pane]?.collapsed)}
+          canHide={menu.pane !== rootId && !tab}
+          onShell={(position) => openShell(menu.pane, position)}
+          onZoom={() => toggleZoom(menu.pane)}
+          onHide={() => void paneAction(sessionId, menu.pane, "hide")}
+          onClose={() => setMenu(null)}
         />
       )}
       {!zoomedPane && gutters.map((gutter) => (
@@ -566,23 +627,105 @@ export function AgentPanes({
   );
 }
 
+const SHELL_PLACES: Array<[Exclude<MovePosition, "swap">, string]> = [
+  ["right", "New shell right"],
+  ["below", "New shell below"],
+  ["left", "New shell left"],
+  ["above", "New shell above"],
+];
+/** Keeps the menu this far inside the window edges. */
+const MENU_MARGIN_PX = 8;
+
+function PaneMenu({
+  x,
+  y,
+  zoomed,
+  canZoom,
+  canHide,
+  onShell,
+  onZoom,
+  onHide,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  zoomed: boolean;
+  canZoom: boolean;
+  canHide: boolean;
+  onShell: (position: Exclude<MovePosition, "swap">) => void;
+  onZoom: () => void;
+  onHide: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const menu = ref.current;
+    if (!menu) return;
+    setPlace({
+      left: Math.max(MENU_MARGIN_PX, Math.min(x, window.innerWidth - menu.offsetWidth - MENU_MARGIN_PX)),
+      top: Math.max(MENU_MARGIN_PX, Math.min(y, window.innerHeight - menu.offsetHeight - MENU_MARGIN_PX)),
+    });
+    menu.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [x, y]);
+  useEffect(() => {
+    const away = (event: Event) => {
+      if (!ref.current?.contains(event.target as Node)) onClose();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("contextmenu", away, true);
+    window.addEventListener("keydown", key);
+    window.addEventListener("blur", onClose);
+    window.addEventListener("resize", onClose);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("contextmenu", away, true);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("blur", onClose);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [onClose]);
+  const pick = (action: () => void) => () => {
+    onClose();
+    action();
+  };
+  return createPortal(
+    <div ref={ref} className="popover-menu ap-menu" role="menu" style={{ position: "fixed", left: place.left, top: place.top }} onContextMenu={(event) => event.preventDefault()}>
+      {SHELL_PLACES.map(([position, label]) => (
+        <button key={position} type="button" role="menuitem" className="popover-item" onClick={pick(() => onShell(position))}>{label}</button>
+      ))}
+      {(canZoom || canHide) && <div className="popover-sep" role="separator" />}
+      {canZoom && <button type="button" role="menuitem" className="popover-item" onClick={pick(onZoom)}>{zoomed ? "Restore" : "Zoom"}</button>}
+      {canHide && <button type="button" role="menuitem" className="popover-item" onClick={pick(onHide)}>Hide</button>}
+    </div>,
+    document.body,
+  );
+}
+
 /** A header over the top edge of the agent's terminal that shows on hover, so
  * the agent can be moved and zoomed like a pane. It overlays the terminal
  * rather than taking a row from it, so showing it never resizes the terminal. */
 function AgentGrip({
   rect,
   title,
+  kind,
   zoomed,
   moving,
   onPointerDown,
   onToggleZoom,
+  onContextMenu,
 }: {
   rect: Rect;
   title: string;
+  kind: "agent" | "shell";
   zoomed: boolean;
   moving: boolean;
   onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onToggleZoom: () => void;
+  onContextMenu: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
   return (
     <div
@@ -594,10 +737,11 @@ function AgentGrip({
         title={zoomed ? "Drag to move pane. Double-click empty space or press Esc to restore." : "Drag to move pane. Double-click empty space to zoom."}
         onPointerDown={onPointerDown}
         onDoubleClick={onToggleZoom}
+        onContextMenu={onContextMenu}
       >
         <span className="ap-agent-glyph" aria-hidden="true">&gt;_</span>
         <span className="ap-title">{title}</span>
-        <span className="ap-status ap-dim">agent</span>
+        <span className="ap-status ap-dim">{kind}</span>
       </div>
     </div>
   );
@@ -606,7 +750,12 @@ function AgentGrip({
 /** How long a pane waits for its content before showing whatever it has. */
 const REVEAL_FALLBACK_MS = 1500;
 const NO_ISSUE = () => {};
-const NO_COMMAND = () => {};
+
+/** The program a foreground command runs, as a terminal tab names it: `cargo` for `cargo build --release`. */
+export function programName(command: string): string {
+  const [program = ""] = command.trim().split(/\s+/);
+  return program.replace(/^-/, "");
+}
 
 function PaneView({
   meta,
@@ -621,6 +770,7 @@ function PaneView({
   onToggleCollapse,
   onAbandonPress,
   onHeadPointerDown,
+  onHeadContextMenu,
   onToggleZoom,
 }: {
   meta: PaneMeta;
@@ -633,6 +783,7 @@ function PaneView({
   behindZoom: boolean;
   moving: boolean;
   onHeadPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+  onHeadContextMenu: (event: React.MouseEvent<HTMLElement>) => void;
   onToggleZoom: (pane: string) => void;
   /** Pointerdown on the collapse toggle, with the state a click would set. */
   onPressCollapse: (pane: string, collapsed: boolean) => void;
@@ -646,6 +797,9 @@ function PaneView({
   if (!collapsed) expanded.current = { w: rect.w, h: rect.h - HEAD_PX };
   const sideways = collapsed && axis === "row";
   const [localReload, setLocalReload] = useState(0);
+  const [liveCommand, setLiveCommand] = useState("");
+  const reportCommand = useCallback((_terminalId: bigint, command: string) => setLiveCommand(command.trim()), []);
+  const shownTitle = meta.titled === false && liveCommand ? programName(liveCommand) : meta.title;
   const pressed = useRef<object | null>(null);
   const [confirmingStop, setConfirmingStop] = useState(false);
   // The body stays behind the pane's own background until its content has
@@ -677,6 +831,7 @@ function PaneView({
         className="ap-head"
         title={collapsed ? "Drag to move pane." : zoomed ? "Drag to move pane. Double-click empty space or press Esc to restore." : "Drag to move pane. Double-click empty space to zoom."}
         onPointerDown={onHeadPointerDown}
+        onContextMenu={onHeadContextMenu}
         onDoubleClick={(event) => {
           if ((event.target as HTMLElement).closest("button, a")) return;
           if (!collapsed) onToggleZoom(meta.id);
@@ -708,7 +863,7 @@ function PaneView({
             <path d="M5.5 3.5 10 8l-4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
-        <span className="ap-title" title={meta.command ?? meta.title}>{meta.title}</span>
+        <span className="ap-title" title={liveCommand || meta.command || meta.title}>{shownTitle}</span>
         <span className={`ap-status ap-${statusClass}`}>{status}</span>
         {meta.kind !== "page" && (
           <button
@@ -779,7 +934,7 @@ function PaneView({
           <EndedOutput sessionId={sessionId} paneId={meta.id} terminalId={meta.terminal_id} exitCode={meta.exit_code} />
         ) : terminal ? (
           <ReadOnlyGuard enabled={!meta.user_input}>
-            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={active && !collapsed} onIssue={NO_ISSUE} onCommand={NO_COMMAND} onFirstPaint={() => setReady(true)} />
+            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={active && !collapsed} onIssue={NO_ISSUE} onCommand={reportCommand} onFirstPaint={() => setReady(true)} />
           </ReadOnlyGuard>
         ) : (
           <div className="ap-wait">starting…</div>

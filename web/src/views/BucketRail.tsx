@@ -87,13 +87,14 @@ export function BucketRail({
     target: SidebarScope,
     label: string,
     face: ReactNode,
-    counts: { needs: number; needsUnseen: number; finished: number },
+    counts: { needs: number; needsUnseen: number; finished: number; working: number },
     icon?: RailIcon,
   ) => {
     const isCurrent = scopeKey(target) === current;
-    const { needs, needsUnseen, finished } = counts;
+    const { needs, needsUnseen, finished, working } = counts;
     const status = [
       needs > 0 ? `${needs} need input` : "",
+      working > 0 ? `${working} working` : "",
       finished > 0 ? `${finished} finished` : "",
     ].filter(Boolean);
     const classes = [
@@ -117,11 +118,12 @@ export function BucketRail({
       >
         {face}
         {needs > 0 && <span className="sb-rail-badge" aria-hidden="true">{needs}</span>}
+        {working > 0 && <span className="sb-rail-working" aria-hidden="true" />}
         {finished > 0 && <span className="sb-rail-finished" aria-hidden="true" />}
       </button>
     );
   };
-  const none = { needs: 0, needsUnseen: 0, finished: 0 };
+  const none = { needs: 0, needsUnseen: 0, finished: 0, working: 0 };
   return (
     <nav className="sb-rail" aria-label="buckets">
       {header && <div className="sb-rail-header">{header}</div>}
@@ -159,6 +161,7 @@ export function BucketRail({
           needs: bucket.needsInput,
           needsUnseen: bucket.needsInputUnseen ?? 0,
           finished: bucket.finishedUnseen ?? 0,
+          working: bucket.working ?? 0,
         },
         bucket.icon,
       ))}
