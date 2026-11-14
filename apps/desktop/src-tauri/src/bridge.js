@@ -25,27 +25,46 @@
     .pm-window-controls button {
       all: unset;
       box-sizing: border-box;
-      width: 12px;
-      height: 12px;
+      width: 14px;
+      height: 14px;
       border-radius: 50%;
       border: 1.5px solid var(--muted, #828d9f);
-      color: transparent;
+      color: var(--muted, #828d9f);
       display: grid;
       place-items: center;
       cursor: default;
       transition: background-color 90ms ease-out, border-color 90ms ease-out, color 90ms ease-out;
     }
-    .pm-window-controls svg { width: 7px; height: 7px; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+    .pm-window-controls svg { width: 8px; height: 8px; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
     .pm-window-controls:hover button { color: var(--text, #c9ceda); border-color: var(--text, #c9ceda); }
     .pm-window-controls button:hover { background: color-mix(in srgb, var(--text, #c9ceda) 16%, transparent); }
     .pm-window-controls button.pm-close:hover { background: var(--red, #ff5d5d); border-color: var(--red, #ff5d5d); color: var(--chrome-bg, var(--bg, #000)); }
     .pm-window-blurred .pm-window-controls { opacity: 0.45; }
-    .pm-desktop .topbar { padding-left: 84px; }
+    .pm-window-controls .pm-zoom .pm-exit { display: none; }
+    .pm-fullscreen .pm-window-controls .pm-zoom .pm-enter { display: none; }
+    .pm-fullscreen .pm-window-controls .pm-zoom .pm-exit { display: inline; }
+    .pm-desktop .topbar { padding-left: 90px; }
   `;
+  const fullScreen = async () => {
+    const label = windowLabel();
+    const on = await invoke("plugin:window|is_fullscreen", { label });
+    await invoke("plugin:window|set_fullscreen", { label, value: !on });
+  };
+  const syncFullScreen = () => {
+    invoke("plugin:window|is_fullscreen", { label: windowLabel() })
+      .then((on) => document.documentElement.classList.toggle("pm-fullscreen", Boolean(on)))
+      .catch(() => {});
+  };
+  window.addEventListener("resize", syncFullScreen);
   const CONTROLS = [
-    ["pm-close", "Close", "close", '<path d="M1 1l5 5M6 1L1 6"/>'],
-    ["pm-minimize", "Minimize", "minimize", '<path d="M1 3.5h5"/>'],
-    ["pm-zoom", "Zoom", "toggle_maximize", '<path d="M3.5 1v5M1 3.5h5"/>'],
+    ["pm-close", "Close", () => invoke("plugin:window|close", { label: windowLabel() }), '<path d="M1.5 1.5l5 5M6.5 1.5l-5 5"/>'],
+    ["pm-minimize", "Minimize", () => invoke("plugin:window|minimize", { label: windowLabel() }), '<path d="M1.5 4h5"/>'],
+    [
+      "pm-zoom",
+      "Full Screen",
+      fullScreen,
+      '<g class="pm-enter"><path d="M4.5 1.5h2v2M6.5 1.5L4.5 3.5M3.5 6.5h-2v-2M1.5 6.5l2-2"/></g><g class="pm-exit"><path d="M6.5 3.5h-2v-2M4.5 3.5l2-2M1.5 4.5h2v2M3.5 4.5l-2 2"/></g>',
+    ],
   ];
   const windowLabel = () => window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? "main";
   const addControls = () => {
@@ -55,16 +74,16 @@
     document.head.append(style);
     const group = document.createElement("div");
     group.className = "pm-window-controls";
-    for (const [className, label, command, glyph] of CONTROLS) {
+    for (const [className, label, act, glyph] of CONTROLS) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = className;
       button.setAttribute("aria-label", label);
       button.tabIndex = -1;
-      button.innerHTML = `<svg viewBox="0 0 7 7" aria-hidden="true">${glyph}</svg>`;
+      button.innerHTML = `<svg viewBox="0 0 8 8" aria-hidden="true">${glyph}</svg>`;
       button.addEventListener("mousedown", (event) => event.stopPropagation());
       button.addEventListener("click", () => {
-        invoke(`plugin:window|${command}`, { label: windowLabel() }).catch(() => {});
+        Promise.resolve(act()).then(syncFullScreen, () => {});
       });
       group.append(button);
     }
@@ -72,6 +91,7 @@
   };
   if (document.body) addControls();
   else document.addEventListener("DOMContentLoaded", addControls, { once: true });
+  syncFullScreen();
   window.addEventListener("blur", () => document.documentElement.classList.add("pm-window-blurred"));
   window.addEventListener("focus", () => document.documentElement.classList.remove("pm-window-blurred"));
 

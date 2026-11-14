@@ -188,7 +188,9 @@ fn grant_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
             .permission("core:window:allow-start-dragging")
             .permission("core:window:allow-toggle-maximize")
             .permission("core:window:allow-minimize")
-            .permission("core:window:allow-close"),
+            .permission("core:window:allow-close")
+            .permission("core:window:allow-is-fullscreen")
+            .permission("core:window:allow-set-fullscreen"),
     )
 }
 
