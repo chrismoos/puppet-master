@@ -1,5 +1,9 @@
+import { useRef } from "react";
 import {
+  Modal,
+  Platform,
   Pressable,
+  SafeAreaView,
   StyleSheet,
   Text,
   View,
@@ -285,59 +289,81 @@ export function OverflowMenu({
   items: OverflowMenuItem[];
   onClose: () => void;
 }) {
-  if (!visible) return null;
+  // iOS presents no modal while another is still closing, so an item that
+  // opens a sheet runs once the menu has gone.
+  const pending = useRef<(() => void) | null>(null);
+  const runPending = () => {
+    const run = pending.current;
+    pending.current = null;
+    run?.();
+  };
+  const choose = (item: OverflowMenuItem) => {
+    if (Platform.OS === "ios") pending.current = item.onPress;
+    onClose();
+    if (Platform.OS !== "ios") item.onPress();
+  };
 
+  // A modal puts the backdrop over everything on screen, the session list and
+  // a native terminal included, so a tap anywhere outside the menu closes it.
   return (
-    <>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="none"
+      onRequestClose={onClose}
+      onDismiss={runPending}
+      supportedOrientations={["portrait", "landscape"]}
+    >
       <Pressable
         style={StyleSheet.absoluteFill}
         onPress={onClose}
-        accessibilityRole="none"
+        accessibilityRole="button"
+        accessibilityLabel="Close menu"
+        testID="menu-backdrop"
       />
-      <View style={styles.menuOverlay} accessible={false} accessibilityRole="menu">
-        {items.map((item) => {
-          const IconComponent = ICON_MAP[item.icon];
-          const itemColor = item.color ?? colors.text;
-          return (
-            <Pressable
-              key={item.key}
-              testID={`menu-${item.key}`}
-              accessible
-              accessibilityRole="menuitem"
-              accessibilityLabel={item.label}
-              accessibilityState={{ disabled: item.disabled }}
-              style={({ pressed }) => [
-                styles.menuItem,
-                pressed && styles.menuItemPressed,
-                item.disabled && styles.menuItemDisabled,
-              ]}
-              onPress={() => {
-                if (!item.disabled) {
-                  onClose();
-                  item.onPress();
-                }
-              }}
-              disabled={item.disabled}
-            >
-              {IconComponent ? <IconComponent color={item.disabled ? colors.textMuted : itemColor} /> : null}
-              <Text
-                style={[
-                  styles.menuLabel,
-                  { color: item.disabled ? colors.textMuted : itemColor },
+      <SafeAreaView style={styles.menuLayer} pointerEvents="box-none">
+        <View style={styles.menuOverlay} accessible={false} accessibilityRole="menu">
+          {items.map((item) => {
+            const IconComponent = ICON_MAP[item.icon];
+            const itemColor = item.color ?? colors.text;
+            return (
+              <Pressable
+                key={item.key}
+                testID={`menu-${item.key}`}
+                accessible
+                accessibilityRole="menuitem"
+                accessibilityLabel={item.label}
+                accessibilityState={{ disabled: item.disabled }}
+                style={({ pressed }) => [
+                  styles.menuItem,
+                  pressed && styles.menuItemPressed,
+                  item.disabled && styles.menuItemDisabled,
                 ]}
+                onPress={() => {
+                  if (!item.disabled) choose(item);
+                }}
+                disabled={item.disabled}
               >
-                {item.label}
-              </Text>
-              {item.badge !== undefined ? (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{item.badge}</Text>
-                </View>
-              ) : null}
-            </Pressable>
-          );
-        })}
-      </View>
-    </>
+                {IconComponent ? <IconComponent color={item.disabled ? colors.textMuted : itemColor} /> : null}
+                <Text
+                  style={[
+                    styles.menuLabel,
+                    { color: item.disabled ? colors.textMuted : itemColor },
+                  ]}
+                >
+                  {item.label}
+                </Text>
+                {item.badge !== undefined ? (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>{item.badge}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      </SafeAreaView>
+    </Modal>
   );
 }
 
@@ -367,6 +393,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 8,
   },
+  menuLayer: { flex: 1 },
   menuOverlay: {
     position: "absolute",
     top: 8,
