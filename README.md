@@ -90,6 +90,12 @@ your phone. Return to the web dashboard to continue working at your desk.
 See the [iOS guide](https://puppet-master.xyz/docs/guides/ios/) for setup and
 [apps/mobile](apps/mobile/) for the app source.
 
+## Use it as a Mac app
+
+The desktop app opens your controller in its own window, with desktop
+notifications and a Dock badge for sessions waiting on you. It is a client of
+the controller you already run. See [apps/desktop](apps/desktop/) to build it.
+
 A terminal has one shared size across viewers. Web and mobile let you choose
 whether to resize it to fit your current view.
 

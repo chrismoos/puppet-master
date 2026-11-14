@@ -33,7 +33,7 @@ PUSHGW_PLATFORM ?=
 CONTAINER_RUNTIME ?= docker
 GIT_REV := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo -dirty)
 
-.PHONY: help build web rust run dev ios-run ios-build ios-device ios-reset ios-testflight ios-bump ios-version ios-testflight-test ios-doctor ios-prebuild ios-bundle ios-icon ios-clean test rust-test web-test publish promote publish-test install-test e2e-worker e2e-integration e2e-terminal-heavy e2e-performance browser-e2e e2e-contract-test e2e-source-check controller-fixture controller-fixture-test controller-fixture-live-test check fmt fmt-check clippy lint proto clean sandbox-image pushgw-image linux-x86_64 sandbox-container-test sandbox-incus-test licenses licenses-check
+.PHONY: help build web rust run dev desktop-dev desktop-build ios-run ios-build ios-device ios-reset ios-testflight ios-bump ios-version ios-testflight-test ios-doctor ios-prebuild ios-bundle ios-icon ios-clean test rust-test web-test publish promote publish-test install-test e2e-worker e2e-integration e2e-terminal-heavy e2e-performance browser-e2e e2e-contract-test e2e-source-check controller-fixture controller-fixture-test controller-fixture-live-test check fmt fmt-check clippy lint proto clean sandbox-image pushgw-image linux-x86_64 sandbox-container-test sandbox-incus-test licenses licenses-check
 
 help: ## Show this help.
 	@grep -hE '^[a-z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -56,6 +56,14 @@ run: build ## Build everything and run the daemon (release) with the web UI.
 
 dev: node_modules ## Frontend dev server (hot reload); needs a daemon running separately.
 	$(PNPM) -F puppet-master-web run dev
+
+# The desktop app is its own Cargo workspace under apps/desktop and needs the
+# Tauri CLI (`cargo install tauri-cli --version "^2" --locked`).
+desktop-dev: ## Run the macOS desktop app from source.
+	cd apps/desktop/src-tauri && $(CARGO) tauri dev
+
+desktop-build: ## Build the macOS desktop app bundle and disk image.
+	cd apps/desktop/src-tauri && $(CARGO) tauri build
 
 # The iOS app is built from a generated Xcode project and a generated
 # WebView bundle, so its targets live in apps/mobile/Makefile where those

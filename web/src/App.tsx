@@ -121,6 +121,7 @@ import { usePendingApprovals } from "./state/pendingApprovals";
 import { approvalRoutePath } from "@puppet-master/client-core/router";
 import { removeWorkspaceFromTabs, WorkspaceTabs } from "./views/WorkspaceTabs";
 import { AlertPill, pageIsWatched, type InAppAlert } from "./views/AlertPill";
+import { nativeBridge } from "./native";
 
 /** Saved workspaces stay reachable by their URLs while the tab bar is hidden. */
 const SHOW_WORKSPACE_TABS = false;
@@ -624,6 +625,15 @@ function Shell({
       return kept.length === current.length ? current : kept;
     });
   }, [shownSessionId, state.sessions]);
+
+  // The desktop app's Dock badge counts the sessions waiting on you.
+  const waitingOnYou = useMemo(
+    () => [...state.sessions.values()].filter((session) => session.state === SessionState.NEEDS_INPUT).length,
+    [state.sessions],
+  );
+  useEffect(() => {
+    void nativeBridge()?.setBadge(waitingOnYou).catch(() => {});
+  }, [waitingOnYou]);
 
   // The daemon decides what is worth an alert; this only renders it.
   useEffect(() => {

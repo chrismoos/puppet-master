@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Puppet Master</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: light-dark(#f2f4f7, #0b0e14);
+    --panel: light-dark(#ffffff, #10141c);
+    --line: light-dark(#c8cfda, #232a37);
+    --text: light-dark(#232936, #c9ceda);
+    --muted: light-dark(#5a6376, #828d9f);
+    --bright: light-dark(#0d1017, #eef1f6);
+    --blue: light-dark(#0b62c4, #4da3ff);
+    --red: light-dark(#b52424, #ff5d5d);
+    font: 14px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text); }
+  form { width: min(460px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 28px; }
+  h1 { margin: 0 0 6px; font-size: 18px; color: var(--bright); }
+  p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  input { width: 100%; padding: 9px 11px; font: inherit; color: var(--bright); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; }
+  input:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+  button { margin-top: 14px; width: 100%; padding: 9px; font: inherit; font-weight: 700; color: #fff; background: var(--blue); border: 0; border-radius: 7px; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .error { margin-top: 10px; min-height: 1.5em; font-size: 12px; color: var(--red); }
+</style>
+</head>
+<body>
+<form id="connect">
+  <h1>Connect to your controller</h1>
+  <p>The address you open Puppet Master at in a browser. The app remembers it, and Controller → Change Controller… switches later.</p>
+  <label for="url">Controller address</label>
+  <input id="url" name="url" placeholder="https://pm.example.com" autocomplete="url" autofocus required>
+  <button id="go" type="submit">Connect</button>
+  <div class="error" id="error" role="alert"></div>
+</form>
+<script>
+  const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
+  const form = document.getElementById("connect");
+  const input = document.getElementById("url");
+  const button = document.getElementById("go");
+  const error = document.getElementById("error");
+  invoke("saved_controller").then((url) => { if (url) input.value = url; }).catch(() => {});
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    error.textContent = "";
+    button.disabled = true;
+    invoke("connect", { url: input.value }).catch((message) => {
+      error.textContent = String(message);
+      button.disabled = false;
+    });
+  });
+</script>
+</body>
+</html>

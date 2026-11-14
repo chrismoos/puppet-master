@@ -1,4 +1,5 @@
 import { notifySupport, type NotifySupport } from "@puppet-master/client-core/state/notify";
+import { nativeBridge } from "../native";
 
 /* Per-kind tag prefixes keep a finish and a needs-input on the same session
    apart. Each alert also takes a sequence suffix, because a browser replaces
@@ -29,6 +30,7 @@ export class Notifier {
   private shown = new Map<string, Notification>();
 
   get support(): NotifySupport {
+    if (nativeBridge()) return { supported: true };
     return notifySupport(
       typeof Notification !== "undefined",
       typeof window !== "undefined" ? window.isSecureContext : undefined,
@@ -40,10 +42,12 @@ export class Notifier {
   }
 
   get permission(): NotificationPermission {
+    if (nativeBridge()) return "granted";
     return this.supported ? Notification.permission : "denied";
   }
 
   async requestPermission(): Promise<NotificationPermission> {
+    if (nativeBridge()) return "granted";
     if (!this.supported) return "denied";
     return Notification.requestPermission();
   }
@@ -51,6 +55,11 @@ export class Notifier {
   /** `sessionId` is the approval id when `kind` is "approval". */
   fire(title: string, body: string | undefined, sessionId: string, kind: NotifyKind = "needs-input"): void {
     if (this.soundEnabled) this.beep();
+    const native = nativeBridge();
+    if (native) {
+      void native.notify(title, body).catch(() => {});
+      return;
+    }
     if (!this.supported || Notification.permission !== "granted") return;
     const key = NOTIFY_TAG_PREFIXES[kind] + sessionId;
     try {

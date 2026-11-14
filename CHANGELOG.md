@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [macOS] A desktop app opens your controller in its own window, with desktop notifications, a Dock badge for sessions waiting on you, and new windows for pages that would open in a new tab. Build it with `make desktop-build`.
+
 - [Web] While you are looking at Puppet Master, alerts show as a slim pill at the top right instead of a desktop notification. Click it to open the session, or dismiss it, and it hides on its own. Alerts still go to the desktop while the tab is in the background.
 
 - [Daemon] A session's question stops showing as needs-input once you answer it in the terminal, Codex included, or once its agent goes back to work, instead of lasting until the agent's turn ends.

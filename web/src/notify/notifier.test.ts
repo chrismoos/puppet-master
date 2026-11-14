@@ -100,3 +100,19 @@ describe("Notifier support", () => {
     expect(new Notifier().support).toEqual({ supported: false, reason: "unavailable" });
   });
 });
+
+describe("Notifier in the desktop app", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends alerts to the app instead of the Web Notification API, which its web view lacks", async () => {
+    vi.stubGlobal("Notification", undefined);
+    const notify = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("window", { __pmNative: { notify, setBadge: vi.fn(), openWindow: vi.fn() } });
+    const notifier = new Notifier();
+    expect(notifier.supported).toBe(true);
+    expect(notifier.permission).toBe("granted");
+    await expect(notifier.requestPermission()).resolves.toBe("granted");
+    notifier.fire("Codex audit", "Type into your shells?", "4");
+    expect(notify).toHaveBeenCalledWith("Codex audit", "Type into your shells?");
+  });
+});

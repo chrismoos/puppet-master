@@ -1,0 +1,7 @@
+{
+  "identifier": "connect",
+  "description": "The bundled connect page, which only picks the controller.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
