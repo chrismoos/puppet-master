@@ -304,6 +304,7 @@ export class TerminalStage {
     const frames = layer.anticipatedFrames;
     this.dropAnticipation(layer);
     if (measured.cols !== anticipated.cols || measured.rows !== anticipated.rows) return;
+    layer.term.releaseHeldOrigin();
     for (const frame of frames) this.writeFrame(layer, frame);
     if (frames.length > 0) layer.term.paintNow();
   }

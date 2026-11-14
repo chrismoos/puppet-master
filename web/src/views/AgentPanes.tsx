@@ -399,6 +399,14 @@ export function AgentPanes({
     const root = rootRef.current;
     if (!host || !root || !active) return;
     host.style.visibility = zoomedPane && !agentZoomed ? "hidden" : "";
+    // Alone, the terminal keeps its place in the page's own flow.
+    if (tree.pane) {
+      if (host.style.position === "absolute") {
+        for (const key of ["position", "left", "top", "width", "height", "flex"]) host.style.removeProperty(key);
+        stage.fitVisibleNow();
+      }
+      return;
+    }
     const fresh = new Map<string, Placed>();
     measure(tree, { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight }, null, [], layout, fresh, []);
     const rect = agentZoomed ? { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight } : fresh.get(rootId)?.rect;

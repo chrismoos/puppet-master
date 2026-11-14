@@ -197,7 +197,7 @@ test("the rail style scopes the sidebar from a column of distinct bucket buttons
 
   isolatedDaemon.hookSession("browser-e2e", "needs-input", "Pick a merge order");
   await expect(rail.getByRole("button", { name: "browser-e2e, 1 need input" })).toBeVisible();
-  await expect(rail.getByRole("button", { name: "Needs you, 1 need input" })).toBeVisible();
+  await expect(rail.getByRole("button", { name: /^Needs you/ })).toHaveCount(0);
   const badgeOverhang = await rail.evaluate((element) => {
     const edge = element.getBoundingClientRect().right;
     return Math.max(...[...element.querySelectorAll(".sb-rail-badge")].map((badge) => badge.getBoundingClientRect().right - edge));
