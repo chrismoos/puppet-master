@@ -260,6 +260,11 @@ export class TerminalStage {
     return { cellWidth: cell.width, cellHeight: cell.height, fontSize, padding: CONTENT_PADDING };
   }
 
+  /** Opens a link clicked in a session's natively drawn terminal. */
+  openLink(sessionId: string, href: string): void {
+    activateTerminalLink(this.client.getState, { kind: "session", id: sessionId }, href, () => {});
+  }
+
   /** True when the program in a terminal takes mouse clicks itself. Layer
    * keys are `s:<session id>` for an agent and `t:<terminal id>` for a shell. */
   reportsMouse(key: string): boolean {

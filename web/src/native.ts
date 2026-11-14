@@ -11,7 +11,18 @@ export interface NativePlacement {
   visible: boolean;
 }
 
-export type NativeTerminalEvent = { type: "closed" | "failed"; id: string; reason: string };
+/** A rectangle in page coordinates, in CSS pixels. */
+export interface NativeRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type NativeTerminalEvent =
+  | { type: "closed" | "failed"; id: string; reason: string }
+  | { type: "link"; id: string; href: string }
+  | { type: "contextmenu"; id: string; x: number; y: number };
 
 /** Terminals the desktop app draws natively over the page. */
 export interface NativeTerminals {
@@ -24,6 +35,9 @@ export interface NativeTerminals {
   ): Promise<void>;
   place(id: string, placement: NativePlacement): Promise<void>;
   focus(id: string): Promise<void>;
+  /** Page content over the terminal: holes show through and take the mouse,
+   * passthrough areas only take the mouse. */
+  regions(id: string, holes: NativeRect[], passthrough: NativeRect[]): Promise<void>;
   close(id: string): Promise<void>;
 }
 

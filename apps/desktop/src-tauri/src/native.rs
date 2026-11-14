@@ -20,6 +20,16 @@ pub struct PlacementArg {
     visible: bool,
 }
 
+/// A rectangle in page coordinates, in CSS pixels.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub struct RectArg {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -37,7 +47,8 @@ mod platform {
     use std::cell::RefCell;
     use std::collections::HashMap;
 
-    use pm_native_terminal::macos::{NativeTerminal, Placement};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use pm_native_terminal::macos::{NativeTerminal, Placement, TerminalEvent};
     use pm_native_terminal::stream::Attach;
     use serde_json::json;
 
@@ -77,7 +88,7 @@ mod platform {
                 let key = (label, request.id.clone());
                 TERMINALS.with(|terminals| terminals.borrow_mut().remove(&key));
                 let id = request.id.clone();
-                let closed = events.clone();
+                let sink = events.clone();
                 let opened = unsafe {
                     NativeTerminal::open(
                         parent as *mut std::ffi::c_void,
@@ -89,9 +100,19 @@ mod platform {
                             claim: None,
                         },
                         request.placement.into(),
-                        move |reason| {
-                            let _ = closed
-                                .send(json!({ "type": "closed", "id": id, "reason": reason }));
+                        move |event| {
+                            let message = match event {
+                                TerminalEvent::Closed(reason) => {
+                                    json!({ "type": "closed", "id": id, "reason": reason })
+                                }
+                                TerminalEvent::Link(href) => {
+                                    json!({ "type": "link", "id": id, "href": href })
+                                }
+                                TerminalEvent::ContextMenu { x, y } => {
+                                    json!({ "type": "contextmenu", "id": id, "x": x, "y": y })
+                                }
+                            };
+                            let _ = sink.send(message);
                         },
                     )
                 };
@@ -135,6 +156,24 @@ mod platform {
         with_terminal(&window, id, |terminal| terminal.focus())
     }
 
+    fn rects(rects: &[RectArg]) -> Vec<NSRect> {
+        rects
+            .iter()
+            .map(|r| NSRect::new(NSPoint::new(r.x, r.y), NSSize::new(r.width, r.height)))
+            .collect()
+    }
+
+    pub fn regions(
+        window: WebviewWindow,
+        id: String,
+        holes: Vec<RectArg>,
+        passthrough: Vec<RectArg>,
+    ) -> Result<(), String> {
+        with_terminal(&window, id, move |terminal| {
+            terminal.set_regions(&rects(&holes), &rects(&passthrough))
+        })
+    }
+
     pub fn close(window: WebviewWindow, id: String) -> Result<(), String> {
         let key = (window.label().to_string(), id);
         window
@@ -164,6 +203,15 @@ mod platform {
     }
 
     pub fn focus(_: WebviewWindow, _: String) -> Result<(), String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    pub fn regions(
+        _: WebviewWindow,
+        _: String,
+        _: Vec<RectArg>,
+        _: Vec<RectArg>,
+    ) -> Result<(), String> {
         Err(UNSUPPORTED.into())
     }
 
@@ -204,4 +252,16 @@ pub fn native_terminal_focus(window: WebviewWindow, id: String) -> Result<(), St
 #[tauri::command]
 pub fn native_terminal_close(window: WebviewWindow, id: String) -> Result<(), String> {
     platform::close(window, id)
+}
+
+/// Page content over the terminal: `holes` show through and take the mouse,
+/// `passthrough` only takes the mouse.
+#[tauri::command]
+pub fn native_terminal_regions(
+    window: WebviewWindow,
+    id: String,
+    holes: Vec<RectArg>,
+    passthrough: Vec<RectArg>,
+) -> Result<(), String> {
+    platform::regions(window, id, holes, passthrough)
 }

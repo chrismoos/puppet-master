@@ -65,6 +65,7 @@
         invoke("native_terminal_open", { request: { id, ...attach, placement }, onEvent: channel(onEvent) }),
       place: (id, placement) => invoke("native_terminal_place", { id, placement }),
       focus: (id) => invoke("native_terminal_focus", { id }),
+      regions: (id, holes, passthrough) => invoke("native_terminal_regions", { id, holes, passthrough }),
       close: (id) => invoke("native_terminal_close", { id }),
     },
   };

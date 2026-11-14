@@ -52,7 +52,8 @@ pub fn run() {
             native::native_terminal_open,
             native::native_terminal_place,
             native::native_terminal_focus,
-            native::native_terminal_close
+            native::native_terminal_close,
+            native::native_terminal_regions
         ])
         .menu(|app| {
             let menu = Menu::default(app)?;
@@ -94,7 +95,9 @@ fn framed<'a>(
         .title("Puppet Master")
         .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
-        .initialization_script(BRIDGE_SCRIPT);
+        .initialization_script(BRIDGE_SCRIPT)
+        // Tauri's own handler takes dropped files, so the page never sees them.
+        .disable_drag_drop_handler();
     #[cfg(target_os = "macos")]
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)

@@ -189,3 +189,19 @@ fn a_full_screen_of_text_draws_and_only_used_glyphs_are_rasterized() {
         "a screen full of text has plenty of ink, got {ink}"
     );
 }
+
+#[test]
+fn a_hole_is_fully_transparent_so_the_page_shows_through() {
+    let (device, queue) = gpu();
+    let mut renderer = Renderer::new(device, queue, FORMAT, FONT_PX);
+    let (cols, rows) = renderer.grid_for(WIDTH as f32, HEIGHT as f32, PADDING);
+    let mut vt = Vt::new(cols, rows).unwrap();
+    vt.write(b"\x1b[48;2;200;0;0m                                        ");
+    renderer.set_holes(&[[10.0, 0.0, 40.0, 20.0]]);
+    let pixels = draw(&mut renderer, &mut vt);
+    let alpha = |x: u32, y: u32| {
+        pixels.data[y as usize * pixels.stride + (x * BYTES_PER_PIXEL) as usize + 3]
+    };
+    assert_eq!(alpha(20, 10), 0, "inside the hole");
+    assert_eq!(alpha(70, 10), 255, "outside the hole");
+}

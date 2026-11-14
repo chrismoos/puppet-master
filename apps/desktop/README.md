@@ -28,15 +28,25 @@ page's layout as panes move or the session list collapses.
   encoder, so application cursor keys and the kitty keyboard protocol work.
   ⌘V pastes, bracketed when the program asks. Other ⌘ shortcuts go to the
   app's menus.
-- The scroll wheel and trackpad scroll back through history.
-- It opens its own socket to the controller with a ticket the page mints,
-  as a second viewer that follows the terminal's size. The page's terminal
-  stays underneath and keeps owning the size.
+- Drag to select, double-click for a word, triple-click for a line, and ⌘C
+  to copy. Text a program copies with OSC 52 lands on the clipboard.
+- ⌘-click a link to open it: an OSC 8 hyperlink, or a URL or `pm:` link
+  written in the text. Your controller's own pages open in the app, other
+  sites in your default browser.
+- A program that asks for the mouse, such as a full-screen editor, gets
+  clicks, drags and the wheel. Hold Shift to select text instead.
+- Otherwise the wheel and trackpad scroll back through history, and a right
+  click opens the page's terminal menu.
+- Drop files on the terminal to upload them, as in a browser.
+- Page menus, dialogs, alerts and the pane's hover header show over the
+  terminal.
+- It holds the page's only socket to the terminal, opened with a one-use
+  ticket the page mints. It claims the terminal's size when it connects,
+  when its area changes, and when you type into it after another viewer
+  took the size.
 
-Not yet: mouse selection and copy, input methods for composed text (such as
-Japanese), mouse reporting to programs that use the mouse, and shell tabs
-or pane terminals, which still draw in the page. Page menus and dialogs that
-open over the terminal area are hidden behind it.
+Not yet: input methods for composed text (such as Japanese), and shell tabs
+or pane terminals, which still draw in the page.
 
 The terminal crate is `apps/desktop/terminal`. Its tests run on any host
 with a GPU, including a software Vulkan driver:

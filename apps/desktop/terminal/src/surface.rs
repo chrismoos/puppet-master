@@ -23,6 +23,8 @@ pub struct Layout {
 
 struct State {
     layout: Layout,
+    /// Transparent rectangles in physical pixels, taken by the next frame.
+    holes: Option<Vec<[f32; 4]>>,
     dirty: bool,
     alive: bool,
 }
@@ -49,13 +51,20 @@ impl Painter {
         }
     }
 
+    pub fn set_holes(&self, holes: Vec<[f32; 4]>) {
+        let mut state = self.state.lock().unwrap();
+        state.holes = Some(holes);
+        state.dirty = true;
+        self.wake.notify_one();
+    }
+
     fn stop(&self) {
         self.state.lock().unwrap().alive = false;
         self.wake.notify_one();
     }
 
     /// Waits for work and returns the layout to draw at, or `None` once stopped.
-    fn next(&self) -> Option<Layout> {
+    fn next(&self) -> Option<(Layout, Option<Vec<[f32; 4]>>)> {
         let mut state = self.state.lock().unwrap();
         while state.alive && !state.dirty {
             state = self.wake.wait(state).unwrap();
@@ -64,7 +73,7 @@ impl Painter {
             return None;
         }
         state.dirty = false;
-        Some(state.layout)
+        Some((state.layout, state.holes.take()))
     }
 }
 
@@ -87,6 +96,7 @@ impl Paint {
         let painter = Arc::new(Painter {
             state: Mutex::new(State {
                 layout,
+                holes: None,
                 dirty: true,
                 alive: true,
             }),
@@ -98,7 +108,10 @@ impl Paint {
             .spawn(move || {
                 let mut font_px = 0.0;
                 let mut cell = (0.0, 0.0);
-                while let Some(layout) = shared.next() {
+                while let Some((layout, holes)) = shared.next() {
+                    if let Some(holes) = holes {
+                        renderer.set_holes(&holes);
+                    }
                     if !layout.visible || layout.width == 0 || layout.height == 0 {
                         continue;
                     }

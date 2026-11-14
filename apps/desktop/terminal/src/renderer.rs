@@ -103,6 +103,9 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     rect_pipeline: wgpu::RenderPipeline,
     glyph_pipeline: wgpu::RenderPipeline,
+    cut_pipeline: wgpu::RenderPipeline,
+    holes: Instances,
+    hole_items: Vec<RectInstance>,
     backgrounds: Instances,
     glyphs: Instances,
     overlays: Instances,
@@ -181,7 +184,7 @@ impl Renderer {
         let rect_attributes =
             wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
         let glyph_attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2, 4 => Float32x4];
-        let pipeline = |label, vs, fs, stride, attributes: &[wgpu::VertexAttribute]| {
+        let pipeline = |label, vs, fs, stride, attributes: &[wgpu::VertexAttribute], blend| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -207,7 +210,7 @@ impl Renderer {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -221,6 +224,7 @@ impl Renderer {
             "rect_fs",
             std::mem::size_of::<RectInstance>() as u64,
             &rect_attributes,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
         );
         let glyph_pipeline = pipeline(
             "terminal glyphs",
@@ -228,11 +232,24 @@ impl Renderer {
             "glyph_fs",
             std::mem::size_of::<GlyphInstance>() as u64,
             &glyph_attributes,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
+        // Writes its color as is, so a hole is fully transparent.
+        let cut_pipeline = pipeline(
+            "terminal holes",
+            "rect_vs",
+            "rect_fs",
+            std::mem::size_of::<RectInstance>() as u64,
+            &rect_attributes,
+            None,
         );
         Renderer {
             backgrounds: Instances::new::<RectInstance>(&device, "terminal backgrounds"),
             glyphs: Instances::new::<GlyphInstance>(&device, "terminal glyphs"),
             overlays: Instances::new::<RectInstance>(&device, "terminal overlays"),
+            holes: Instances::new::<RectInstance>(&device, "terminal holes"),
+            cut_pipeline,
+            hole_items: Vec::new(),
             device,
             queue,
             fonts,
@@ -303,6 +320,20 @@ impl Renderer {
         };
     }
 
+    /// Leaves these rectangles, `[x, y, width, height]` in physical pixels,
+    /// fully transparent, so page content over the terminal shows through
+    /// when the surface composites with alpha.
+    pub fn set_holes(&mut self, holes: &[[f32; 4]]) {
+        self.hole_items = holes
+            .iter()
+            .map(|&[x, y, width, height]| RectInstance {
+                origin: [x, y],
+                size: [width, height],
+                color: [0.0; 4],
+            })
+            .collect();
+    }
+
     /// Changes the font size, for a zoom or a display with another scale.
     pub fn set_font_px(&mut self, px: f32) {
         if (px - self.fonts.px()).abs() < f32::EPSILON {
@@ -358,6 +389,8 @@ impl Renderer {
             .upload(&self.device, &self.queue, &self.glyph_items);
         self.overlays
             .upload(&self.device, &self.queue, &self.overlay_items);
+        self.holes
+            .upload(&self.device, &self.queue, &self.hole_items);
 
         let mut encoder = self
             .device
@@ -402,6 +435,11 @@ impl Renderer {
                 pass.set_pipeline(&self.rect_pipeline);
                 pass.set_vertex_buffer(0, self.overlays.buffer.slice(..));
                 pass.draw(0..4, 0..self.overlay_items.len() as u32);
+            }
+            if !self.hole_items.is_empty() {
+                pass.set_pipeline(&self.cut_pipeline);
+                pass.set_vertex_buffer(0, self.holes.buffer.slice(..));
+                pass.draw(0..4, 0..self.hole_items.len() as u32);
             }
         }
         self.queue.submit([encoder.finish()]);

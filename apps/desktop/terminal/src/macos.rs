@@ -1,24 +1,26 @@
 //! A native terminal view on macOS: a Metal-backed `NSView` laid over the
 //! web page at the place the page keeps for the terminal, taking keys,
-//! pastes and scrolling while it has focus.
+//! pastes, scrolling and the mouse while it has focus.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use objc2::rc::Retained;
-use objc2::runtime::Bool;
+use objc2::runtime::{AnyClass, AnyObject, Bool};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSEvent, NSEventModifierFlags, NSPasteboard, NSPasteboardTypeString, NSResponder, NSView,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 
 use crate::input::{keys, mods, Key, KeyPress};
+use crate::pointer::{MouseAction, MouseButton, MouseGeometry};
 use crate::renderer::Renderer;
 use crate::stream::{Attach, Event, Stream};
 use crate::surface::{Layout, Paint, Painter};
@@ -32,17 +34,72 @@ const WHEEL_LINES: f64 = 3.0;
 enum ViewInput {
     Key(KeyPress),
     Paste(String),
+    /// ⌘C, handled only when there is a selection to copy.
+    Copy,
     Scroll {
         lines: f64,
         precise_pixels: Option<f64>,
+        point: NSPoint,
+        mods: u16,
+    },
+    Mouse {
+        action: MouseAction,
+        button: MouseButton,
+        /// In the view, in CSS pixels from its top left.
+        point: NSPoint,
+        clicks: isize,
+        mods: u16,
+        command: bool,
     },
 }
 
-type InputSink = Box<dyn Fn(ViewInput)>;
+/// Returns whether the input was handled.
+type InputSink = Box<dyn Fn(ViewInput) -> bool>;
+
+/// What the terminal tells the page.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TerminalEvent {
+    /// The socket closed; a new ticket is needed to attach again.
+    Closed(String),
+    /// A link was ⌘-clicked.
+    Link(String),
+    /// A right click the program did not take, in page coordinates.
+    ContextMenu { x: f64, y: f64 },
+}
 
 pub struct ViewIvars {
     sink: RefCell<Option<InputSink>>,
+    /// Page content over the terminal, in view coordinates: holes are drawn
+    /// transparent, and the mouse goes to the page in both.
+    holes: RefCell<Vec<NSRect>>,
+    passthrough: RefCell<Vec<NSRect>>,
+    /// The page's web view, which drags over the terminal go to.
+    webview: RefCell<Option<Retained<NSView>>>,
 }
+
+fn contains(rect: &NSRect, point: NSPoint) -> bool {
+    point.x >= rect.origin.x
+        && point.y >= rect.origin.y
+        && point.x < rect.origin.x + rect.size.width
+        && point.y < rect.origin.y + rect.size.height
+}
+
+fn mods_of(flags: NSEventModifierFlags) -> u16 {
+    let mut bits = 0;
+    if flags.contains(NSEventModifierFlags::Shift) {
+        bits |= mods::SHIFT;
+    }
+    if flags.contains(NSEventModifierFlags::Control) {
+        bits |= mods::CTRL;
+    }
+    if flags.contains(NSEventModifierFlags::Option) {
+        bits |= mods::ALT;
+    }
+    bits
+}
+
+/// The value AppKit takes as "no drag operation".
+const DRAG_NONE: usize = 0;
 
 define_class!(
     #[unsafe(super(NSView, NSResponder))]
@@ -62,12 +119,89 @@ define_class!(
             true
         }
 
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> *mut NSView {
+            let local = self.convertPoint_fromView(point, unsafe { self.superview() }.as_deref());
+            let ivars = self.ivars();
+            let page = ivars.holes.borrow().iter().chain(ivars.passthrough.borrow().iter()).any(|rect| contains(rect, local));
+            if page {
+                return std::ptr::null_mut();
+            }
+            unsafe { msg_send![super(self), hitTest: point] }
+        }
+
         #[unsafe(method(mouseDown:))]
-        fn mouse_down(&self, _event: &NSEvent) {
+        fn mouse_down(&self, event: &NSEvent) {
             if let Some(window) = self.window() {
                 let responder: &NSResponder = self;
                 window.makeFirstResponder(Some(responder));
             }
+            self.mouse(event, MouseAction::Press, MouseButton::Left);
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            self.mouse(event, MouseAction::Motion, MouseButton::Left);
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, event: &NSEvent) {
+            self.mouse(event, MouseAction::Release, MouseButton::Left);
+        }
+
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            self.mouse(event, MouseAction::Press, MouseButton::Right);
+        }
+
+        #[unsafe(method(rightMouseUp:))]
+        fn right_mouse_up(&self, event: &NSEvent) {
+            self.mouse(event, MouseAction::Release, MouseButton::Right);
+        }
+
+        #[unsafe(method(otherMouseDown:))]
+        fn other_mouse_down(&self, event: &NSEvent) {
+            self.mouse(event, MouseAction::Press, MouseButton::Middle);
+        }
+
+        #[unsafe(method(otherMouseUp:))]
+        fn other_mouse_up(&self, event: &NSEvent) {
+            self.mouse(event, MouseAction::Release, MouseButton::Middle);
+        }
+
+        #[unsafe(method(draggingEntered:))]
+        fn dragging_entered(&self, info: *mut AnyObject) -> usize {
+            self.forward_drag(|webview| unsafe { msg_send![webview, draggingEntered: info] }).unwrap_or(DRAG_NONE)
+        }
+
+        #[unsafe(method(draggingUpdated:))]
+        fn dragging_updated(&self, info: *mut AnyObject) -> usize {
+            self.forward_drag(|webview| unsafe { msg_send![webview, draggingUpdated: info] }).unwrap_or(DRAG_NONE)
+        }
+
+        #[unsafe(method(draggingExited:))]
+        fn dragging_exited(&self, info: *mut AnyObject) {
+            self.forward_drag(|webview| -> () { unsafe { msg_send![webview, draggingExited: info] } });
+        }
+
+        #[unsafe(method(prepareForDragOperation:))]
+        fn prepare_for_drag(&self, info: *mut AnyObject) -> Bool {
+            self.forward_drag(|webview| unsafe { msg_send![webview, prepareForDragOperation: info] }).unwrap_or(Bool::NO)
+        }
+
+        #[unsafe(method(performDragOperation:))]
+        fn perform_drag(&self, info: *mut AnyObject) -> Bool {
+            self.forward_drag(|webview| unsafe { msg_send![webview, performDragOperation: info] }).unwrap_or(Bool::NO)
+        }
+
+        #[unsafe(method(concludeDragOperation:))]
+        fn conclude_drag(&self, info: *mut AnyObject) {
+            self.forward_drag(|webview| -> () { unsafe { msg_send![webview, concludeDragOperation: info] } });
         }
 
         #[unsafe(method(keyDown:))]
@@ -86,22 +220,32 @@ define_class!(
                 })
             });
             let flags = event.modifierFlags();
-            let command_v = flags.contains(NSEventModifierFlags::Command) && event.keyCode() == KVK_ANSI_V;
-            if !focused || !command_v {
+            if !focused || !flags.contains(NSEventModifierFlags::Command) {
                 return Bool::NO;
             }
-            let text = unsafe { NSPasteboard::generalPasteboard().stringForType(NSPasteboardTypeString) };
-            if let Some(text) = text {
-                self.emit(ViewInput::Paste(text.to_string()));
+            match event.keyCode() {
+                KVK_ANSI_V => {
+                    let text = unsafe { NSPasteboard::generalPasteboard().stringForType(NSPasteboardTypeString) };
+                    if let Some(text) = text {
+                        self.emit(ViewInput::Paste(text.to_string()));
+                    }
+                    Bool::YES
+                }
+                KVK_ANSI_C => Bool::new(self.emit(ViewInput::Copy)),
+                _ => Bool::NO,
             }
-            Bool::YES
         }
 
         #[unsafe(method(scrollWheel:))]
         fn scroll_wheel(&self, event: &NSEvent) {
             let delta = event.scrollingDeltaY();
             let precise = event.hasPreciseScrollingDeltas().then_some(delta);
-            self.emit(ViewInput::Scroll { lines: delta.signum() * WHEEL_LINES, precise_pixels: precise });
+            self.emit(ViewInput::Scroll {
+                lines: delta.signum() * WHEEL_LINES,
+                precise_pixels: precise,
+                point: self.local(event),
+                mods: mods_of(event.modifierFlags()),
+            });
         }
     }
 );
@@ -110,21 +254,48 @@ impl TerminalView {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(ViewIvars {
             sink: RefCell::new(None),
+            holes: RefCell::default(),
+            passthrough: RefCell::default(),
+            webview: RefCell::new(None),
         });
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1.0, 1.0));
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
 
-    fn emit(&self, input: ViewInput) {
-        if let Some(sink) = self.ivars().sink.borrow().as_ref() {
-            sink(input);
-        }
+    fn emit(&self, input: ViewInput) -> bool {
+        self.ivars()
+            .sink
+            .borrow()
+            .as_ref()
+            .is_some_and(|sink| sink(input))
+    }
+
+    fn local(&self, event: &NSEvent) -> NSPoint {
+        self.convertPoint_fromView(event.locationInWindow(), None)
+    }
+
+    fn mouse(&self, event: &NSEvent, action: MouseAction, button: MouseButton) {
+        let flags = event.modifierFlags();
+        self.emit(ViewInput::Mouse {
+            action,
+            button,
+            point: self.local(event),
+            clicks: event.clickCount(),
+            mods: mods_of(flags),
+            command: flags.contains(NSEventModifierFlags::Command),
+        });
+    }
+
+    fn forward_drag<R>(&self, send: impl FnOnce(&NSView) -> R) -> Option<R> {
+        let webview = self.ivars().webview.borrow().clone()?;
+        Some(send(&webview))
     }
 }
 
 // macOS virtual key codes (Carbon's kVK_* values), which name physical keys
 // whatever the keyboard layout.
 const KVK_ANSI_V: u16 = 0x09;
+const KVK_ANSI_C: u16 = 0x08;
 
 fn key_for(code: u16) -> Key {
     match code {
@@ -222,16 +393,7 @@ fn key_press(event: &NSEvent) -> Option<KeyPress> {
     if flags.contains(NSEventModifierFlags::Command) {
         return None;
     }
-    let mut bits = 0;
-    if flags.contains(NSEventModifierFlags::Shift) {
-        bits |= mods::SHIFT;
-    }
-    if flags.contains(NSEventModifierFlags::Control) {
-        bits |= mods::CTRL;
-    }
-    if flags.contains(NSEventModifierFlags::Option) {
-        bits |= mods::ALT;
-    }
+    let bits = mods_of(flags);
     let text: String = if bits & mods::CTRL != 0 {
         String::new()
     } else {
@@ -285,6 +447,7 @@ pub struct NativeTerminal {
     claimed: Arc<Mutex<(u16, u16)>>,
     /// Whether this viewer owns the terminal's size.
     owner: Arc<AtomicBool>,
+    placement: Rc<Cell<Placement>>,
 }
 
 /// The grid a placement holds, at the page's cell size inside its padding.
@@ -322,12 +485,17 @@ impl NativeTerminal {
         runtime: &tokio::runtime::Handle,
         attach: Attach,
         placement: Placement,
-        on_closed: impl Fn(String) + Send + Sync + 'static,
+        on_event: impl Fn(TerminalEvent) + Send + Sync + 'static,
     ) -> Result<NativeTerminal, String> {
         let mtm = MainThreadMarker::new().ok_or("a native terminal opens on the main thread")?;
         let parent: Retained<NSView> = unsafe { Retained::retain(parent.cast::<NSView>()) }
             .ok_or("the window has no content view")?;
         let view = TerminalView::new(mtm);
+        let webview = find_webview(&parent);
+        if let Some(webview) = &webview {
+            view.registerForDraggedTypes(&webview.registeredDraggedTypes());
+        }
+        *view.ivars().webview.borrow_mut() = webview;
         parent.addSubview(&view);
         let scale = parent
             .window()
@@ -368,13 +536,20 @@ impl NativeTerminal {
             config.format = wgpu::TextureFormat::Bgra8Unorm;
         }
         config.present_mode = wgpu::PresentMode::AutoVsync;
+        if capabilities
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+        {
+            config.alpha_mode = wgpu::CompositeAlphaMode::PostMultiplied;
+        }
         config.desired_maximum_frame_latency = 1;
         surface.configure(&device, &config);
         let renderer = Renderer::new(device, queue, config.format, layout.font_px);
 
         let painter_slot: Arc<Mutex<Option<Arc<Painter>>>> = Arc::default();
         let signal = painter_slot.clone();
-        let closed = Arc::new(on_closed);
+        let on_event: Arc<dyn Fn(TerminalEvent) + Send + Sync> = Arc::new(on_event);
+        let closed = on_event.clone();
         let owner = Arc::new(AtomicBool::new(true));
         let ownership = owner.clone();
         let grid = grid_of(placement);
@@ -383,7 +558,7 @@ impl NativeTerminal {
             ..attach
         };
         let stream = Arc::new(Stream::open_on(runtime, attach, move |event| match event {
-            Event::Closed { reason } => closed(reason),
+            Event::Closed { reason } => closed(TerminalEvent::Closed(reason)),
             Event::Clipboard(text) => copy_to_pasteboard(text),
             Event::Ownership { local, .. } => ownership.store(local, Ordering::Relaxed),
             Event::Changed | Event::PtySize { .. } => {
@@ -405,28 +580,35 @@ impl NativeTerminal {
             scale,
             claimed: Arc::new(Mutex::new(grid)),
             owner,
+            placement: Rc::new(Cell::new(placement)),
         };
         terminal.place(placement);
-        terminal.connect_input(placement.cell_height * scale);
+        terminal.connect_input(on_event);
         Ok(terminal)
     }
 
-    fn connect_input(&self, cell_height_px: f64) {
+    fn connect_input(&self, on_event: Arc<dyn Fn(TerminalEvent) + Send + Sync>) {
         let stream = self.stream.clone();
         let screen = self.stream.screen();
         let painter = self.painter.clone();
         let claimed = self.claimed.clone();
         let owner = self.owner.clone();
-        let cell_height = cell_height_px.max(1.0) / self.scale.max(1.0);
+        let placement = self.placement.clone();
+        // Where a drag that selects text started.
+        let anchor: Cell<Option<(u16, u16)>> = Cell::new(None);
         *self.view.ivars().sink.borrow_mut() = Some(Box::new(move |input| {
             let mut guard = screen.lock().unwrap();
-            let Some(vt) = guard.as_mut() else { return };
+            let Some(vt) = guard.as_mut() else {
+                return false;
+            };
+            let at = placement.get();
             match input {
                 ViewInput::Key(press) => {
                     let bytes = vt.encode_key(&press);
                     if bytes.is_empty() {
-                        return;
+                        return false;
                     }
+                    vt.clear_selection();
                     // Typing here takes the size back from another viewer, as the browser does.
                     if !owner.load(Ordering::Relaxed) {
                         let (cols, rows) = *claimed.lock().unwrap();
@@ -438,28 +620,167 @@ impl NativeTerminal {
                     drop(guard);
                     stream.input(bytes, submitted);
                     painter.redraw();
+                    true
                 }
                 ViewInput::Paste(text) => {
                     let bytes = vt.encode_paste(&text);
                     drop(guard);
                     stream.input(bytes, false);
+                    true
+                }
+                ViewInput::Copy => {
+                    let text = vt.selected_text();
+                    if text.is_empty() {
+                        return false;
+                    }
+                    drop(guard);
+                    copy_to_pasteboard(text);
+                    true
                 }
                 ViewInput::Scroll {
                     lines,
                     precise_pixels,
+                    point,
+                    mods: bits,
                 } => {
                     let rows = match precise_pixels {
-                        Some(pixels) => -(pixels / cell_height).round(),
+                        Some(pixels) => -(pixels / at.cell_height.max(1.0)).round(),
                         None => -lines,
                     };
-                    if rows != 0.0 {
-                        let _ = vt.scroll(rows as isize);
-                        drop(guard);
-                        painter.redraw();
+                    if rows == 0.0 {
+                        return true;
                     }
+                    if vt.mouse_tracking() && bits & mods::SHIFT == 0 {
+                        let button = if rows < 0.0 {
+                            MouseButton::WheelUp
+                        } else {
+                            MouseButton::WheelDown
+                        };
+                        let mut bytes = Vec::new();
+                        for _ in 0..(rows.abs() as usize) {
+                            bytes.extend(vt.encode_mouse(
+                                MouseAction::Press,
+                                Some(button),
+                                position(point),
+                                bits,
+                                geometry(at),
+                            ));
+                        }
+                        drop(guard);
+                        if !bytes.is_empty() {
+                            stream.input(bytes, false);
+                        }
+                        return true;
+                    }
+                    let _ = vt.scroll(rows as isize);
+                    drop(guard);
+                    painter.redraw();
+                    true
+                }
+                ViewInput::Mouse {
+                    action,
+                    button,
+                    point,
+                    clicks,
+                    mods: bits,
+                    command,
+                } => {
+                    if vt.mouse_tracking() && bits & mods::SHIFT == 0 && !command {
+                        let bytes = vt.encode_mouse(
+                            action,
+                            Some(button),
+                            position(point),
+                            bits,
+                            geometry(at),
+                        );
+                        drop(guard);
+                        if !bytes.is_empty() {
+                            stream.input(bytes, false);
+                        }
+                        return true;
+                    }
+                    let cell = cell_at(vt, at, point);
+                    match (button, action) {
+                        (MouseButton::Left, MouseAction::Press) if command => {
+                            let link = vt.link_at(cell.0, cell.1);
+                            drop(guard);
+                            if let Some(href) = link {
+                                on_event(TerminalEvent::Link(href));
+                            }
+                        }
+                        (MouseButton::Left, MouseAction::Press) => {
+                            anchor.set(None);
+                            match clicks {
+                                1 => {
+                                    vt.clear_selection();
+                                    anchor.set(Some(cell));
+                                }
+                                2 => {
+                                    vt.select_word(cell.0, cell.1);
+                                }
+                                _ => {
+                                    vt.select_line(cell.0, cell.1);
+                                }
+                            }
+                            drop(guard);
+                            painter.redraw();
+                        }
+                        (MouseButton::Left, MouseAction::Motion) => {
+                            if let Some(start) = anchor.get() {
+                                vt.select_range(start, cell);
+                                drop(guard);
+                                painter.redraw();
+                            }
+                        }
+                        (MouseButton::Left, MouseAction::Release) => anchor.set(None),
+                        (MouseButton::Right, MouseAction::Press) => {
+                            drop(guard);
+                            on_event(TerminalEvent::ContextMenu {
+                                x: at.x + point.x,
+                                y: at.y + point.y,
+                            });
+                        }
+                        _ => {}
+                    }
+                    true
                 }
             }
         }));
+    }
+
+    /// Sets the page content over the terminal, as rectangles in page
+    /// coordinates: `holes` show the page and take the mouse, and
+    /// `passthrough` only takes the mouse.
+    pub fn set_regions(&self, holes: &[NSRect], passthrough: &[NSRect]) {
+        let at = self.placement.get();
+        let local = |rects: &[NSRect]| -> Vec<NSRect> {
+            rects
+                .iter()
+                .map(|rect| {
+                    NSRect::new(
+                        NSPoint::new(rect.origin.x - at.x, rect.origin.y - at.y),
+                        rect.size,
+                    )
+                })
+                .collect()
+        };
+        let holes = local(holes);
+        let scale = self.scale as f32;
+        self.painter.set_holes(
+            holes
+                .iter()
+                .map(|rect| {
+                    [
+                        rect.origin.x as f32 * scale,
+                        rect.origin.y as f32 * scale,
+                        rect.size.width as f32 * scale,
+                        rect.size.height as f32 * scale,
+                    ]
+                })
+                .collect(),
+        );
+        *self.view.ivars().holes.borrow_mut() = holes;
+        *self.view.ivars().passthrough.borrow_mut() = local(passthrough);
     }
 
     /// Moves the view to the page's current place for the terminal.
@@ -476,6 +797,7 @@ impl NativeTerminal {
         ));
         self.view.setHidden(!placement.visible);
         self.painter.set_layout(layout_for(placement, self.scale));
+        self.placement.set(placement);
         if placement.visible {
             let grid = grid_of(placement);
             let mut claimed = self.claimed.lock().unwrap();
@@ -510,6 +832,43 @@ impl Drop for NativeTerminal {
         self.view.ivars().sink.borrow_mut().take();
         self.view.removeFromSuperview();
     }
+}
+
+/// The viewport cell under a point in the view, clamped to the grid.
+fn cell_at(vt: &Vt, at: Placement, point: NSPoint) -> (u16, u16) {
+    let frame = vt.frame();
+    let col = ((point.x - at.padding) / at.cell_width.max(1.0)).floor();
+    let row = ((point.y - at.padding) / at.cell_height.max(1.0)).floor();
+    let last_col = f64::from(frame.cols.saturating_sub(1));
+    let last_row = f64::from(frame.rows.saturating_sub(1));
+    (
+        col.clamp(0.0, last_col) as u16,
+        row.clamp(0.0, last_row) as u16,
+    )
+}
+
+fn position(point: NSPoint) -> (f32, f32) {
+    (point.x as f32, point.y as f32)
+}
+
+/// The view's grid geometry for mouse reports, in CSS pixels like the points.
+fn geometry(at: Placement) -> MouseGeometry {
+    MouseGeometry {
+        width: at.width.max(0.0) as u32,
+        height: at.height.max(0.0) as u32,
+        cell_width: at.cell_width.round() as u32,
+        cell_height: at.cell_height.round() as u32,
+        padding: at.padding.round() as u32,
+    }
+}
+
+/// The window's web view, found among the content view's subviews.
+fn find_webview(parent: &NSView) -> Option<Retained<NSView>> {
+    let class = AnyClass::get(c"WKWebView")?;
+    parent
+        .subviews()
+        .iter()
+        .find(|view| view.isKindOfClass(class))
 }
 
 fn layout_for(placement: Placement, scale: f64) -> Layout {
