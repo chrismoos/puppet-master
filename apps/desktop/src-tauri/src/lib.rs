@@ -2,6 +2,8 @@
 //! controller's own web UI, so sign-in, the API and updates work exactly as
 //! in a browser, and a small bridge adds what a browser tab cannot do.
 
+#[cfg(test)]
+mod commands;
 mod controller;
 mod native;
 
@@ -181,19 +183,36 @@ fn grant_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    app.add_capability(
+    let capability = CONTROLLER_PERMISSIONS.iter().fold(
         CapabilityBuilder::new(format!("controller-{id}"))
             .remote(format!("{origin}/*"))
-            .window("*")
-            .permission("core:default")
-            .permission("core:window:allow-start-dragging")
-            .permission("core:window:allow-toggle-maximize")
-            .permission("core:window:allow-minimize")
-            .permission("core:window:allow-close")
-            .permission("core:window:allow-is-fullscreen")
-            .permission("core:window:allow-set-fullscreen"),
-    )
+            .window("*"),
+        |capability, permission| capability.permission(*permission),
+    );
+    app.add_capability(capability)
 }
+
+/// What the controller's pages may call: window controls and the app's own
+/// commands, except picking a controller, which is the connect page's.
+const CONTROLLER_PERMISSIONS: &[&str] = &[
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-set-fullscreen",
+    "allow-native-notify",
+    "allow-native-badge",
+    "allow-open-window",
+    "allow-native-terminal-supported",
+    "allow-native-terminal-open",
+    "allow-native-terminal-place",
+    "allow-native-terminal-focus",
+    "allow-native-terminal-close",
+    "allow-native-terminal-regions",
+    "allow-native-terminal-close-all",
+];
 
 fn show_controller(app: &AppHandle, url: &Url) -> tauri::Result<()> {
     if let Err(error) = grant_controller(app, url) {
@@ -298,4 +317,36 @@ pub(crate) fn open_link(app: &AppHandle, url: &str) -> Result<(), String> {
         }
     })
     .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The command an app permission such as `allow-open-window` names.
+    fn command_of(permission: &str) -> Option<String> {
+        permission
+            .strip_prefix("allow-")
+            .map(|name| name.replace('-', "_"))
+    }
+
+    #[test]
+    fn the_controller_is_granted_every_command_but_picking_a_controller() {
+        let granted: Vec<String> = CONTROLLER_PERMISSIONS
+            .iter()
+            .filter_map(|permission| command_of(permission))
+            .collect();
+        for name in &granted {
+            assert!(
+                commands::COMMANDS.contains(&name.as_str()),
+                "{name} is not a declared command"
+            );
+        }
+        let expected: Vec<&str> = commands::COMMANDS
+            .iter()
+            .copied()
+            .filter(|name| !matches!(*name, "connect" | "saved_controller"))
+            .collect();
+        assert_eq!(granted, expected);
+    }
 }
