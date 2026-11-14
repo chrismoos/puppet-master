@@ -118,6 +118,8 @@ pub enum PushEventClass {
     Failed,
     Completed,
     ConnectionApproval,
+    /// Something an agent was asked to tell the user, through notify_user.
+    AgentNotification,
 }
 
 impl PushEventClass {
@@ -127,6 +129,7 @@ impl PushEventClass {
             PushEventClass::Failed => "failed",
             PushEventClass::Completed => "completed",
             PushEventClass::ConnectionApproval => "connection-approval",
+            PushEventClass::AgentNotification => "message",
         }
     }
 
@@ -136,6 +139,7 @@ impl PushEventClass {
             "failed" => Some(PushEventClass::Failed),
             "completed" => Some(PushEventClass::Completed),
             "connection-approval" => Some(PushEventClass::ConnectionApproval),
+            "message" => Some(PushEventClass::AgentNotification),
             _ => None,
         }
     }
@@ -145,7 +149,11 @@ impl PushEventClass {
             PushEventClass::NeedsInput => 1,
             PushEventClass::Failed => 2,
             PushEventClass::Completed => 4,
-            PushEventClass::ConnectionApproval => PushEventClass::NeedsInput.mask(),
+            // Both want the user's attention, so they follow the
+            // needs-input switch rather than adding a setting of their own.
+            PushEventClass::ConnectionApproval | PushEventClass::AgentNotification => {
+                PushEventClass::NeedsInput.mask()
+            }
         }
     }
 }
@@ -362,6 +370,7 @@ pub(crate) fn message_content(
         PushEventClass::Failed => "failed",
         PushEventClass::Completed => "completed work",
         PushEventClass::ConnectionApproval => "requires connection approval",
+        PushEventClass::AgentNotification => "sent a message",
     };
     if !previews_enabled || project_name.is_empty() {
         return (format!("Session {action}"), String::new());
@@ -384,6 +393,24 @@ pub(crate) fn message_content(
             &crate::text::unescape_html_entities(body),
             PUSH_BODY_MAX_CHARS,
         ),
+    )
+}
+
+/// Alert text for an agent message. With previews off it says only that a
+/// message arrived, since its words are the agent's and could say anything.
+pub(crate) fn agent_notification_content(
+    previews_enabled: bool,
+    project_name: &str,
+    title: &str,
+    body: &str,
+) -> (String, String) {
+    if !previews_enabled || project_name.is_empty() {
+        return ("Session sent a message".to_string(), String::new());
+    }
+    let project_name = crate::text::unescape_html_entities(project_name);
+    (
+        format!("{project_name}: {title}"),
+        truncate_with_ellipsis(body, PUSH_BODY_MAX_CHARS),
     )
 }
 
@@ -785,7 +812,9 @@ impl Daemon {
                 PushEventClass::Failed => SessionAlertKind::Failed,
                 PushEventClass::Completed => SessionAlertKind::Completed,
                 PushEventClass::ConnectionApproval => SessionAlertKind::NeedsInput,
+                PushEventClass::AgentNotification => SessionAlertKind::Message,
             },
+            notification: None,
         };
         let endpoints = match self.storage().active_push_endpoints() {
             Ok(endpoints) if !endpoints.is_empty() => endpoints,
@@ -921,6 +950,57 @@ impl Daemon {
         self.push_runtime().wakeup.notify_one();
     }
 
+    pub(crate) fn queue_agent_notification_push(&self, session_id: u64, message_id: u64) {
+        let class = PushEventClass::AgentNotification;
+        let event_id = format!(
+            "{}{message_id}",
+            crate::notify_user::AGENT_NOTIFICATION_EVENT_PREFIX
+        );
+        if self.push_events_setting() & class.mask() == 0 {
+            return;
+        }
+        let endpoints = match self.storage().active_push_endpoints() {
+            Ok(endpoints) => endpoints,
+            Err(e) => {
+                warn!(session = session_id, error = %e, "push endpoint read failed");
+                return;
+            }
+        };
+        let secret = self.installation_secret();
+        let now = now_unix_ms();
+        let mut queued = false;
+        for (endpoint, user_id) in endpoints {
+            if endpoint.event_mask & class.mask() == 0 || !seals_to_a_usable_key(&endpoint) {
+                continue;
+            }
+            let suppressed = self.foreground_suppressed(endpoint.device_id, session_id, now)
+                || self.web_activity_suppressed(user_id, now);
+            let status = if suppressed {
+                DELIVERY_SUPPRESSED
+            } else {
+                DELIVERY_PENDING
+            };
+            let collapse_id = opaque_id(&secret, &event_id, endpoint.device_id, session_id);
+            match self.storage().enqueue_notification_delivery(
+                &event_id,
+                endpoint.device_id,
+                session_id,
+                class.as_str(),
+                &collapse_id,
+                status,
+                now,
+                now,
+            ) {
+                Ok(true) if !suppressed => queued = true,
+                Ok(_) => {}
+                Err(e) => warn!(error = %e, "agent message notification could not be queued"),
+            }
+        }
+        if queued {
+            self.push_runtime().wakeup.notify_one();
+        }
+    }
+
     pub(crate) fn push_wakeup(&self) -> &tokio::sync::Notify {
         &self.push_runtime().wakeup
     }
@@ -1015,13 +1095,21 @@ impl Daemon {
             }
             None => state_detail,
         };
-        let (title, body) = message_content(
-            class,
-            endpoint.previews_enabled,
-            &project_name,
-            &headline,
-            &state_detail,
-        );
+        let (title, body) = match self.agent_notification_for(class, &delivery.event_id) {
+            Some((message_title, message_body)) => agent_notification_content(
+                endpoint.previews_enabled,
+                &project_name,
+                &message_title,
+                &message_body,
+            ),
+            None => message_content(
+                class,
+                endpoint.previews_enabled,
+                &project_name,
+                &headline,
+                &state_detail,
+            ),
+        };
         let controller_ref = push_controller_ref(&self.installation_secret(), endpoint.device_id);
         // An endpoint with no usable key is disabled before it reaches
         // here, so only a sealing failure leaves the payload unsealed.
@@ -1045,6 +1133,21 @@ impl Daemon {
             environment: endpoint.environment.clone(),
             mutable_content,
         }
+    }
+
+    fn agent_notification_for(
+        &self,
+        class: PushEventClass,
+        event_id: &str,
+    ) -> Option<(String, String)> {
+        if class != PushEventClass::AgentNotification {
+            return None;
+        }
+        let id = event_id
+            .strip_prefix(crate::notify_user::AGENT_NOTIFICATION_EVENT_PREFIX)?
+            .parse()
+            .ok()?;
+        self.storage().agent_notification(id).ok().flatten()
     }
 
     /// Seals a notification for the device's public key using standard
@@ -1910,6 +2013,7 @@ mod tests {
             Some(SessionAlert {
                 session_id: session.id,
                 kind: SessionAlertKind::NeedsInput,
+                notification: None,
             })
         );
     }
@@ -2246,6 +2350,33 @@ mod tests {
             id,
             opaque_id(secret, "controller", 3, 7),
             "labels keep uses from being compared"
+        );
+    }
+
+    #[test]
+    fn agent_notification_content_shows_the_agents_words_only_with_previews() {
+        assert_eq!(
+            agent_notification_content(false, "api", "Deploy finished", "all green"),
+            ("Session sent a message".to_string(), String::new())
+        );
+        assert_eq!(
+            agent_notification_content(true, "api", "Deploy finished", "all green"),
+            ("api: Deploy finished".to_string(), "all green".to_string())
+        );
+        let long = "x".repeat(PUSH_BODY_MAX_CHARS + 20);
+        let (_, body) = agent_notification_content(true, "api", "t", &long);
+        assert_eq!(body.chars().count(), PUSH_BODY_MAX_CHARS);
+    }
+
+    #[test]
+    fn an_agent_message_follows_the_needs_input_switch() {
+        assert_eq!(
+            PushEventClass::parse("message"),
+            Some(PushEventClass::AgentNotification)
+        );
+        assert_eq!(
+            PushEventClass::AgentNotification.mask(),
+            PushEventClass::NeedsInput.mask()
         );
     }
 

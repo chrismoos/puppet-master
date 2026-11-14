@@ -971,6 +971,7 @@ async fn mcp_endpoint_speaks_the_protocol_subset() {
         [
             "report",
             "flag_blocked",
+            "notify_user",
             "reply_message",
             "publish_port",
             "publish_dir",
@@ -1284,6 +1285,7 @@ async fn item_tools_are_gated_by_the_spawn_toggle() {
         [
             "report",
             "flag_blocked",
+            "notify_user",
             "reply_message",
             "publish_port",
             "publish_dir",
@@ -5020,4 +5022,183 @@ async fn pane_programs_need_bypass_run_directly_and_report_their_exit_status() {
     let after = call(&app, &token, "get_layout", json!({})).await;
     let after: Value = serde_json::from_str(call_text(&after)).unwrap();
     assert_eq!(after["layout"], json!({"pane": "agent"}));
+}
+
+fn notification_alerts(
+    events: &mut tokio::sync::broadcast::Receiver<pm_protocol::domain::Event>,
+) -> Vec<pm_protocol::domain::SessionAlert> {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            pm_protocol::domain::Event::SessionAlert(alert)
+                if alert.kind == pm_protocol::domain::SessionAlertKind::Message =>
+            {
+                Some(alert)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn notify_user_raises_a_message_alert_with_the_agents_words() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    let app = pm_daemon::http::router(Arc::clone(&env.daemon));
+    let mut events = env.daemon.subscribe().1;
+    let state_before = session_of(&env, id).state;
+
+    let sent = call(
+        &app,
+        &token,
+        "notify_user",
+        json!({ "title": "Deploy finished", "body": "staging is green" }),
+    )
+    .await;
+    assert_eq!(sent["isError"], false, "{sent}");
+
+    let alerts = notification_alerts(&mut events);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].session_id, id);
+    let notification = alerts[0].notification.as_ref().unwrap();
+    assert_eq!(notification.title, "Deploy finished");
+    assert_eq!(notification.body, "staging is green");
+    assert_eq!(notification.link, None);
+    assert_eq!(
+        session_of(&env, id).state,
+        state_before,
+        "a notification is not a state change"
+    );
+}
+
+#[tokio::test]
+async fn notify_user_allows_one_call_per_session_every_ten_seconds() {
+    let env = daemon_env();
+    let first = spawn_test_session(&env, "p");
+    let second = spawn_test_session(&env, "q");
+    let first_token = env.daemon.session_token(first).unwrap().unwrap();
+    let second_token = env.daemon.session_token(second).unwrap().unwrap();
+    let app = pm_daemon::http::router(Arc::clone(&env.daemon));
+    let mut events = env.daemon.subscribe().1;
+
+    let sent = call(&app, &first_token, "notify_user", json!({ "title": "one" })).await;
+    assert_eq!(sent["isError"], false, "{sent}");
+    let refused = call(&app, &first_token, "notify_user", json!({ "title": "two" })).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        call_text(&refused).contains("one notification every 10 seconds"),
+        "{refused}"
+    );
+    let other = call(
+        &app,
+        &second_token,
+        "notify_user",
+        json!({ "title": "three" }),
+    )
+    .await;
+    assert_eq!(
+        other["isError"], false,
+        "the limit is per session, so another session is not held back: {other}"
+    );
+
+    let titles: Vec<String> = notification_alerts(&mut events)
+        .into_iter()
+        .map(|alert| alert.notification.unwrap().title)
+        .collect();
+    assert_eq!(titles, ["one", "three"], "a refused call sends nothing");
+}
+
+#[tokio::test]
+async fn notify_user_refuses_empty_or_long_text_and_unknown_fields() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    let app = pm_daemon::http::router(Arc::clone(&env.daemon));
+
+    let empty = call(&app, &token, "notify_user", json!({ "title": "  " })).await;
+    assert_eq!(empty["isError"], true, "{empty}");
+    let long_title = "x".repeat(81);
+    let long = call(&app, &token, "notify_user", json!({ "title": long_title })).await;
+    assert_eq!(long["isError"], true, "{long}");
+    assert!(call_text(&long).contains("keep it to 80"), "{long}");
+    let long_body = "y".repeat(301);
+    let body = call(
+        &app,
+        &token,
+        "notify_user",
+        json!({ "title": "ok", "body": long_body }),
+    )
+    .await;
+    assert!(call_text(&body).contains("keep it to 300"), "{body}");
+    let extra = call(
+        &app,
+        &token,
+        "notify_user",
+        json!({ "title": "ok", "url": "https://example.com" }),
+    )
+    .await;
+    assert_eq!(extra["isError"], true, "{extra}");
+
+    let sent = call(&app, &token, "notify_user", json!({ "title": "ok" })).await;
+    assert_eq!(
+        sent["isError"], false,
+        "refused calls do not count against the rate limit: {sent}"
+    );
+}
+
+#[tokio::test]
+async fn notify_user_links_only_to_what_this_controller_serves() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    let app = pm_daemon::http::router(Arc::clone(&env.daemon));
+    let mut events = env.daemon.subscribe().1;
+
+    let outside = call(
+        &app,
+        &token,
+        "notify_user",
+        json!({ "title": "look", "link": "https://evil.example/" }),
+    )
+    .await;
+    assert_eq!(outside["isError"], true, "{outside}");
+    assert!(
+        call_text(&outside).contains("not something this session can link to"),
+        "{outside}"
+    );
+
+    let unpublished = call(
+        &app,
+        &token,
+        "notify_user",
+        json!({ "title": "look", "link": "docs-preview" }),
+    )
+    .await;
+    assert_eq!(unpublished["isError"], true, "{unpublished}");
+
+    let bucket_id = bucket_of(&env);
+    let item = seed_item(&env, bucket_id, "notify:item", "Fix the login page");
+    let linked = call(
+        &app,
+        &token,
+        "notify_user",
+        json!({ "title": "Filed it", "link": format!("pm:item/{bucket_id}/{item}") }),
+    )
+    .await;
+    assert_eq!(linked["isError"], false, "{linked}");
+    let alerts = notification_alerts(&mut events);
+    assert_eq!(alerts.len(), 1, "refused links send nothing");
+    let link = alerts[0]
+        .notification
+        .as_ref()
+        .unwrap()
+        .link
+        .clone()
+        .unwrap();
+    assert_eq!(
+        link.kind,
+        pm_protocol::domain::AgentNotificationLinkKind::Item
+    );
+    assert_eq!(link.title, "Fix the login page");
+    assert_eq!(link.url, format!("/bucket/{bucket_id}/item/{item}"));
 }

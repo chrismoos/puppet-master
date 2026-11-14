@@ -21,15 +21,17 @@ describe("page content over a native terminal", () => {
     vi.restoreAllMocks();
   });
 
-  it("lets menus, dialogs and the alert pill show through, clipped to the terminal", () => {
+  it("lets menus, dialogs and alert cards show through, clipped to the terminal", () => {
     const host = at(add(`<div class="host"></div>`), 100, 100, 400, 300);
     at(add(`<div class="popover-menu"></div>`), 450, 150, 100, 80);
     at(add(`<div role="dialog"></div>`), 200, 200, 50, 50);
-    at(add(`<div class="alert-pill"></div>`), 600, 10, 200, 40);
+    at(add(`<div class="alert-card"></div>`), 600, 10, 200, 40);
+    at(add(`<div class="alert-card"></div>`), 480, 120, 60, 40);
     expect(overlayRegions(host)).toEqual({
       holes: [
         { x: 450, y: 150, width: 50, height: 80 },
         { x: 200, y: 200, width: 50, height: 50 },
+        { x: 480, y: 120, width: 20, height: 40 },
       ],
       passthrough: [],
     });

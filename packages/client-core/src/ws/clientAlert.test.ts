@@ -2,6 +2,9 @@ import { create, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
 import {
   AgentKind,
+  AgentNotificationLinkKind,
+  AgentNotificationSchema,
+  type AgentNotification,
   EventSchema,
   ServerMessageSchema,
   SessionAlertKind,
@@ -69,14 +72,14 @@ function changeOf(changed: ReturnType<typeof session>): Uint8Array {
   );
 }
 
-function alertOf(sessionId: bigint, kind: SessionAlertKind): Uint8Array {
+function alertOf(sessionId: bigint, kind: SessionAlertKind, message?: AgentNotification): Uint8Array {
   return toBinary(
     ServerMessageSchema,
     create(ServerMessageSchema, {
       msg: {
         case: "event",
         value: create(EventSchema, {
-          event: { case: "sessionAlert", value: { sessionId, kind } },
+          event: { case: "sessionAlert", value: { sessionId, kind, notification: message } },
         }),
       },
     }),
@@ -93,6 +96,26 @@ describe("PmClient alerts", () => {
     socket.deliver(alertOf(7n, SessionAlertKind.NEEDS_INPUT));
 
     expect(seen).toEqual([[7n, SessionAlertKind.NEEDS_INPUT]]);
+    client.stop();
+  });
+
+  it("hands a message alert's own words and link to its listeners", () => {
+    const { client, socket } = connected();
+    const seen: (AgentNotification | undefined)[] = [];
+    client.onAlert((_s, _kind, message) => seen.push(message));
+    const message = create(AgentNotificationSchema, {
+      title: "Deploy finished",
+      body: "staging is green",
+      link: { kind: AgentNotificationLinkKind.PAGE, title: "report", url: "https://report.example/" },
+    });
+
+    socket.deliver(snapshotOf(session(7n, SessionState.WORKING)));
+    socket.deliver(alertOf(7n, SessionAlertKind.MESSAGE, message));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.title).toBe("Deploy finished");
+    expect(seen[0]?.link?.kind).toBe(AgentNotificationLinkKind.PAGE);
+    expect(seen[0]?.link?.url).toBe("https://report.example/");
     client.stop();
   });
 

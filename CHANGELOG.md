@@ -4,7 +4,11 @@
 
 - [macOS] A desktop app opens your controller in its own window, with no title bar or native window buttons, desktop notifications, a Dock badge for sessions waiting on you, and new windows for pages that would open in a new tab. The window has its own close, minimize and full screen buttons on the top bar. Every terminal is drawn natively with Metal in your terminal theme, with selection, copy, ⌘-click links, input methods, mouse support for programs that ask for it, file drops, page zoom, connection status, a scrollbar, VoiceOver, and instant switching back to recent terminals. Build it with `make desktop-build`.
 
-- [Web] While you are looking at Puppet Master, alerts show as a slim pill at the top right instead of a desktop notification. Click it to open the session, or dismiss it, and it hides on its own. Alerts still go to the desktop while the tab is in the background.
+- [Web] Pages an agent opens in a pane follow Puppet Master's dark or light appearance instead of always rendering light.
+
+- [Web] While you are looking at Puppet Master, alerts show as cards stacked at the top right instead of desktop notifications, with the session's goal and question. Click a card to open its session or × to dismiss it. Each card hides on its own unless the pointer rests on the stack, and up to three show at once. Alerts still go to the desktop while the tab is in the background.
+
+- [Daemon] When you ask an agent to tell you about something, it can notify you with `notify_user`: a card in the dashboard, or a desktop or phone notification when you are away. A notification can link to a page or preview the session published, or to a board item. Each session can send one every 10 seconds.
 
 - [Daemon] A session's question stops showing as needs-input once you answer it in the terminal, Codex included, or once its agent goes back to work, instead of lasting until the agent's turn ends.
 

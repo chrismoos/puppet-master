@@ -72,6 +72,7 @@ import {
   type VoiceDelta,
   type AgentReplyArrived,
   type SecurityNotice,
+  type AgentNotification,
 } from "../gen/pm/v1/pm_pb";
 import { SOCKET_OPEN, type SocketConnector, type SocketLike } from "../platform";
 import type { ItemResponseTarget } from "../state/itemResponse";
@@ -195,7 +196,7 @@ export class PmClient {
 
   private state: AppState = initialState;
   private listeners = new Set<() => void>();
-  private alertListeners = new Set<(session: Session, kind: SessionAlertKind) => void>();
+  private alertListeners = new Set<(session: Session, kind: SessionAlertKind, message?: AgentNotification) => void>();
   private securityNoticeListeners = new Set<(notice: SecurityNotice) => void>();
   private agentReplyListeners = new Set<(reply: AgentReplyArrived) => void>();
   private connectionsListeners = new Set<() => void>();
@@ -297,9 +298,10 @@ export class PmClient {
   /**
    * Fires when the daemon raises an alert for a session this client knows.
    * The daemon decides what is alert-worthy, using the same classification
-   * that gates push, so this client renders rather than re-deriving.
+   * that gates push, so this client renders rather than re-deriving. A
+   * MESSAGE alert carries the agent's own words in `notification`.
    */
-  onAlert = (listener: (session: Session, kind: SessionAlertKind) => void): (() => void) => {
+  onAlert = (listener: (session: Session, kind: SessionAlertKind, message?: AgentNotification) => void): (() => void) => {
     this.alertListeners.add(listener);
     return () => this.alertListeners.delete(listener);
   };
@@ -866,8 +868,8 @@ export class PmClient {
     }
   }
 
-  private emitAlert(session: Session, kind: SessionAlertKind): void {
-    for (const listener of this.alertListeners) listener(session, kind);
+  private emitAlert(session: Session, kind: SessionAlertKind, message?: AgentNotification): void {
+    for (const listener of this.alertListeners) listener(session, kind, message);
   }
 
   private emitConnectionsChanged(): void {
@@ -965,7 +967,7 @@ export class PmClient {
           const alert = msg.msg.value.event.value;
           this.alertCatchUp.noteAlert(alert.sessionId, alert.kind);
           const session = this.state.sessions.get(alert.sessionId.toString());
-          if (session) this.emitAlert(session, alert.kind);
+          if (session) this.emitAlert(session, alert.kind, alert.notification);
         }
         if (msg.msg.value.event.case === "securityNotice") {
           this.emitSecurityNotice(msg.msg.value.event.value);

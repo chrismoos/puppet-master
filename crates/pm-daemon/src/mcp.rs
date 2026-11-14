@@ -926,6 +926,26 @@ fn base_tool_definitions() -> Value {
             }
         },
         {
+            "name": "notify_user",
+            "description": "Notify the user: a card in the dashboard they are watching, \
+                or a desktop or phone notification when they are away. Use it only when \
+                the user asked you to tell them about something (\"let me know when the \
+                deploy finishes\"), never for routine progress, status, or a question: \
+                report and flag_blocked cover those. One per session every 10 seconds, and \
+                a faster call is refused with nothing sent. It does not change your state \
+                or end your turn.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "What happened, in a few words (at most 80 characters), e.g. 'Deploy to staging finished'" },
+                    "body": { "type": "string", "description": "Optional detail the user needs, at most 300 characters" },
+                    "link": { "type": "string", "description": "Optional thing to open: the URL or slug of a directory or port this session published, or a board item reference like pm:item/<bucket-id>/<item-number>. Any other link is refused." }
+                },
+                "required": ["title"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "reply_message",
             "description": "Answer a message that asked you for a reply. The message \
                 carries the message_id and reply_token to pass back, and the capability works \
@@ -1923,6 +1943,7 @@ const REPORT_FIELDS: &[&str] = &[
     "goal", "headline", "summary", "note", "glance", "context", "clear", "git",
 ];
 const FLAG_BLOCKED_FIELDS: &[&str] = &["question"];
+const NOTIFY_USER_FIELDS: &[&str] = &["title", "body", "link"];
 
 /// A tool call whose arguments carry keys the schema does not define is a
 /// guessed payload, and applying the known subset would report success for
@@ -2557,6 +2578,27 @@ async fn call_tool(
                 clear: str_array("clear"),
                 git: Box::new(git_update(args.get("git"))),
             }
+        }
+        "notify_user" => {
+            if let Err(message) = check_known_keys(args, NOTIFY_USER_FIELDS) {
+                return Ok(tool_text(true, message));
+            }
+            return Ok(
+                match daemon.notify_user(token, &str_arg("title"), &str_arg("body"), &str_arg("link")) {
+                    Ok(message) => tool_text(
+                        false,
+                        match message.link {
+                            Some(link) => format!(
+                                "Sent. The user sees it now or on their phone, with a link to {} ({}).",
+                                link.title,
+                                link.kind.as_str()
+                            ),
+                            None => "Sent. The user sees it now or on their phone.".into(),
+                        },
+                    ),
+                    Err(e) => tool_text(true, e.to_string()),
+                },
+            );
         }
         "flag_blocked" => {
             if let Err(message) = check_known_keys(args, FLAG_BLOCKED_FIELDS) {

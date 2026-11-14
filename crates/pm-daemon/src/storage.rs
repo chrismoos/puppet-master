@@ -2740,6 +2740,7 @@ impl Storage {
         crate::connections::migrate(&conn)?;
         conn.execute_batch(SUPERVISOR_SNOOZE_SCHEMA)?;
         conn.execute_batch(crate::panes::SCHEMA)?;
+        conn.execute_batch(crate::notify_user::SCHEMA)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         conn.execute_batch(BACKFILL_SESSION_ACTIVITY)?;
         // Blank-keyed or blank-valued fields predate ingestion dropping them

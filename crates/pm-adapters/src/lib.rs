@@ -467,7 +467,9 @@ Call \
 a decision, clarification, permission, credential, or external action, call `flag_blocked` with \
 one concrete question. Never merely print a question and then stop or finish. Idle means the \
 turn is complete and no input is currently required; never use Idle as an implicit waiting \
-state. These tools only update the dashboard a human is watching — they create no files or \
+state. When the user asks to be told about something later, such as a build or deploy \
+finishing, call `notify_user` when it happens, and never use it for routine progress. \
+These tools only update the dashboard a human is watching — they create no files or \
 output. When you share HTML, images, reports, or similar \
 artifacts for review, call `publish_dir` with the directory holding them and a slug naming \
 it, and give the user the returned URL instead of only filesystem paths. Point it at the \
@@ -3620,6 +3622,7 @@ console.log(JSON.stringify(sent));
         for tool in [
             "report",
             "flag_blocked",
+            "notify_user",
             "publish_dir",
             "list_dirs",
             "unpublish_dir",
@@ -3631,6 +3634,8 @@ console.log(JSON.stringify(sent));
             assert!(REPORTING_BRIEF.contains(tool), "brief omits {tool}");
         }
         for guidance in [
+            "When the user asks to be told about something later",
+            "never use it for routine progress",
             "HTML, images, reports, or similar artifacts",
             "narrowest directory",
             "returned URL instead of only filesystem paths",
