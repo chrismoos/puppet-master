@@ -58,6 +58,7 @@ export class WorkspaceTerminal {
     onIssue?: (reason: GhosttyRendererIssue | null) => void,
     onStatus?: (status: TerminalStreamStatus) => void,
     onCommand?: (command: string) => void,
+    onFirstPaint?: () => void,
   ) {
     const viewportKey = `t:${terminalId}`;
     this.viewport = loadTerminalViewport(viewportKey)
@@ -163,7 +164,10 @@ export class WorkspaceTerminal {
         () => {
           this.pendingWrites -= 1;
           if (frame.replay) this.replayPainted = true;
-          if (frame.replay && (frame.snapshot ?? true)) this.initialSnapshotParsed = true;
+          if (frame.replay && (frame.snapshot ?? true) && !this.initialSnapshotParsed) {
+            this.initialSnapshotParsed = true;
+            if (onFirstPaint) requestAnimationFrame(() => onFirstPaint());
+          }
           if (!frame.replay && this.viewport.linesFromBottom > 0) rememberViewport();
           this.flushHeldInput();
         },

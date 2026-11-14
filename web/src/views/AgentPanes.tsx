@@ -372,6 +372,8 @@ export function AgentPanes({
   );
 }
 
+/** How long a pane waits for its content before showing whatever it has. */
+const REVEAL_FALLBACK_MS = 1500;
 const NO_ISSUE = () => {};
 const NO_COMMAND = () => {};
 
@@ -393,6 +395,15 @@ function PaneView({
   const sideways = collapsed && axis === "row";
   const [localReload, setLocalReload] = useState(0);
   const [confirmingStop, setConfirmingStop] = useState(false);
+  // The body stays behind the pane's own background until its content has
+  // painted, so a pane appears whole instead of building up on screen.
+  const [ready, setReady] = useState(false);
+  const contentKey = `${meta.terminal_id ?? ""}:${meta.version}:${localReload}`;
+  useEffect(() => {
+    setReady(false);
+    const timer = window.setTimeout(() => setReady(true), REVEAL_FALLBACK_MS);
+    return () => window.clearTimeout(timer);
+  }, [contentKey]);
   const terminal = meta.terminal_id !== undefined ? state.terminals.get(String(meta.terminal_id)) : undefined;
   const status =
     meta.kind === "page"
@@ -476,7 +487,7 @@ function PaneView({
         document.body,
       )}
       <div
-        className="ap-body"
+        className={`ap-body${ready || meta.exit_code !== undefined ? "" : " is-curtained"}`}
         style={collapsed ? { position: "absolute", top: HEAD_PX, left: 0, width: expanded.current.w, height: expanded.current.h, visibility: "hidden", pointerEvents: "none" } : undefined}
       >
         {meta.kind === "page" ? (
@@ -487,12 +498,13 @@ function PaneView({
             sandbox="allow-scripts allow-forms"
             referrerPolicy="no-referrer"
             title={meta.title}
+            onLoad={() => setReady(true)}
           />
         ) : meta.exit_code !== undefined ? (
           <EndedOutput sessionId={sessionId} paneId={meta.id} terminalId={meta.terminal_id} exitCode={meta.exit_code} />
         ) : terminal ? (
           <ReadOnlyGuard enabled={!meta.user_input}>
-            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={!collapsed} onIssue={NO_ISSUE} onCommand={NO_COMMAND} />
+            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={!collapsed} onIssue={NO_ISSUE} onCommand={NO_COMMAND} onFirstPaint={() => setReady(true)} />
           </ReadOnlyGuard>
         ) : (
           <div className="ap-wait">starting…</div>

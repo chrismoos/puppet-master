@@ -58,7 +58,9 @@ function createPaneDragGhost(label: string): HTMLElement {
   return ghost;
 }
 
-export function TerminalViewport({ terminal, focused, active, onIssue, onCommand }: { terminal: Terminal; focused: boolean; active: boolean; onIssue: (reason: GhosttyRendererIssue | null) => void; onCommand: (terminalId: bigint, command: string) => void }) {
+export function TerminalViewport({ terminal, focused, active, onIssue, onCommand, onFirstPaint }: { terminal: Terminal; focused: boolean; active: boolean; onIssue: (reason: GhosttyRendererIssue | null) => void; onCommand: (terminalId: bigint, command: string) => void; onFirstPaint?: () => void }) {
+  const firstPaint = useRef(onFirstPaint);
+  firstPaint.current = onFirstPaint;
   const client = useClient();
   const themeController = useTerminalThemeController();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -68,7 +70,7 @@ export function TerminalViewport({ terminal, focused, active, onIssue, onCommand
     const host = hostRef.current;
     if (!host) return;
     onIssue(null);
-    const view = new WorkspaceTerminal(client, host, terminal.id, themeController, onIssue, setStreamStatus, (command) => onCommand(terminal.id, command));
+    const view = new WorkspaceTerminal(client, host, terminal.id, themeController, onIssue, setStreamStatus, (command) => onCommand(terminal.id, command), () => firstPaint.current?.());
     viewRef.current = view;
     view.setActive(active);
     return () => {
