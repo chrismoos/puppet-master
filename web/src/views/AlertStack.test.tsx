@@ -107,14 +107,14 @@ describe("AlertStack", () => {
     expect(stack()).toBeNull();
   });
 
-  it("shows a card's kind, session, detail line, body and age", () => {
-    render([alert("4", "needs-input", { title: "Codex audit", detail: "Auditing the shell tools", body: "Type into your shells?" })]);
+  it("shows a card's kind icon, session name, description and age", () => {
+    render([alert("4", "needs-input", { title: "Codex audit", body: "Type into your shells?" })]);
     const card = cards()[0];
     expect(card.classList).toContain("alert-card-needs-input");
     expect(card.getAttribute("aria-label")).toBe("needs you: Codex audit");
-    expect(card.querySelector(".alert-card-dot")?.getAttribute("title")).toBe("needs you");
+    expect(card.querySelector(".alert-card-icon")?.getAttribute("title")).toBe("needs you");
+    expect(card.querySelector(".alert-card-icon svg")).not.toBeNull();
     expect(card.querySelector(".alert-card-title")?.textContent).toBe("Codex audit");
-    expect(card.querySelector(".alert-card-detail")?.textContent).toBe("Auditing the shell tools");
     expect(card.querySelector(".alert-card-body")?.textContent).toBe("Type into your shells?");
     expect(card.querySelector(".alert-card-age")?.textContent).toBe("just now");
   });
@@ -159,7 +159,6 @@ describe("AlertStack", () => {
     hover(stack()!, true);
     act(() => vi.advanceTimersByTime(60_000));
     expect(titles()).toEqual(["session f"]);
-    expect(cards()[0].querySelector<HTMLElement>(".alert-card-timer")!.style.animationPlayState).toBe("paused");
     hover(stack()!, false);
     act(() => vi.advanceTimersByTime(999));
     expect(titles()).toEqual(["session f"]);
@@ -176,7 +175,7 @@ describe("AlertStack", () => {
       }),
     ]);
     const card = cards()[0];
-    expect(card.querySelector(".alert-card-dot")?.getAttribute("title")).toBe("message");
+    expect(card.querySelector(".alert-card-icon")?.getAttribute("title")).toBe("message");
     expect(card.querySelector(".alert-card-body strong")?.textContent).toBe("Deploy finished");
     expect(card.querySelector(".alert-card-body")?.textContent).toBe("Deploy finished staging is green");
     const link = card.querySelector<HTMLAnchorElement>(".alert-card-link")!;
@@ -187,6 +186,18 @@ describe("AlertStack", () => {
     act(() => link.click());
     expect(linked).toEqual(["m"]);
     expect(opened).toEqual([]);
+  });
+
+  it("draws a distinct icon for each kind", () => {
+    const kinds: InAppAlert["kind"][] = ["needs-input", "approval", "failed", "finished", "message"];
+    render(kinds.map((kind) => alert(kind, kind)).slice(0, 3));
+    const drawn = new Set(cards().map((card) => card.querySelector(".alert-card-icon svg")!.innerHTML));
+    expect(drawn.size).toBe(3);
+    act(() => root.unmount());
+    root = createRoot(host);
+    render(kinds.slice(3).map((kind) => alert(kind, kind)));
+    for (const card of cards()) drawn.add(card.querySelector(".alert-card-icon svg")!.innerHTML);
+    expect(drawn.size).toBe(kinds.length);
   });
 
   it("links a board item inside the dashboard rather than in a new tab", () => {

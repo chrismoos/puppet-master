@@ -18,8 +18,6 @@ export interface InAppAlert {
   kind: InAppAlertKind;
   /** The session's name, or what an approval is about. */
   title: string;
-  /** The muted line under the title, such as the session's project. */
-  detail?: string;
   /** The first words of the body in bold, used for an agent message's title. */
   heading?: string;
   body?: string;
@@ -47,6 +45,24 @@ const KIND_LABEL: Record<InAppAlertKind, string> = {
   failed: "failed",
   finished: "finished",
 };
+
+const ICON_PATHS: Record<InAppAlertKind, readonly string[]> = {
+  "needs-input": ["M9.1 9.2a3 3 0 1 1 4.3 2.7c-.9.4-1.4 1.1-1.4 2v.6", "M12 17.6h.01"],
+  approval: ["M12 3.2l7 2.9v5.1c0 4.4-2.9 7.9-7 9.6-4.1-1.7-7-5.2-7-9.6V6.1l7-2.9z", "M9 12.2l2.1 2.1 4-4.2"],
+  failed: ["M7.5 7.5l9 9", "M16.5 7.5l-9 9"],
+  finished: ["M5.5 12.6l4.2 4.2 8.8-9.3"],
+  message: ["M6.5 16V11a5.5 5.5 0 0 1 11 0v5l1.5 2h-14z", "M10 20.5a2 2 0 0 0 4 0"],
+};
+
+function AlertIcon({ kind }: { kind: InAppAlertKind }) {
+  return (
+    <span className="alert-card-icon" title={KIND_LABEL[kind]} aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        {ICON_PATHS[kind].map((d) => <path key={d} d={d} />)}
+      </svg>
+    </span>
+  );
+}
 
 const LINK_LABEL: Record<InAppAlertLinkKind, string> = {
   page: "published page",
@@ -171,13 +187,12 @@ function AlertCard({
   return (
     <article className={`alert-card alert-card-${alert.kind}${compact ? " is-compact" : ""}`} aria-label={`${KIND_LABEL[alert.kind]}: ${alert.title}`}>
       <button type="button" className="alert-card-open" aria-label={`Open ${alert.title}`} onClick={() => onOpen(alert)} />
+      <AlertIcon kind={alert.kind} />
       <div className="alert-card-head">
-        <span className="alert-card-dot" title={KIND_LABEL[alert.kind]} aria-hidden="true" />
         <span className="alert-card-title">{alert.title}</span>
         <span className="alert-card-age">{age}</span>
         <button type="button" className="alert-card-close" aria-label="Dismiss" title="Dismiss" onClick={() => onDismiss(alert.key)}>×</button>
       </div>
-      {alert.detail && <div className="alert-card-detail">{alert.detail}</div>}
       {(alert.heading || alert.body) && (
         <p className="alert-card-body">
           {alert.heading && <strong>{alert.heading}</strong>}
@@ -197,11 +212,6 @@ function AlertCard({
           <span className="alert-card-link-kind">{LINK_LABEL[link.kind]}</span>
         </a>
       )}
-      <span
-        className="alert-card-timer"
-        style={{ animationDuration: `${duration}ms`, animationPlayState: paused ? "paused" : "running" }}
-        aria-hidden="true"
-      />
     </article>
   );
 }

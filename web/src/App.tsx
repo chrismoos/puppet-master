@@ -652,10 +652,8 @@ function Shell({
       if (!enabledRef.current) return;
       const id = session.id.toString();
       const project = client.getState().projects.get(session.projectId.toString());
-      const title = sessionDisplayName(session);
       const card = {
-        title,
-        detail: project && project.name !== title ? project.name : undefined,
+        title: sessionDisplayName(session),
         sessionId: id,
         raisedAtMs: Date.now(),
       };
