@@ -94,9 +94,12 @@ pub async fn install() -> Result<(), String> {
 
 impl BrowserProcess {
     fn spawn() -> Result<Self, String> {
-        let dir = write_runtime()?;
+        Self::spawn_in(write_runtime()?)
+    }
+
+    fn spawn_in(dir: PathBuf) -> Result<Self, String> {
         if !dir.join("node_modules/@playwright/mcp/index.js").is_file() {
-            return Err("managed browsing is not installed on this host. Run `pm browser install` on the worker first".into());
+            return Err("Managed browsing is not installed on this host. Tell the user that browsing is optional and offer to install it for them. Ask for their approval before installing. If they approve, run `pm browser install` on the host running this session, as the same OS user that runs the PM worker or local daemon, then retry the browser tool. Node.js 22 or newer and npm are required. If you cannot run the command on that host, give the user the command and explain where to run it.".into());
         }
         let mut child = Command::new("node").arg(dir.join("service.mjs"))
             .current_dir(&dir).stdin(Stdio::piped()).stdout(Stdio::piped())
@@ -379,6 +382,31 @@ pub(crate) async fn serve_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_runtime_tells_the_agent_how_to_help_the_user_enable_browsing() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = BrowserProcess::spawn_in(dir.path().to_path_buf())
+            .err()
+            .expect("an uninstalled runtime must fail before starting Node");
+        for instruction in [
+            "Tell the user",
+            "browsing is optional",
+            "offer to install it for them",
+            "Ask for their approval before installing",
+            "If they approve, run `pm browser install`",
+            "host running this session",
+            "same OS user",
+            "Node.js 22 or newer and npm",
+            "If you cannot run the command on that host",
+            "retry the browser tool",
+        ] {
+            assert!(
+                error.contains(instruction),
+                "missing instruction: {instruction}"
+            );
+        }
+    }
+
     #[test]
     fn browser_tools_include_page_evaluation_but_no_server_execution() {
         assert!(is_tool("browser_evaluate"));
