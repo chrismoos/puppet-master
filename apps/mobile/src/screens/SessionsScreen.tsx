@@ -20,7 +20,7 @@ import {
 import { displaySessionState } from "@puppet-master/client-core/state/displayState";
 import type { ConnectionBanner } from "../status";
 import { colors, stateColor, stateBackgroundColor } from "../theme";
-import { OverflowButton, OverflowMenu, type OverflowMenuItem } from "./OverflowMenu";
+import { OverflowButton, OverflowMenu, type MenuAnchor, type OverflowMenuItem } from "./OverflowMenu";
 import { SpawnSheet } from "./SpawnSheet";
 import { BucketRail } from "./BucketRail";
 import { railSummary, railTiles, tapBucket } from "./railModel";
@@ -162,6 +162,7 @@ export function SessionsScreen({
   });
   const [filterOpen, setFilterOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null);
   const [spawnOpen, setSpawnOpen] = useState(false);
   const [showEnded, setShowEnded] = useState(() => storage.getItem(SHOW_ENDED_STORAGE_KEY) === "1");
   const [searchActive, setSearchActive] = useState(false);
@@ -478,7 +479,12 @@ export function SessionsScreen({
             {showRail && summary ? <Text style={styles.subtitle} numberOfLines={1}>{summary}</Text> : null}
           </View>
           <View style={[styles.connDot, { backgroundColor: banner.label === "connected" ? colors.green : colors.textMuted }]} />
-          <OverflowButton onPress={() => setMenuOpen(true)} />
+          <OverflowButton
+            onPress={(anchor) => {
+              setMenuAnchor(anchor);
+              setMenuOpen(true);
+            }}
+          />
         </View>
       )}
       {showRail ? (
@@ -521,7 +527,7 @@ export function SessionsScreen({
           ) : null}
         </View>
       ) : null}
-      <OverflowMenu visible={menuOpen} items={menuItems} onClose={() => setMenuOpen(false)} />
+      <OverflowMenu visible={menuOpen} items={menuItems} anchor={menuAnchor} onClose={() => setMenuOpen(false)} />
       <SpawnSheet
         visible={spawnOpen}
         client={client}

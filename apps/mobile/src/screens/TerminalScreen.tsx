@@ -56,7 +56,7 @@ import {
 import type { PanPhase } from "../terminal/touchScroll";
 import type { TerminalTarget } from "./SessionsScreen";
 import type { PlanTarget } from "./PlanScreen";
-import { OverflowButton, OverflowMenu, type OverflowMenuItem } from "./OverflowMenu";
+import { OverflowButton, OverflowMenu, type MenuAnchor, type OverflowMenuItem } from "./OverflowMenu";
 import { SessionSheet } from "./SessionSheet";
 import { pagePaneUrl, usePaneNavigation } from "./usePaneNavigation";
 import { TerminalsSheet } from "./TerminalsSheet";
@@ -186,6 +186,7 @@ export function TerminalScreen({
   const keyboardVisibleRef = useRef(false);
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null);
   const [followingBottom, setFollowingBottom] = useState(true);
   // A full-screen app (alternate screen) scrolled up inside itself, which
   // the local scrollback position cannot see.
@@ -1077,9 +1078,14 @@ export function TerminalScreen({
         >
           <Text style={[styles.keysToggle, accessoryVisible ? styles.keysToggleActive : null]}>⌨</Text>
         </Pressable>
-        <OverflowButton onPress={() => setMenuOpen(true)} />
+        <OverflowButton
+            onPress={(anchor) => {
+              setMenuAnchor(anchor);
+              setMenuOpen(true);
+            }}
+          />
       </View>
-      <OverflowMenu visible={menuOpen} items={terminalMenuItems} onClose={() => setMenuOpen(false)} />
+      <OverflowMenu visible={menuOpen} items={terminalMenuItems} anchor={menuAnchor} onClose={() => setMenuOpen(false)} />
       <SessionSheet
         visible={sheetTab !== null && sheetTab !== "terminals"}
         sessionId={target.sessionId}

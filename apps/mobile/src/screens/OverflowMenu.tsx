@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import {
+  Dimensions,
   Modal,
   Platform,
   Pressable,
@@ -11,6 +12,9 @@ import {
 import Svg, { Path } from "react-native-svg";
 
 import { colors } from "../theme";
+import { anchorBelow, type MenuAnchor } from "./menuAnchor";
+
+export type { MenuAnchor } from "./menuAnchor";
 
 function DotIcon({ color }: { color: string }) {
   return (
@@ -260,10 +264,22 @@ export interface OverflowMenuItem {
 // Overflow trigger button (the three-dot glyph)
 // ---------------------------------------------------------------------------
 
-export function OverflowButton({ onPress }: { onPress: () => void }) {
+export function OverflowButton({ onPress }: { onPress: (anchor: MenuAnchor | null) => void }) {
+  const ref = useRef<View>(null);
+  const open = () => {
+    const button = ref.current;
+    if (!button) {
+      onPress(null);
+      return;
+    }
+    button.measureInWindow((x, y, width, height) => {
+      onPress(width > 0 ? anchorBelow({ x, y, width, height }, Dimensions.get("window").width) : null);
+    });
+  };
   return (
     <Pressable
-      onPress={onPress}
+      ref={ref}
+      onPress={open}
       hitSlop={8}
       style={styles.trigger}
       accessibilityRole="button"
@@ -283,9 +299,12 @@ export function OverflowButton({ onPress }: { onPress: () => void }) {
 export function OverflowMenu({
   visible,
   items,
+  anchor = null,
   onClose,
 }: {
   visible: boolean;
+  /** Where to open, from the button; without one the menu opens at the top right of the safe area. */
+  anchor?: MenuAnchor | null;
   items: OverflowMenuItem[];
   onClose: () => void;
 }) {
@@ -322,7 +341,11 @@ export function OverflowMenu({
         testID="menu-backdrop"
       />
       <SafeAreaView style={styles.menuLayer} pointerEvents="box-none">
-        <View style={styles.menuOverlay} accessible={false} accessibilityRole="menu">
+        <View
+          style={[styles.menuOverlay, anchor ? { top: anchor.top, right: anchor.right } : null]}
+          accessible={false}
+          accessibilityRole="menu"
+        >
           {items.map((item) => {
             const IconComponent = ICON_MAP[item.icon];
             const itemColor = item.color ?? colors.text;
