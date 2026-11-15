@@ -5114,6 +5114,15 @@ impl Storage {
         self.get_session(id)
     }
 
+    /// When the agent last called `report`, if it ever has.
+    pub fn last_checkpoint_at(&self, id: u64) -> Result<Option<i64>> {
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT MAX(ts_unix_ms) FROM activity_reports WHERE session_id = ?1 AND kind = ?2",
+            params![id as i64, CHECKPOINT_KIND],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Appends a timestamped checkpoint entry to the session timeline,
     /// reusing `activity_reports` with the checkpoint kind. `payload` is
     /// the JSON timeline entry.

@@ -2556,7 +2556,40 @@ async fn run_hook(socket: &Target, kind: &str, agent: Option<&str>) -> anyhow::R
     if let Some(output) = stop_hook_block(kind, stop_hook_active, &nudge) {
         println!("{output}");
     }
+    if let Some(output) = prompt_hook_context(kind, &field(&["hook_event_name"]), &nudge) {
+        println!("{output}");
+    }
     Ok(())
+}
+
+/// Hook events whose stdout `additionalContext` reaches the model with the
+/// submitted prompt: Claude Code's and Codex's `UserPromptSubmit` and
+/// Gemini's `BeforeAgent`. Antigravity strictly parses hook results and
+/// OpenCode ignores the output, so neither is listed.
+const PROMPT_CONTEXT_EVENTS: &[&str] = &["UserPromptSubmit", "BeforeAgent"];
+
+/// The prompt hook stdout that adds the daemon's dashboard line to the
+/// submitted prompt, or None when the caller cannot take added context.
+fn prompt_hook_context(
+    kind: pm_protocol::domain::HookKind,
+    event: &str,
+    line: &[u8],
+) -> Option<String> {
+    if kind != pm_protocol::domain::HookKind::PromptSubmitted
+        || line.is_empty()
+        || !PROMPT_CONTEXT_EVENTS.contains(&event)
+    {
+        return None;
+    }
+    Some(
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": event,
+                "additionalContext": String::from_utf8_lossy(line),
+            }
+        })
+        .to_string(),
+    )
 }
 
 /// The Stop-hook block JSON to print, or None when the stop should proceed.
@@ -3812,6 +3845,33 @@ mod tests {
         use pm_protocol::domain::HookKind;
         assert!(stop_hook_block(HookKind::Started, false, b"please report").is_none());
         assert!(stop_hook_block(HookKind::PromptSubmitted, false, b"please report").is_none());
+    }
+
+    #[test]
+    fn a_prompt_hook_adds_the_dashboard_line_for_agents_that_take_context() {
+        use pm_protocol::domain::HookKind;
+        for event in ["UserPromptSubmit", "BeforeAgent"] {
+            let out =
+                prompt_hook_context(HookKind::PromptSubmitted, event, b"dashboard line").unwrap();
+            let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(json["hookSpecificOutput"]["hookEventName"], event);
+            assert_eq!(
+                json["hookSpecificOutput"]["additionalContext"],
+                "dashboard line"
+            );
+        }
+        assert!(prompt_hook_context(
+            HookKind::PromptSubmitted,
+            "PreInvocation",
+            b"dashboard line"
+        )
+        .is_none());
+        assert!(prompt_hook_context(HookKind::PromptSubmitted, "", b"dashboard line").is_none());
+        assert!(prompt_hook_context(HookKind::PromptSubmitted, "UserPromptSubmit", b"").is_none());
+        assert!(
+            prompt_hook_context(HookKind::TurnEnded, "UserPromptSubmit", b"dashboard line")
+                .is_none()
+        );
     }
 
     fn session(

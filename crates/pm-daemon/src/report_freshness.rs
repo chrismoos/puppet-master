@@ -11,6 +11,38 @@ pub(crate) const DEFAULT_HEADLINE_STALE_MS: i64 = 10 * 60 * 1000;
 /// How long a goal may stay the same before a report is asked about it.
 pub(crate) const DEFAULT_GOAL_STALE_MS: i64 = 60 * 60 * 1000;
 
+/// How long after the last report a prompt's dashboard line calls it stale.
+pub(crate) const PROMPT_REPORT_STALE_MS: i64 = 60 * 60 * 1000;
+
+/// The line added to each submitted prompt quoting what the dashboard shows,
+/// so the agent can tell when the new request has moved past it.
+pub(crate) fn prompt_dashboard_line(
+    goal: &str,
+    headline: &str,
+    last_report_at: Option<i64>,
+    now: i64,
+) -> String {
+    let shown = match (goal.trim(), headline.trim()) {
+        ("", "") => return "The Puppet Master dashboard shows no goal or headline for this session yet. Call `report` this turn to set them.".into(),
+        (goal, "") => format!("goal {goal:?} and no headline"),
+        ("", headline) => format!("no goal and headline {headline:?}"),
+        (goal, headline) => format!("goal {goal:?} and headline {headline:?}"),
+    };
+    let ask = "Call `report` this turn (load it with tool search if it is deferred)";
+    match last_report_at.map(|at| now - at) {
+        None => format!("The Puppet Master dashboard shows {shown}, never reported by you. {ask} so they name this work."),
+        Some(age) if age >= PROMPT_REPORT_STALE_MS => format!(
+            "The Puppet Master dashboard shows {shown}, reported {} ago and likely stale. {ask} to update them.",
+            describe_age(age)
+        ),
+        Some(age) => format!(
+            "The Puppet Master dashboard shows {shown}, reported {} ago. If this request changes either, {}.",
+            describe_age(age),
+            ask.replacen("Call", "call", 1)
+        ),
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ReportFreshness {
     sessions: Mutex<HashMap<u64, Tracked>>,
@@ -188,6 +220,48 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn a_recent_report_is_quoted_with_a_conditional_ask() {
+        let line = prompt_dashboard_line("Pane close button", "Running gates", Some(0), 5 * 60_000);
+        assert_eq!(
+            line,
+            "The Puppet Master dashboard shows goal \"Pane close button\" and headline \"Running gates\", reported 5 min ago. If this request changes either, call `report` this turn (load it with tool search if it is deferred)."
+        );
+    }
+
+    #[test]
+    fn a_report_an_hour_old_is_called_stale() {
+        let line = prompt_dashboard_line(
+            "Alert cards",
+            "stuck-pause fix",
+            Some(0),
+            PROMPT_REPORT_STALE_MS + 2 * 60_000,
+        );
+        assert!(
+            line.contains("reported 1 h 2 min ago and likely stale"),
+            "{line}"
+        );
+        assert!(line.ends_with("to update them."), "{line}");
+        let fresh = prompt_dashboard_line(
+            "Alert cards",
+            "stuck-pause fix",
+            Some(1),
+            PROMPT_REPORT_STALE_MS,
+        );
+        assert!(!fresh.contains("stale"), "{fresh}");
+    }
+
+    #[test]
+    fn a_seeded_goal_that_was_never_reported_says_so() {
+        let line = prompt_dashboard_line("Fix the login page", "", None, 0);
+        assert!(
+            line.contains("goal \"Fix the login page\" and no headline, never reported by you"),
+            "{line}"
+        );
+        let empty = prompt_dashboard_line(" ", "", None, 0);
+        assert!(empty.contains("no goal or headline"), "{empty}");
     }
 
     #[test]

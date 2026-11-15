@@ -701,6 +701,38 @@ async fn report_metadata_does_not_change_hook_owned_lifecycle_state() {
 }
 
 #[tokio::test]
+async fn a_submitted_prompt_is_told_what_the_dashboard_shows() {
+    let env = daemon_env();
+    let id = spawn_test_session(&env, "p");
+    let token = env.daemon.session_token(id).unwrap().unwrap();
+    let prompt = || {
+        let line = env
+            .daemon
+            .handle_hook_event(
+                &token,
+                pm_protocol::domain::HookKind::PromptSubmitted,
+                "",
+                "",
+                "",
+                false,
+            )
+            .unwrap();
+        line.expect("a prompt gets the dashboard line")
+    };
+    assert!(prompt().contains("never reported by you"));
+
+    env.daemon
+        .handle_agent_report(&token, headline("documenting the result"))
+        .unwrap();
+    let line = prompt();
+    assert!(
+        line.contains("headline \"documenting the result\""),
+        "{line}"
+    );
+    assert!(line.contains("If this request changes either"), "{line}");
+}
+
+#[tokio::test]
 async fn blank_fields_never_reach_the_context_bags() {
     let env = daemon_env();
     let id = spawn_test_session(&env, "p");

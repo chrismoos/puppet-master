@@ -4467,8 +4467,8 @@ impl Daemon {
     /// payload carried them (needed for later agent-native resume).
     /// Applies an agent lifecycle hook. Returns a Stop-hook block reason
     /// when a turn ends on a session that has never set a dashboard
-    /// headline, so the caller can nudge the agent to report before it
-    /// finishes. Delivered only on the controller-local hook path.
+    /// headline, and for a submitted prompt the line quoting what the
+    /// dashboard shows. Delivered only on the controller-local hook path.
     pub fn handle_hook_event(
         &self,
         session_token: &str,
@@ -4643,8 +4643,18 @@ impl Daemon {
                 );
             }
         }
-        let nudge = (kind == HookKind::TurnEnded && updated.headline.trim().is_empty())
-            .then(|| STOP_REPORT_NUDGE.to_string());
+        let nudge = match kind {
+            HookKind::TurnEnded if updated.headline.trim().is_empty() => {
+                Some(STOP_REPORT_NUDGE.to_string())
+            }
+            HookKind::PromptSubmitted => Some(crate::report_freshness::prompt_dashboard_line(
+                &updated.goal,
+                &updated.headline,
+                self.storage.last_checkpoint_at(session_id)?,
+                now_unix_ms(),
+            )),
+            _ => None,
+        };
         self.publish(Event::SessionChanged(updated));
         Ok(nudge)
     }
