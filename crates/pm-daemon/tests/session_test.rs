@@ -407,6 +407,8 @@ async fn a_session_killed_from_outside_is_brought_back() {
         .expect("the killed agent did not exit")
         .unwrap();
     assert_eq!(exit.killed_by_signal, Some(libc::SIGKILL));
+    // A resume publishes the live state before the detail saying why, so a poll can land between the two.
+    let mut events = env.daemon.subscribe().1;
     env.daemon.handle_session_exit(exit);
 
     let ended = session_of(&env.daemon, id);
@@ -419,19 +421,23 @@ async fn a_session_killed_from_outside_is_brought_back() {
 
     let resumed = tokio::time::timeout(RESUME_TIMEOUT, async {
         loop {
-            let session = session_of(&env.daemon, id);
-            if session.state.is_live() {
-                return session;
+            match events.recv().await {
+                Ok(pm_protocol::domain::Event::SessionChanged(session))
+                    if session.id == id
+                        && session.state.is_live()
+                        && session.state_detail
+                            == "resumed after it was terminated from outside" =>
+                {
+                    return session;
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(error) => panic!("event stream closed: {error}"),
             }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     })
     .await
-    .expect("the session was not resumed");
-    assert_eq!(
-        resumed.state_detail,
-        "resumed after it was terminated from outside"
-    );
+    .expect("the session was not resumed with a detail saying it was terminated from outside");
+    assert!(resumed.state.is_live());
     assert!(env.daemon.agent_terminal(id).unwrap().generation > terminal.generation);
 }
 
