@@ -634,6 +634,7 @@ export class GhosttyTerminalSurface {
   private readonly options: GhosttyTerminalSurfaceOptions;
   private linkHint: HTMLDivElement | null = null;
   private visible: boolean;
+  private presentationPaused = false;
   private hasSize = false;
   private metrics: GhosttyCellMetrics;
   private fontFamily: string;
@@ -868,6 +869,13 @@ export class GhosttyTerminalSurface {
     this.fit();
   }
 
+  setPresentationPaused(paused: boolean): void {
+    if (this.disposed || this.presentationPaused === paused) return;
+    this.presentationPaused = paused;
+    if (paused) this.cancelRender();
+    else this.requestRender();
+  }
+
   diagnosticSnapshot() {
     const snapshot = this.snapshot!;
     const selectedRows = snapshot.rowData.flatMap((row, index) => {
@@ -946,6 +954,7 @@ export class GhosttyTerminalSurface {
     this.cancelSynchronizedRenderTimer();
     this.lastMouseMotionData = "";
     this.core.restoreSnapshot(data);
+    this.syncGridFromSnapshot(this.core.snapshot());
     this.synchronizeMouseTrackingState();
     this.cursorOn = true;
     this.forceFullRender = true;
@@ -2213,7 +2222,7 @@ export class GhosttyTerminalSurface {
   }
 
   private requestRender(): void {
-    if (this.disposed || !this.visible || !this.hasSize) return;
+    if (this.disposed || !this.visible || this.presentationPaused || !this.hasSize) return;
     if (this.deferSynchronizedRender() || this.frame !== 0) return;
     this.frame = window.requestAnimationFrame(() => {
       this.frame = 0;
@@ -2286,7 +2295,7 @@ export class GhosttyTerminalSurface {
   }
 
   private renderFrame(): void {
-    if (this.disposed || !this.visible) return;
+    if (this.disposed || !this.visible || this.presentationPaused) return;
     if (this.frame !== 0) {
       window.cancelAnimationFrame(this.frame);
       this.frame = 0;

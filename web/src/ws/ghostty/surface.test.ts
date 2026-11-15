@@ -22,6 +22,45 @@ const theme: GhosttyTheme = {
 afterEach(() => vi.restoreAllMocks());
 
 describe("GhosttyTerminalSurface lifecycle", () => {
+  it("keeps the painted screen during a presentation hold and resumes painting afterward", () => {
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    const surface = Object.assign(Object.create(GhosttyTerminalSurface.prototype), {
+      disposed: false,
+      visible: true,
+      hasSize: true,
+      frame: 0,
+      presentationPaused: false,
+      cancelRender: vi.fn(),
+      deferSynchronizedRender: () => false,
+    }) as GhosttyTerminalSurface;
+    surface.setPresentationPaused(true);
+    surface.refresh();
+    expect(frame).not.toHaveBeenCalled();
+    surface.setPresentationPaused(false);
+    expect(frame).toHaveBeenCalledOnce();
+  });
+
+  it("reports decoded snapshot geometry before parsing completes without replacing the painted snapshot", () => {
+    const previous = { cols: 160, rows: 47, rowData: [], dirtyRows: new Set<number>() } as unknown as GhosttySnapshot;
+    const decoded = { cols: 80, rows: 24 } as GhosttySnapshot;
+    const core = { restoreSnapshot: vi.fn(), snapshot: () => decoded };
+    const surface = Object.assign(Object.create(GhosttyTerminalSurface.prototype), {
+      core,
+      cols: previous.cols,
+      rows: previous.rows,
+      snapshot: previous,
+      resetCount: 0,
+      terminal: { style: { setProperty: vi.fn() } },
+      cancelSynchronizedRenderTimer: vi.fn(),
+      synchronizeMouseTrackingState: vi.fn(),
+      requestRender: vi.fn(),
+    }) as GhosttyTerminalSurface;
+    const parsed = vi.fn(() => ({ cols: surface.cols, rows: surface.rows }));
+    surface.restoreSnapshot(new Uint8Array([1]), parsed);
+    expect(parsed).toHaveReturnedWith({ cols: 80, rows: 24 });
+    expect(surface.renderSnapshot()).toEqual(previous);
+  });
+
   it("looks up a hyperlink on its zero-based viewport row", () => {
     const row = (text: string): GhosttyRow => ({
       text,

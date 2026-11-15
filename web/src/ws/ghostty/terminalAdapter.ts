@@ -204,6 +204,10 @@ export class GhosttyTerminalAdapter {
     this.enqueue(() => { this.replaying = replaying; });
   }
 
+  setPresentationPaused(paused: boolean): void {
+    this.enqueue((surface) => surface.setPresentationPaused(paused));
+  }
+
   resize(cols: number, rows: number): void {
     this.currentCols = cols;
     this.currentRows = rows;

@@ -26,6 +26,7 @@ function surfaceDouble() {
     measuredGrid: () => ({ cols: 80, rows: 24 }),
     setTheme: (value: GhosttyTheme) => events.push(`theme:${value.background.r}`),
     setVisible: (visible: boolean) => events.push(`visible:${visible}`),
+    setPresentationPaused: (paused: boolean) => events.push(`presentation:${paused}`),
     focus: () => events.push("focus"),
     resize: (cols: number, rows: number) => {
       surface.cols = cols;
@@ -64,6 +65,20 @@ function mount(): HTMLDivElement {
 afterEach(() => vi.clearAllMocks());
 
 describe("GhosttyTerminalAdapter", () => {
+  it("keeps presentation holds ordered with output before initialization completes", async () => {
+    const pending = deferred<GhosttyTerminalSurface>();
+    vi.mocked(GhosttyTerminalSurface.create).mockReturnValueOnce(pending.promise);
+    const adapter = new GhosttyTerminalAdapter(mount(), theme, () => {}, () => {}, () => {}, () => {}, () => true);
+    adapter.setPresentationPaused(true);
+    adapter.write("replacement");
+    adapter.setPresentationPaused(false);
+    const stub = surfaceDouble();
+    pending.resolve(stub.surface);
+    await pending.promise;
+    expect(stub.events.slice(-3)).toEqual(["presentation:true", "write:replacement", "presentation:false"]);
+    adapter.dispose();
+  });
+
   it("applies current theme and visibility, then drains queued geometry before output", async () => {
     const pending = deferred<GhosttyTerminalSurface>();
     vi.mocked(GhosttyTerminalSurface.create).mockReturnValueOnce(pending.promise);

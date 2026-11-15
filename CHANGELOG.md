@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Session switches keep the previous terminal screen visible until the selected terminal has painted at the pane's size, and reloads keep stale-size snapshots covered.
+
 - [Web] Resizing inline agent terminals keeps the screen visible while the program clears and redraws it.
 
 - [Web] Streaming terminal output stays current while programs redraw their prompts, without waiting for later batches or repainting the whole screen for every update.

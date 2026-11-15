@@ -120,6 +120,7 @@ const ACK_BATCH_MS = 8;
  * a screen that leaves the viewport, and a hidden layer otherwise keeps
  * drawing every frame its session prints. */
 const PARKED_LAYER_CLASS = "is-parked";
+const PREPARING_LAYER_CLASS = "is-preparing";
 /** Dims a screen that is no longer live while its connection recovers. */
 const STALE_LAYER_CLASS = "is-stale";
 
@@ -196,6 +197,7 @@ export class TerminalStage {
     for (const layer of this.layers.values()) {
       layer.viewer?.setVisible(false);
       layer.term.setVisible(false);
+      layer.el.classList.remove(PREPARING_LAYER_CLASS);
     }
     if (this.visibleId) {
       const layer = this.layers.get(this.visibleId);
@@ -225,6 +227,7 @@ export class TerminalStage {
     for (const layer of this.layers.values()) {
       layer.el.style.visibility = "hidden";
       layer.el.style.pointerEvents = "none";
+      layer.el.classList.remove(PREPARING_LAYER_CLASS);
       layer.term.setVisible(false);
       layer.viewer?.setVisible(false);
     }
@@ -416,12 +419,18 @@ export class TerminalStage {
     layer.lastShownAt = Date.now();
     this.layoutVisibleLayer(layer);
 
+    const heldLayer = (layer.initialReplayPending || layer.pendingFit)
+      ? [...this.layers.values()].find((other) => other.key !== key
+        && other.el.style.visibility === "visible" && other.replayPainted
+        && !other.initialReplayPending && !other.swapPending)
+      : undefined;
     for (const [otherKey, other] of this.layers) {
-      const visible = otherKey === key;
+      const visible = heldLayer ? other === heldLayer : otherKey === key;
+      other.el.classList.toggle(PREPARING_LAYER_CLASS, Boolean(heldLayer) && otherKey === key);
       other.el.style.visibility = visible ? "visible" : "hidden";
-      other.el.style.pointerEvents = visible ? "auto" : "none";
-      other.term.setVisible(visible);
-      if (!visible) other.viewer?.setVisible(false);
+      other.el.style.pointerEvents = visible && otherKey === key ? "auto" : "none";
+      other.term.setVisible(otherKey === key);
+      if (otherKey !== key) other.viewer?.setVisible(false);
     }
     this.parkHiddenLayers();
 
@@ -645,8 +654,10 @@ export class TerminalStage {
     }
     const viewport = layer.viewport;
     const revision = layer.viewportRevision;
+    const snapshotSize = layer.pendingFit;
     const paint = () => {
       layer.pendingWrites += 1;
+      if (frame.replay) layer.term.setPresentationPaused(true);
       writeTerminalFrame(
         layer.term,
         frame,
@@ -654,6 +665,23 @@ export class TerminalStage {
         () => {
           layer.pendingWrites -= 1;
           layer.replayPainted = true;
+          if (frame.replay) {
+            const expected = layer.sizePrompt.blocked() ? layer.handle?.ptySize() : snapshotSize ?? layer.term.cellSize;
+            if (this.visibleId === layer.key && expected
+              && (layer.term.cols !== expected.cols || layer.term.rows !== expected.rows)) {
+              layer.pendingFit = expected;
+              layer.pendingFollow = layer.sizePrompt.blocked();
+              layer.term.resize(expected.cols, expected.rows);
+              if (!layer.pendingFollow) {
+                layer.lastResize = expected;
+                layer.sizePrompt.requested(expected);
+                layer.handle?.resize(expected.cols, expected.rows);
+              }
+              layer.handle?.refreshSnapshot();
+              return;
+            }
+            layer.term.setPresentationPaused(false);
+          }
           if (layer.initialReplayPending || (layer.swapPending && frame.replay)) {
             this.revealPendingLayer(layer);
           }
@@ -735,7 +763,7 @@ export class TerminalStage {
    * scrollback that a program which repaints on resize then prints again. */
   private deferResize(layer: Layer): boolean {
     const handle = layer.handle;
-    if (!handle || !layer.replayPainted || layer.initialReplayPending) return false;
+    if (!handle || !layer.replayPainted) return false;
     // Following another viewer's size: this viewer asserts nothing until the
     // snapshot at that size has landed.
     if (layer.pendingFollow) return true;
@@ -864,6 +892,7 @@ export class TerminalStage {
   }
 
   private rememberViewport(key: string, layer: Layer): void {
+    if (layer.initialReplayPending || layer.swapPending) return;
     const viewport = captureTerminalViewport(layer.term);
     layer.viewport = viewport;
     saveTerminalViewport(key, viewport);
@@ -1025,7 +1054,15 @@ export class TerminalStage {
     if (layer.revealRender) return;
     layer.revealRender = waitForTerminalRender(
       layer.term,
-      () => !layer.pendingFit && !layer.term.modes.synchronizedOutputMode,
+      () => {
+        if (layer.pendingFit || layer.term.modes.synchronizedOutputMode) return false;
+        const expected = layer.sizePrompt.blocked() ? layer.handle?.ptySize() : layer.term.cellSize;
+        const painted = layer.term.renderSnapshot();
+        const matches = expected && painted && expected.cols === painted.cols && expected.rows === painted.rows
+          && layer.term.cols === painted.cols && layer.term.rows === painted.rows;
+        if (!matches && this.visibleId === layer.key) this.scheduleRefitVisible();
+        return Boolean(matches);
+      },
       () => {
         layer.revealRender = null;
         this.finishLayerReveal(layer);
@@ -1045,6 +1082,7 @@ export class TerminalStage {
   private finishLayerReveal(layer: Layer): void {
     layer.initialReplayPending = false;
     layer.swapPending = false;
+    layer.el.classList.remove(PREPARING_LAYER_CLASS);
     layer.curtainEl.hidden = true;
     if (layer.statusEl.classList.contains("is-connecting")) layer.statusEl.hidden = true;
     if (layer.revealTimeout !== null) {

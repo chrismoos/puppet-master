@@ -33,6 +33,8 @@ Synchronized output keeps partial redraws off the canvas. A completed update can
 
 After resizing, an empty screen clear preserves the last painted content until the redraw arrives, with a 500 ms limit for programs that intentionally leave the screen empty.
 
+The terminal stage keeps the previous canvas visible during a cold switch. The selected terminal receives keyboard input while covered, and its canvas replaces the previous one only after the painted grid matches the pane and the committed terminal size. Replacement snapshots also keep the current canvas intact while their decoded geometry is checked. An unfinished replay does not replace the saved scroll position.
+
 The browser loads one shared WebAssembly runtime for all terminal surfaces. A surface is created asynchronously; output, replay mode, and resize requests remain ordered while it initializes.
 
 Native runtime artifacts and their shared build profile are documented in

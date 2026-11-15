@@ -1601,6 +1601,11 @@ textarea {
   transform: translateX(-200%);
 }
 
+/* The incoming terminal takes keyboard focus while its canvas stays covered. */
+.term-layer.is-preparing .ghostty-input {
+  visibility: visible;
+}
+
 .ghostty-canvas {
   display: block;
   width: 100%;

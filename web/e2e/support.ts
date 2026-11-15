@@ -104,8 +104,7 @@ export async function apiHeaders(page: Page): Promise<Record<string, string>> {
 const TERMINAL_REVEAL_TIMEOUT_MS = 20_000;
 
 /**
- * A switch keeps the previous layer on screen and focused until the new one
- * paints, so typing before this resolves reaches the previous terminal.
+ * The selected terminal receives input while its first frame is still covered.
  */
 export async function expectTerminalRevealed(page: Page, keyOrKind: string): Promise<string> {
   let revealed = "";
