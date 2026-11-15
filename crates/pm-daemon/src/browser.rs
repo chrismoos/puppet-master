@@ -9,6 +9,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(65);
+const WORKER_REPLY_GRACE: Duration = Duration::from_secs(5);
+const STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const VIEWER_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const RUNTIME_VERSION: &str = "browser-runtime-0.0.85-1";
 const FILES: [(&str, &str); 4] = [
@@ -283,7 +286,7 @@ impl crate::Daemon {
         let rx = link
             .request_browser(session_id, tool.to_string(), args.to_string())
             .map_err(|e| e.to_string())?;
-        let result = tokio::time::timeout(CALL_TIMEOUT + Duration::from_secs(5), rx)
+        let result = tokio::time::timeout(CALL_TIMEOUT + WORKER_REPLY_GRACE, rx)
             .await
             .map_err(|_| "worker browser operation timed out; its outcome is unknown".to_string())?
             .map_err(|_| "worker browser connection closed".to_string())??;
@@ -337,7 +340,7 @@ pub(crate) async fn serve_stream(
             Err(error) => return (StatusCode::BAD_GATEWAY, error).into_response(),
         };
     let handshake = tokio::time::timeout(
-        Duration::from_secs(10),
+        STREAM_CONNECT_TIMEOUT,
         tokio_tungstenite::client_async(format!("ws://127.0.0.1/{stream}"), tunnel),
     )
     .await;
@@ -362,7 +365,7 @@ pub(crate) async fn serve_stream(
                         Some(Ok(UpstreamMessage::Close(_))) | None | Some(Err(_)) => break,
                         _ => continue,
                     };
-                    if !matches!(tokio::time::timeout(Duration::from_secs(2), socket.send(message)).await, Ok(Ok(()))) { break; }
+                    if !matches!(tokio::time::timeout(VIEWER_SEND_TIMEOUT, socket.send(message)).await, Ok(Ok(()))) { break; }
                 }
                 incoming = socket.recv() => {
                     if matches!(incoming, None | Some(Err(_)) | Some(Ok(Message::Close(_)))) { break; }

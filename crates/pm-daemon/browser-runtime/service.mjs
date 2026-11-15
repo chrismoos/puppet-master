@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline';
 import { readFileSync } from 'node:fs';
 
 const MAX_CONTEXTS = 4;
+const STREAM_TOKEN_BYTES = 24;
 const IDLE_MS = Number(process.env.PM_BROWSER_IDLE_MS) || 15 * 60 * 1000;
 const SWEEP_MS = Math.min(IDLE_MS, 30 * 1000);
 const FRAME_INTERVAL_MS = 1000 / 15;
@@ -54,7 +55,7 @@ async function makeContext(entry, name) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  const state = { context, client, server, name, viewers: new Set(), page: null, cdp: null, capturing: null, frame: null, action: '', path: randomBytes(24).toString('hex') };
+  const state = { context, client, server, name, viewers: new Set(), page: null, cdp: null, capturing: null, frame: null, action: '', path: randomBytes(STREAM_TOKEN_BYTES).toString('hex') };
   views.set(state.path, state);
   entry.contexts.set(name, state);
   return state;
@@ -89,6 +90,7 @@ async function stopCapture(state) {
 async function updateCapture(state) {
   const task = (state.capturing || Promise.resolve()).catch(() => {}).then(async () => {
     if (state.closed) return;
+    if (!state.viewers.size) { await stopCapture(state); return; }
     const page = await currentPage(state);
     if (state.page !== page || !state.viewers.size) {
       await stopCapture(state);
@@ -178,8 +180,7 @@ http.on('upgrade', (req, socket, head) => {
     state.viewers.add(ws);
     ws.on('error', () => {});
     ws.on('close', () => { state.viewers.delete(ws); if (!state.viewers.size) void updateCapture(state).catch(() => {}); });
-    if (state.frame) ws.send(state.frame);
-    void updateCapture(state).catch(() => { sendStatus(state, 'disconnected'); });
+    void updateCapture(state).then(() => { if (state.frame && ws.readyState === WebSocket.OPEN) ws.send(state.frame); }).catch(() => { sendStatus(state, 'disconnected'); });
   });
 });
 const sweep = setInterval(() => {
