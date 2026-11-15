@@ -8958,3 +8958,15 @@ body.ap-moving iframe { pointer-events: none; }
 .pm-native-link * {
   cursor: pointer !important;
 }
+
+.browser-viewport { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--panel-3); }
+.browser-location, .browser-caption { display: flex; align-items: center; gap: 12px; padding: 7px 10px; color: var(--muted); font-size: 11px; background: var(--panel); }
+.browser-location { border-bottom: 1px solid var(--line); }
+.browser-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-connection { flex-shrink: 0; color: var(--text); }
+.browser-screen { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.browser-screen canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+.browser-caption { justify-content: space-between; border-top: 1px solid var(--line); }
+.browser-caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-disconnected { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; text-align: center; background: var(--panel); color: var(--text); }
+.browser-disconnected p { margin: 0 0 12px; }

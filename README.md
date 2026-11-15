@@ -108,6 +108,57 @@ host that runs that session, with its path typed into the composer for you to
 send. A session on a remote host gets the file on that host, where its agent
 can read it.
 
+## Let agents browse and show their work
+
+Install the managed browser runtime once on each host that will browse:
+
+```sh
+pm browser install
+```
+
+This requires Node.js 22 or newer and npm. It installs pinned Playwright MCP
+packages and Chromium for the current user. Minimal Linux hosts also need
+Chromium's system libraries. Browser tools remain discoverable without the
+runtime, but calls explain which host needs installation. Workers from older
+builds must be updated before they can manage browsers. Existing sessions and
+pane layouts remain compatible. Reconnect or resume an agent to refresh its
+tool listing after an upgrade.
+
+Ask an agent, for example, “Open the app, test signing in, and show me the
+browser.” It uses the normal PM browser tools and `show_browser` opens a live,
+read-only Browser pane in the web dashboard. There is no separate Playwright
+MCP server to configure in the agent. Page-level JavaScript is available for
+inspection and testing. Executing JavaScript inside the MCP server process is
+not exposed.
+
+Each session starts Chromium on its first browser operation and reuses one
+default context. An agent can explicitly create a named context with
+`browser_contexts` and a reason when a different login or separate cookies are
+needed. Up to four contexts share that session's browser process. Cookies and
+storage are isolated between contexts and between sessions.
+
+Browser state stays available between agent turns, expires after fifteen
+minutes without browser tool activity, and is cleared when the session ends.
+Viewing does not keep it alive. Logins are temporary and do not survive a
+browser or worker restart. An interrupted controller connection leaves the
+worker's browser available until the idle timeout or session exit.
+
+The pane follows the active tab in its selected context. Hiding, collapsing,
+leaving the pane, or putting the dashboard tab in the background stops that
+viewer's stream without stopping automation.
+Closing a pane removes the viewer. `browser_contexts` closes browser contexts.
+The browser viewport defaults to 1280 × 800, independent of pane size. The
+pane scales the image to fit without changing the page's layout. Agents use
+`browser_resize` when testing another viewport, from 320 × 240 through
+1920 × 1200. If a browser expires, ask the
+agent to show it again to open a fresh one.
+
+The runtime is stored under the user's data directory. Set
+`PM_BROWSER_RUNTIME_DIR` consistently for installation and the worker or daemon
+to use a different directory. `PM_BROWSER_IDLE_MS` can override the idle timeout
+in milliseconds for development. Browser runtime setup is optional for hosts
+that do not use managed browsing.
+
 ## Connect tools with approvals
 
 Add an HTTP MCP server or import a REST API's OpenAPI document in

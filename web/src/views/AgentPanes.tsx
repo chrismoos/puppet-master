@@ -4,6 +4,7 @@ import { authedFetch } from "../api/token";
 import { useAppState } from "../state/hooks";
 import { sessionDisplayName } from "@puppet-master/client-core/format";
 import type { TerminalStage } from "../ws/terminal";
+import { BrowserViewport } from "./BrowserViewport";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TerminalViewport } from "./WorkspacePage";
 import { paneDropRegionRect } from "@puppet-master/client-core/state/workspace";
@@ -781,14 +782,14 @@ function PaneView({
   }, [contentKey]);
   const terminal = meta.terminal_id !== undefined ? state.terminals.get(String(meta.terminal_id)) : undefined;
   const status =
-    meta.kind === "page"
+    (meta.kind === "page" || meta.kind === "browser")
       ? "live"
       : meta.exit_code !== undefined
         ? `exit ${meta.exit_code}`
         : terminal
           ? "running"
           : "starting";
-  const statusClass = meta.kind === "page" || status === "running" ? "ok" : status.startsWith("exit") ? (meta.exit_code === 0 ? "dim" : "bad") : "dim";
+  const statusClass = meta.kind === "page" || meta.kind === "browser" || status === "running" ? "ok" : status.startsWith("exit") ? (meta.exit_code === 0 ? "dim" : "bad") : "dim";
   const pageUrl = meta.page_token ? `pane-pages/${meta.page_token}/?v=${meta.version}.${localReload}` : "";
   return (
     <div
@@ -832,8 +833,8 @@ function PaneView({
           </svg>
         </button>
         <span className="ap-title" title={liveCommand || meta.command || meta.title}>{shownTitle}</span>
-        <span className={`ap-status ap-${statusClass}`}>{status}</span>
-        {meta.kind !== "page" && (
+        {meta.kind !== "browser" && <span className={`ap-status ap-${statusClass}`}>{status}</span>}
+        {meta.kind !== "page" && meta.kind !== "browser" && (
           <button
             type="button"
             className={`ap-btn ${meta.user_input ? "on" : ""}`}
@@ -851,7 +852,7 @@ function PaneView({
             <a className="ap-btn" title="Open in a new tab" aria-label="Open in a new tab" href={pageUrl} target="_blank" rel="noreferrer"><Icon name="open" /></a>
           </>
         )}
-        {meta.kind !== "page" && (
+        {meta.kind !== "page" && meta.kind !== "browser" && (
           <button
             type="button"
             className="ap-btn ap-btn-stop"
@@ -888,7 +889,9 @@ function PaneView({
         className={`ap-body${ready || meta.exit_code !== undefined ? "" : " is-curtained"}`}
         style={collapsed ? { position: "absolute", top: HEAD_PX, left: 0, width: expanded.current.w, height: expanded.current.h, visibility: "hidden", pointerEvents: "none" } : undefined}
       >
-        {meta.kind === "page" ? (
+        {meta.kind === "browser" ? (
+          <BrowserViewport key={`${meta.version}.${localReload}`} path={`pane-pages/${meta.page_token}/stream`} active={active && !collapsed && !behindZoom} onReady={() => setReady(true)} />
+        ) : meta.kind === "page" ? (
           <iframe
             key={`${meta.version}.${localReload}`}
             className="ap-frame"

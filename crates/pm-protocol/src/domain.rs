@@ -2219,6 +2219,11 @@ pub struct HarnessStatus {
     reason = "Registration metadata is exchanged only when a worker connects."
 )]
 pub enum WorkerMsg {
+    BrowserResponse {
+        req_id: u64,
+        result_json: String,
+        error: String,
+    },
     HarnessStatus {
         req_id: u64,
         status: HarnessStatus,
@@ -2448,6 +2453,12 @@ pub struct FsEntry {
 /// Worker-plane message from the controller down to a remote worker.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControllerMsg {
+    BrowserRequest {
+        req_id: u64,
+        session_id: u64,
+        tool: String,
+        arguments_json: String,
+    },
     HarnessRequest {
         req_id: u64,
         agent: AgentKind,

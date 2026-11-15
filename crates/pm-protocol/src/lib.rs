@@ -8,7 +8,8 @@ pub mod worker_frame;
 /// capabilities a peer may use, not a compatibility boundary: a controller
 /// registers a worker announcing any version and adapts to what that
 /// version supports.
-pub const WORKER_PROTOCOL_VERSION: u32 = 25;
+pub const WORKER_PROTOCOL_VERSION: u32 = 26;
+pub const WORKER_PROTOCOL_MANAGED_BROWSER: u32 = 26;
 pub const WORKER_PROTOCOL_GHOSTTY_SNAPSHOT: u32 = 24;
 /// A shell spawn may carry a command and environment, which the worker runs
 /// as the terminal's process instead of an interactive shell.

@@ -3018,6 +3018,15 @@ impl From<WorkerMsg> for wire::WorkerMessage {
     fn from(v: WorkerMsg) -> Self {
         use wire::worker_message::Msg;
         let msg = match v {
+            WorkerMsg::BrowserResponse {
+                req_id,
+                result_json,
+                error,
+            } => Msg::BrowserResponse(wire::WorkerBrowserResponse {
+                req_id,
+                result_json,
+                error,
+            }),
             WorkerMsg::Register {
                 snapshot_compatibility,
                 protocol_version,
@@ -3274,6 +3283,11 @@ impl TryFrom<wire::WorkerMessage> for WorkerMsg {
         use wire::worker_message::Msg;
         Ok(
             match v.msg.ok_or(DecodeError::Missing("WorkerMessage.msg"))? {
+                Msg::BrowserResponse(m) => WorkerMsg::BrowserResponse {
+                    req_id: m.req_id,
+                    result_json: m.result_json,
+                    error: m.error,
+                },
                 Msg::RepoResponse(m) => WorkerMsg::RepoResponse {
                     req_id: m.req_id,
                     ok: m.ok,
@@ -3450,6 +3464,17 @@ impl From<ControllerMsg> for wire::ControllerMessage {
     fn from(v: ControllerMsg) -> Self {
         use wire::controller_message::Msg;
         let msg = match v {
+            ControllerMsg::BrowserRequest {
+                req_id,
+                session_id,
+                tool,
+                arguments_json,
+            } => Msg::BrowserRequest(wire::ControllerBrowserRequest {
+                req_id,
+                session_id,
+                tool,
+                arguments_json,
+            }),
             ControllerMsg::Registered {
                 worker_id,
                 credential,
@@ -3688,6 +3713,12 @@ impl TryFrom<wire::ControllerMessage> for ControllerMsg {
         use wire::controller_message::Msg;
         Ok(
             match v.msg.ok_or(DecodeError::Missing("ControllerMessage.msg"))? {
+                Msg::BrowserRequest(m) => ControllerMsg::BrowserRequest {
+                    req_id: m.req_id,
+                    session_id: m.session_id,
+                    tool: m.tool,
+                    arguments_json: m.arguments_json,
+                },
                 Msg::RepoRequest(m) => ControllerMsg::RepoRequest {
                     req_id: m.req_id,
                     op: m.op.to_vec(),
@@ -4984,5 +5015,33 @@ mod tests {
                 ..
             }
         ));
+    }
+}
+
+#[cfg(test)]
+mod managed_browser_tests {
+    use super::*;
+
+    #[test]
+    fn browser_requests_and_responses_round_trip() {
+        let request = ControllerMsg::BrowserRequest {
+            req_id: 9,
+            session_id: 7,
+            tool: "browser_click".into(),
+            arguments_json: r#"{"target":"button","browser_context":"second-user"}"#.into(),
+        };
+        assert_eq!(
+            ControllerMsg::decode(&request.encode_to_vec()).unwrap(),
+            request
+        );
+        let response = WorkerMsg::BrowserResponse {
+            req_id: 9,
+            result_json: r#"{"content":[{"type":"text","text":"clicked"}]}"#.into(),
+            error: String::new(),
+        };
+        assert_eq!(
+            WorkerMsg::decode(&response.encode_to_vec()).unwrap(),
+            response
+        );
     }
 }

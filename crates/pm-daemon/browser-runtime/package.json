@@ -1,0 +1,11 @@
+{
+  "name": "pm-browser-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@playwright/mcp": "0.0.85",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "ws": "8.23.0"
+  }
+}

@@ -348,6 +348,8 @@ pub struct WorkerLink {
     /// What the peer announced it can do; 0 until it registers.
     protocol_version: AtomicU64,
     snapshot_compatibility: Mutex<String>,
+    browser_seq: AtomicU64,
+    browser_pending: Mutex<HashMap<u64, oneshot::Sender<Result<String, String>>>>,
     repo_seq: AtomicU64,
     repo_pending: Mutex<HashMap<u64, oneshot::Sender<RepoResponseResult>>>,
     fs_pending: Mutex<HashMap<u64, oneshot::Sender<FsListingResult>>>,
@@ -389,6 +391,8 @@ impl WorkerLink {
             fs_seq: AtomicU64::new(0),
             protocol_version: AtomicU64::new(0),
             snapshot_compatibility: Mutex::new(String::new()),
+            browser_seq: AtomicU64::new(0),
+            browser_pending: Mutex::new(HashMap::new()),
             repo_seq: AtomicU64::new(0),
             repo_pending: Mutex::new(HashMap::new()),
             fs_pending: Mutex::new(HashMap::new()),
@@ -457,9 +461,37 @@ impl WorkerLink {
         self.protocol_version.load(Ordering::Relaxed) as u32
     }
 
-    /// Ships an encoded repository op to the worker and returns a
-    /// receiver for its answer. The bytes are passed through untouched,
-    /// so the worker decodes exactly what the controller encoded.
+    pub fn request_browser(
+        &self,
+        session_id: u64,
+        tool: String,
+        arguments_json: String,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, WorkerError> {
+        let req_id = self.browser_seq.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.browser_pending
+            .lock()
+            .unwrap()
+            .retain(|_, tx| !tx.is_closed());
+        self.browser_pending.lock().unwrap().insert(req_id, tx);
+        if let Err(error) = self.send(ControllerMsg::BrowserRequest {
+            req_id,
+            session_id,
+            tool,
+            arguments_json,
+        }) {
+            self.browser_pending.lock().unwrap().remove(&req_id);
+            return Err(error);
+        }
+        Ok(rx)
+    }
+
+    pub fn resolve_browser(&self, req_id: u64, result: Result<String, String>) {
+        if let Some(tx) = self.browser_pending.lock().unwrap().remove(&req_id) {
+            let _ = tx.send(result);
+        }
+    }
+
     pub fn request_repo(
         &self,
         op: Vec<u8>,
@@ -1669,6 +1701,8 @@ impl WorkerRegistry {
             fs_seq: AtomicU64::new(0),
             protocol_version: AtomicU64::new(0),
             snapshot_compatibility: Mutex::new(String::new()),
+            browser_seq: AtomicU64::new(0),
+            browser_pending: Mutex::new(HashMap::new()),
             repo_seq: AtomicU64::new(0),
             repo_pending: Mutex::new(HashMap::new()),
             fs_pending: Mutex::new(HashMap::new()),
@@ -2119,6 +2153,8 @@ mod tests {
             fs_seq: AtomicU64::new(0),
             protocol_version: AtomicU64::new(0),
             snapshot_compatibility: Mutex::new(String::new()),
+            browser_seq: AtomicU64::new(0),
+            browser_pending: Mutex::new(HashMap::new()),
             repo_seq: AtomicU64::new(0),
             repo_pending: Mutex::new(HashMap::new()),
             fs_pending: Mutex::new(HashMap::new()),

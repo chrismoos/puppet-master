@@ -50,6 +50,29 @@ pm daemon --socket /tmp/pm-dev/pm.sock --db /tmp/pm-dev/pm.db \
   --scrollback-dir /tmp/pm-dev/sb --http 127.0.0.1:7777
 ```
 
+## Managed browser development
+
+`make browser-test` installs the pinned runtime and Chromium in the task's
+build environment and exercises real MCP tools, isolated cookies and storage,
+streaming, tab changes, resizing, and idle cleanup. It needs Node.js, npm, and
+Chromium's Linux system libraries where applicable. Run it with the same
+`CARGO_TARGET_DIR` as the rest of the task.
+
+The functional browser suite includes `e2e/managed-browser.spec.ts`. That spec
+provisions its runtime under the lane's binary directory and uses a local test
+app. It verifies the actual browser image in the native pane, hiding and
+restoring, tab following, viewport sizing, and login isolation. It does not
+need an agent provider account or an external website. For focused coverage:
+
+```sh
+make e2e-worker E2E_SPECS=e2e/managed-browser.spec.ts
+```
+
+The browser runtime's package manifest and lockfile live with the daemon's
+runtime assets. Update them together. Tool schemas match the pinned official
+Playwright MCP package, with PM's context selector added and server-process
+execution tools excluded. The runtime also enforces that tool allowlist.
+
 ## CI Rust setup
 
 GitHub and Forgejo workflows run `sh scripts/ci-rust.sh` to install the stable

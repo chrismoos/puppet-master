@@ -2360,6 +2360,17 @@ async fn serve_pane_page(
     request: Request,
 ) -> Response {
     let (session_id, dir) = match crate::panes::page_target(daemon, token) {
+        Some(crate::panes::PageTarget::Browser {
+            session_id,
+            port,
+            stream,
+        }) => {
+            if path != "stream" {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            return crate::browser::serve_stream(daemon.clone(), session_id, port, stream, request)
+                .await;
+        }
         None => return StatusCode::NOT_FOUND.into_response(),
         Some(crate::panes::PageTarget::Forward(forward)) => {
             let mut response = crate::forward_route::proxy_trusted(

@@ -43,9 +43,20 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Subcommand)]
+enum BrowserCommand {
+    /// Install the pinned Playwright MCP runtime and Chromium. Requires Node.js and npm.
+    Install,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
+    /// Install the managed Chromium browser and Playwright runtime on this host.
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommand,
+    },
     /// Run the daemon in the foreground.
     Daemon {
         /// SQLite database path.
@@ -1157,6 +1168,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match cli.command {
+        Command::Browser {
+            command: BrowserCommand::Install,
+        } => pm_daemon::browser::install()
+            .await
+            .map_err(anyhow::Error::msg),
         Command::Daemon {
             db,
             scrollback_dir,

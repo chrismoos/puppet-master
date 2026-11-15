@@ -1009,6 +1009,27 @@ async fn mcp_endpoint_speaks_the_protocol_subset() {
             "set_pane_title",
             "reload_pane",
             "close_pane",
+            "browser_resize",
+            "browser_console_messages",
+            "browser_handle_dialog",
+            "browser_evaluate",
+            "browser_find",
+            "browser_fill_form",
+            "browser_press_key",
+            "browser_type",
+            "browser_navigate",
+            "browser_navigate_back",
+            "browser_network_requests",
+            "browser_take_screenshot",
+            "browser_snapshot",
+            "browser_click",
+            "browser_drag",
+            "browser_hover",
+            "browser_select_option",
+            "browser_tabs",
+            "browser_wait_for",
+            "browser_contexts",
+            "show_browser",
             "open_review",
             "next_review_event",
             "post_review_reply",
@@ -1323,6 +1344,27 @@ async fn item_tools_are_gated_by_the_spawn_toggle() {
             "set_pane_title",
             "reload_pane",
             "close_pane",
+            "browser_resize",
+            "browser_console_messages",
+            "browser_handle_dialog",
+            "browser_evaluate",
+            "browser_find",
+            "browser_fill_form",
+            "browser_press_key",
+            "browser_type",
+            "browser_navigate",
+            "browser_navigate_back",
+            "browser_network_requests",
+            "browser_take_screenshot",
+            "browser_snapshot",
+            "browser_click",
+            "browser_drag",
+            "browser_hover",
+            "browser_select_option",
+            "browser_tabs",
+            "browser_wait_for",
+            "browser_contexts",
+            "show_browser",
             "open_review",
             "next_review_event",
             "post_review_reply",
@@ -5201,4 +5243,47 @@ async fn notify_user_links_only_to_what_this_controller_serves() {
     );
     assert_eq!(link.title, "Fix the login page");
     assert_eq!(link.url, format!("/bucket/{bucket_id}/item/{item}"));
+}
+
+#[tokio::test]
+async fn managed_browser_tools_refuse_older_workers_without_sending_a_request() {
+    let env = daemon_env();
+    let reg = enroll_host(&env, "older-browser-host");
+    let worker_id = reg.worker_id;
+    let link = reg.link.clone();
+    let mut rx = answering_host_requests(env.daemon.clone(), worker_id, reg.rx);
+    configure_host(&env, worker_id, "/remote/repo");
+    let sup = spawn_supervisor(&env);
+    let token = env.daemon.session_token(sup).unwrap().unwrap();
+    let app = pm_daemon::http::router(env.daemon.clone());
+    let bucket = bucket_of(&env);
+    let item = seed_item(
+        &env,
+        bucket,
+        "browser:compat",
+        "Check browser compatibility",
+    );
+    let result = call(&app, &token, "spawn_session", json!({
+        "project": env.project_id, "agent": "test", "prompt": "check browser", "item": item, "host": "older-browser-host"
+    })).await;
+    assert_eq!(result["isError"], false, "{result}");
+    let child = serde_json::from_str::<Value>(call_text(&result)).unwrap()["session_id"]
+        .as_u64()
+        .unwrap();
+    assert!(matches!(rx.recv().await, Some(ControllerMsg::Spawn { .. })));
+    link.set_protocol_version(pm_protocol::WORKER_PROTOCOL_MANAGED_BROWSER - 1);
+    let child_token = env.daemon.session_token(child).unwrap().unwrap();
+    let result = call(
+        &app,
+        &child_token,
+        "browser_navigate",
+        json!({"url":"about:blank"}),
+    )
+    .await;
+    assert_eq!(result["isError"], true);
+    assert!(call_text(&result).contains("Update the worker"));
+    assert!(
+        rx.try_recv().is_err(),
+        "an older worker must not receive a browser request"
+    );
 }

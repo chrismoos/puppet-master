@@ -120,6 +120,9 @@ test: rust-test web-test ## Run the full test suite (Rust + web).
 rust-test: ## Run the Rust test suite (optimized, non-LTO, via nextest).
 	$(CARGO) nextest run --cargo-profile e2e --no-fail-fast --workspace --features pm-daemon/testagent
 
+browser-test: ## Test real managed browsing, isolated contexts, streaming, and idle cleanup.
+	CARGO="$(CARGO)" node scripts/browser-runtime-test.mjs
+
 web-test: node_modules ## Run the shared client-core, web, and mobile test suites.
 	$(PNPM) -F @puppet-master/client-core run test
 	$(PNPM) -F puppet-master-web run test

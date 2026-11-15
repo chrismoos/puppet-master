@@ -691,6 +691,16 @@ async fn open_target(
     worker: u64,
     port: u16,
 ) -> Result<ForwardStream, &'static str> {
+    let result = open_worker_port(daemon, worker, port).await;
+    daemon.record_forward_target_reachable(id, result.is_ok());
+    result
+}
+
+pub(crate) async fn open_worker_port(
+    daemon: &Arc<Daemon>,
+    worker: u64,
+    port: u16,
+) -> Result<ForwardStream, &'static str> {
     if worker == LOCAL_WORKER_ID {
         return match tokio::time::timeout(
             STREAM_DIAL_TIMEOUT,
@@ -698,14 +708,8 @@ async fn open_target(
         )
         .await
         {
-            Ok(Ok(tcp)) => {
-                daemon.record_forward_target_reachable(id, true);
-                Ok(ForwardStream::plain(tcp))
-            }
-            _ => {
-                daemon.record_forward_target_reachable(id, false);
-                Err("The forwarded server is not listening.")
-            }
+            Ok(Ok(tcp)) => Ok(ForwardStream::plain(tcp)),
+            _ => Err("The forwarded server is not listening."),
         };
     }
     let link = daemon
@@ -727,7 +731,6 @@ async fn open_target(
     };
     match tokio::time::timeout(STREAM_DIAL_TIMEOUT, result).await {
         Ok(Ok(result)) if result.ok => {
-            daemon.record_forward_target_reachable(id, true);
             let daemon = daemon.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(STREAM_DIAL_TIMEOUT).await;
@@ -736,7 +739,6 @@ async fn open_target(
             Ok(ForwardStream::duplex(client))
         }
         _ => {
-            daemon.record_forward_target_reachable(id, false);
             daemon.forwards.claim_stream(&hash);
             Err("The worker could not connect to the forwarded server.")
         }

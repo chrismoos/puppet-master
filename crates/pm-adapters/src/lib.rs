@@ -495,7 +495,14 @@ hardcoded localhost URLs, or `../` paths that escape the mount. Keep directory l
 trailing-slashed, and configure dev-server WebSocket/HMR paths under the same prefix. When \
 the user asks to see something running, a live view, or a page beside you, open it as a pane \
 with `open_terminal` or `open_page` instead of describing it. Panes are for the user to \
-watch, not for your own background work.";
+watch, not for your own background work. Use PM's managed browser tools for browsing and \
+interactive browser testing. Reuse the default browser context. Only create another with \
+`browser_contexts` when separate cookies or a different logged-in user are needed, and give \
+a reason. Use `show_browser` when the user asks to watch. The pane follows that context's \
+active tab and is read-only. Page-level JavaScript is available through `browser_evaluate`; \
+server-process JavaScript is unavailable. Use `browser_resize` for other viewport sizes. \
+Browsers start on first use, expire after fifteen minutes without browser tool activity, \
+and are closed when the session ends. Logins do not survive a browser restart.";
 
 /// Instructions only Claude Code needs, because only its harness offers
 /// them: it can publish pages as claude.ai artifacts, which live outside

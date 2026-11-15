@@ -66,6 +66,11 @@ None of them ships a NOTICE file of its own, so there is no upstream notice
 text to reproduce here. None is modified. The full license text is in
 licenses/APACHE-2.0.txt.
 
+Browser tool schemas are derived from Playwright MCP, Copyright Microsoft
+Corporation, under Apache-2.0. The schemas add PM's context selector and omit
+server-process execution tools. The optional runtime installs its dependencies
+separately and retains their license files.
+
 Many further crates are offered under a choice that includes Apache-2.0; they
 are taken under the MIT option and need no separate notice.
 

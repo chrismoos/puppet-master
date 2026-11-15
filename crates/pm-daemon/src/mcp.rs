@@ -253,6 +253,7 @@ fn tool_definitions(items_api: bool, supervisor_api: bool, spawnable_agents: &[&
     if let Value::Array(tools) = &mut tools {
         tools.extend(crate::connections::tool_definitions());
         tools.extend(crate::panes::tool_definitions());
+        tools.extend(crate::browser::tool_definitions());
         if let Value::Array(reviews) = review_tool_definitions() {
             tools.extend(reviews);
         }
@@ -2025,6 +2026,14 @@ async fn call_tool(
                 json!({"isError":true,"content":[{"type":"text","text":error.to_string()}]})
             }
         });
+    }
+    if crate::browser::is_tool(name) {
+        return Ok(
+            match crate::browser::call_tool(daemon, token, name, args).await {
+                Ok(result) => result,
+                Err(error) => tool_text(true, error),
+            },
+        );
     }
     if crate::panes::is_tool(name) {
         return Ok(

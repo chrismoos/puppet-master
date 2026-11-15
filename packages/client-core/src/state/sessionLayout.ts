@@ -5,7 +5,7 @@ export type LayoutNode = { pane?: string; row?: LayoutNode[]; column?: LayoutNod
 
 export interface PaneMeta {
   id: string;
-  kind: "program" | "shell" | "page";
+  kind: "program" | "shell" | "page" | "browser";
   title: string;
   terminal_id?: number;
   command?: string;

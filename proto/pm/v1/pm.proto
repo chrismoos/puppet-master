@@ -1734,6 +1734,7 @@ message WorkerMessage {
     WorkerAgentInboxResult agent_inbox_result = 17;
     WorkerProgramStatus program_status = 18;
     WorkerSessionDropped session_dropped = 19;
+    WorkerBrowserResponse browser_response = 20;
   }
 }
 
@@ -2071,6 +2072,7 @@ message ControllerMessage {
     ControllerDirShareStop dir_share_stop = 22;
     ControllerAgentInbox agent_inbox = 23;
     ControllerSessionDrop session_drop = 24;
+    ControllerBrowserRequest browser_request = 25;
   }
 }
 
@@ -2339,4 +2341,16 @@ message HarnessStatus {
 message WorkerHarnessStatus {
   uint64 req_id = 1;
   HarnessStatus status = 2;
+}
+
+message ControllerBrowserRequest {
+  uint64 req_id = 1;
+  uint64 session_id = 2;
+  string tool = 3;
+  string arguments_json = 4;
+}
+message WorkerBrowserResponse {
+  uint64 req_id = 1;
+  string result_json = 2;
+  string error = 3;
 }

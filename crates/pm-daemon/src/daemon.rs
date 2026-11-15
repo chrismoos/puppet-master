@@ -323,6 +323,8 @@ pub struct Daemon {
     /// A submitted user prompt cancels a pending wait owned by that session.
     wait_cancel_tx: broadcast::Sender<u64>,
     pub(crate) panes: crate::panes::Panes,
+    pub(crate) browsers: std::sync::Arc<crate::browser::BrowserRuntime>,
+    pub(crate) browser_sessions: Mutex<std::collections::HashSet<u64>>,
     /// User preferences travel on a separate channel and are filtered by
     /// authenticated user id before they enter any client socket.
     user_setting_channels:
@@ -1526,6 +1528,8 @@ impl Daemon {
             wait_events_tx,
             wait_cancel_tx,
             panes,
+            browsers: std::sync::Arc::new(crate::browser::BrowserRuntime::default()),
+            browser_sessions: Mutex::new(std::collections::HashSet::new()),
             user_setting_channels: Mutex::new(std::collections::HashMap::new()),
             scrollback_dir: config.scrollback_dir,
             session_files_dir,
@@ -9390,6 +9394,9 @@ impl Daemon {
             .unwrap()
             .remove(&exit.terminal_id);
         let is_agent = terminal.kind == pm_protocol::domain::TerminalKind::Agent;
+        if is_agent {
+            self.close_session_browser(LOCAL_WORKER_ID, terminal.session_id);
+        }
         // Nothing clears this before signalling but a request to end the
         // session.
         let wanted = !paused_for_shutdown
@@ -10166,6 +10173,22 @@ impl Daemon {
                     }
                 }
             }
+            WorkerMsg::BrowserResponse {
+                req_id,
+                result_json,
+                error,
+            } => {
+                if let Some(link) = self.workers.get(worker_id) {
+                    link.resolve_browser(
+                        req_id,
+                        if error.is_empty() {
+                            Ok(result_json)
+                        } else {
+                            Err(error)
+                        },
+                    );
+                }
+            }
             WorkerMsg::RepoResponse {
                 req_id,
                 ok,
@@ -10515,6 +10538,7 @@ impl Daemon {
         }
         if terminal.kind == pm_protocol::domain::TerminalKind::Agent {
             self.program_status_exited(terminal.session_id);
+            self.close_session_browser(worker_id, terminal.session_id);
         }
         let updated_terminal = match self.storage.update_terminal_run(
             terminal_id,

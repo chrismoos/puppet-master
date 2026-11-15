@@ -2,6 +2,7 @@
 pub mod appearance;
 pub mod attachments;
 pub mod auth;
+pub mod browser;
 pub mod bucket_icon;
 pub mod connection;
 pub mod connections;

@@ -83,6 +83,8 @@ pub struct Pane {
     pub page_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_forward: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_stream: Option<String>,
     pub version: u64,
     pub user_input: bool,
     /// Shrunk to its header by the user; the program keeps running.
@@ -241,6 +243,13 @@ impl Panes {
         let layouts = self.layouts.lock().unwrap();
         layouts.iter().find_map(|(session_id, layout)| {
             layout.panes.values().find_map(|pane| {
+                if pane.page_token.as_deref() == Some(token) && pane.kind == "browser" {
+                    return Some(PageTarget::Browser {
+                        session_id: *session_id,
+                        port: pane.page_port?,
+                        stream: pane.browser_stream.clone()?,
+                    });
+                }
                 (pane.page_token.as_deref() == Some(token)).then(|| match pane.page_forward {
                     Some(forward) => PageTarget::Forward(forward),
                     None => PageTarget::Dir(*session_id, pane.page_dir.clone().unwrap_or_default()),
@@ -255,6 +264,11 @@ impl Panes {
 pub enum PageTarget {
     Dir(u64, String),
     Forward(u64),
+    Browser {
+        session_id: u64,
+        port: u16,
+        stream: String,
+    },
 }
 
 /// The layout as clients see it, without the launch lines, which can carry
@@ -267,6 +281,7 @@ fn record(session_id: u64, layout: &Layout) -> LayoutRecord {
                 pane.remove("launch");
                 pane.remove("env");
                 pane.remove("page_forward");
+                pane.remove("browser_stream");
             }
         }
     }
@@ -502,7 +517,7 @@ async fn notify(daemon: &Daemon, session_id: u64, text: String) {
 
 fn pane_summary(pane: &Pane, placed: bool) -> Value {
     let state = match (pane.kind.as_str(), pane.exit_code) {
-        ("page", _) => "live".to_string(),
+        ("page" | "browser", _) => "live".to_string(),
         (_, Some(code)) => format!("exited {code}"),
         (_, None) if pane.terminal_id.is_some() => "running".into(),
         _ => "stopped".into(),
@@ -736,6 +751,7 @@ pub async fn call_tool(
                 page_dir: None,
                 page_port: None,
                 page_forward: None,
+                browser_stream: None,
                 version: 0,
                 user_input: command.is_none(),
                 collapsed: false,
@@ -833,6 +849,7 @@ pub async fn call_tool(
                         page_dir: (!dir.is_empty() && port.is_none()).then(|| dir.clone()),
                         page_port: port,
                         page_forward: forward,
+                        browser_stream: None,
                         version: 0,
                         user_input: true,
                         collapsed: false,
@@ -1035,7 +1052,7 @@ pub async fn call_tool(
                 .get(&id)
                 .cloned()
                 .ok_or_else(|| format!("no pane named {id:?}"))?;
-            if pane.kind == "page" {
+            if pane.kind == "page" || pane.kind == "browser" {
                 return Err("use reload_pane for a page".into());
             }
             let old = pane.terminal_id;
@@ -1177,7 +1194,7 @@ fn spawn_watcher(daemon: Arc<Daemon>, session_id: u64, id: String) {
             let Some(pane) = daemon.panes.get(session_id).panes.get(&id).cloned() else {
                 return;
             };
-            if pane.kind == "page" {
+            if pane.kind == "page" || pane.kind == "browser" {
                 let Ok(session) = daemon.storage().get_session(session_id) else {
                     return;
                 };
@@ -1353,6 +1370,7 @@ pub async fn user_open_shell(
         page_dir: None,
         page_port: None,
         page_forward: None,
+        browser_stream: None,
         version: 0,
         user_input: true,
         collapsed: false,
@@ -1535,6 +1553,73 @@ pub fn page_target(daemon: &Daemon, token: &str) -> Option<PageTarget> {
 
 pub const PAGE_MAX_BYTES: usize = PAGE_FILE_MAX_BYTES;
 
+pub async fn show_browser(
+    daemon: &Arc<Daemon>,
+    session_id: u64,
+    context: &str,
+    port: u16,
+    stream: &str,
+    title: Option<&str>,
+) -> Result<Value, String> {
+    let id = format!("browser-{context}");
+    let current = daemon.panes.get(session_id);
+    if !current.panes.contains_key(&id) && current.panes.len() >= MAX_PANES {
+        return Err(format!("at most {MAX_PANES} panes; close one first"));
+    }
+    if current
+        .panes
+        .get(&id)
+        .is_some_and(|pane| pane.kind != "browser")
+    {
+        return Err(format!("pane {id:?} is already used by another program"));
+    }
+    let (layout, ()) = daemon
+        .panes
+        .update(daemon.storage(), session_id, |layout| {
+            if !layout.panes.contains_key(&id) && layout.panes.len() >= MAX_PANES {
+                return Err(format!("at most {MAX_PANES} panes; close one first"));
+            }
+            let old = layout.panes.get(&id).cloned();
+            if old.as_ref().is_some_and(|pane| pane.kind != "browser") {
+                return Err(format!("pane {id:?} is already in use"));
+            }
+            let pane = Pane {
+                id: id.clone(),
+                kind: "browser".into(),
+                title: title
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or("Browser")
+                    .to_string(),
+                terminal_id: None,
+                command: None,
+                launch: None,
+                cwd: None,
+                env: BTreeMap::new(),
+                page_token: Some(new_token()),
+                page_dir: None,
+                page_port: Some(port),
+                page_forward: None,
+                browser_stream: Some(stream.to_string()),
+                version: old.as_ref().map_or(0, |p| p.version + 1),
+                user_input: false,
+                collapsed: false,
+                titled: true,
+                exit_code: None,
+                user_opened: false,
+            };
+            layout.unplaced.retain(|other| other != &id);
+            let mut leaves = Vec::new();
+            collect_leaves(&layout.tree, &mut leaves)?;
+            if !leaves.contains(&id) {
+                layout.tree = place(&layout.tree, &id);
+            }
+            layout.panes.insert(id.clone(), pane);
+            Ok(())
+        })?;
+    publish(daemon, session_id, &layout);
+    Ok(json!({"ok":true,"id":id,"browser_context":context,"rev":layout.rev}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1587,6 +1672,7 @@ mod tests {
             page_dir: None,
             page_port: None,
             page_forward: Some(3),
+            browser_stream: None,
             version: 0,
             user_input: false,
             collapsed: false,

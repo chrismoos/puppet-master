@@ -425,12 +425,14 @@ pub async fn run(
     )?);
     let out_slot: OutSlot = Arc::new(Mutex::new(None));
     let spawn_faults = SpawnFaults::default();
+    let browsers = Arc::new(pm_daemon::browser::BrowserRuntime::default());
     tokio::spawn(relay_mux_events(
         mux.clone(),
         channels,
         out_slot.clone(),
         transcripts.clone(),
         spawn_faults.clone(),
+        browsers.clone(),
     ));
     let hook_relay = HookRelay::default();
     tokio::spawn(relay_hooks(
@@ -454,6 +456,7 @@ pub async fn run(
         out_slot,
         transcripts,
         dir_shares: Arc::new(Mutex::new(HashMap::new())),
+        browsers,
         _runtime_dir: runtime_dir,
     };
 
@@ -1035,6 +1038,7 @@ struct WorkerRuntime {
     /// than the connection: a share outlives the control link that
     /// asked for it, and is re-announced to whichever link comes next.
     dir_shares: DirShares,
+    browsers: Arc<pm_daemon::browser::BrowserRuntime>,
     _runtime_dir: tempfile::TempDir,
 }
 
@@ -1658,6 +1662,7 @@ async fn serve(
             &rt.transcripts,
             &forwarders,
             &rt.dir_shares,
+            &rt.browsers,
             &rt.pending_update,
             &rt.spawn_faults,
             command,
@@ -1689,11 +1694,38 @@ async fn handle_command(
     transcripts: &Arc<WorkerTranscriptStore>,
     forwarders: &Forwarders,
     dir_shares: &DirShares,
+    browsers: &Arc<pm_daemon::browser::BrowserRuntime>,
     pending_update: &crate::worker_update::PendingUpdate,
     spawn_faults: &SpawnFaults,
     command: ControllerMsg,
 ) {
     match command {
+        ControllerMsg::BrowserRequest {
+            req_id,
+            session_id,
+            tool,
+            arguments_json,
+        } => {
+            let browsers = browsers.clone();
+            let tx = out_tx.clone();
+            tokio::spawn(async move {
+                let result = match serde_json::from_str(&arguments_json) {
+                    Ok(args) => browsers.call(session_id, &tool, args).await,
+                    Err(error) => Err(error.to_string()),
+                };
+                let (result_json, error) = match result {
+                    Ok(value) => (value.to_string(), String::new()),
+                    Err(error) => (String::new(), error),
+                };
+                let _ = tx
+                    .send(control(WorkerMsg::BrowserResponse {
+                        req_id,
+                        result_json,
+                        error,
+                    }))
+                    .await;
+            });
+        }
         ControllerMsg::UpdateNow => {
             pending_update.force();
         }
@@ -1814,6 +1846,12 @@ async fn handle_command(
             let _ = mux.interrupt(session_id);
         }
         ControllerMsg::Kill { session_id } => {
+            let browsers = browsers.clone();
+            tokio::spawn(async move {
+                let _ = browsers
+                    .call(session_id, "__close_session", serde_json::json!({}))
+                    .await;
+            });
             if kill_answers_unknown(mux, session_id) {
                 let _ = out_tx
                     .send(control(WorkerMsg::SessionExit {
@@ -2837,11 +2875,17 @@ async fn relay_mux_events(
     out_slot: OutSlot,
     transcripts: Arc<WorkerTranscriptStore>,
     spawn_faults: SpawnFaults,
+    browsers: Arc<pm_daemon::browser::BrowserRuntime>,
 ) {
     loop {
         tokio::select! {
             exit = channels.exit_rx.recv() => match exit {
                 Some(exit) => {
+                    if exit.semantic_session_id != 0 {
+                        let browsers = browsers.clone();
+                        let session_id = exit.semantic_session_id;
+                        tokio::spawn(async move { let _ = browsers.call(session_id, "__close_session", serde_json::json!({})).await; });
+                    }
                     let store = transcripts.clone();
                     let terminal_id = exit.terminal_id;
                     let generation = exit.generation;
@@ -3424,6 +3468,7 @@ mod tests {
             &transcripts,
             &forwarders,
             dir_shares,
+            &Arc::new(pm_daemon::browser::BrowserRuntime::default()),
             &pending_update,
             &spawn_faults,
             command,
