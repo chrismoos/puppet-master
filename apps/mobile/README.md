@@ -77,6 +77,19 @@ Build and run on macOS with Xcode using `make ios-run`, or build without
 installing using `make ios-build`. Use `make ios-doctor` to check local build
 requirements. These commands run from the repository root.
 
+## Logging out
+
+Settings → Log out signs this phone out, online or not. It forgets the
+device's tokens and any legacy session token on the phone first, and waits
+until the secure store has dropped them. Then, when the controller can be
+reached within a few seconds, it revokes the device there, so its tokens
+stop working and it gets no more push notifications. Delivered notifications
+and the app badge are cleared. The controller address stays, to fill in the
+login form, and the app opens on the login screen until you log in again.
+
+When the controller could not be reached, logging in again on the same phone
+replaces the old device, which revokes it then.
+
 ## Session list and panes
 
 With more than one bucket, the session list shows a tile per bucket across

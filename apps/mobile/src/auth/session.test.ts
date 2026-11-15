@@ -364,6 +364,57 @@ describe("DeviceAuthSession", () => {
     expect(session.deviceId()).toBe(id);
   });
 
+  function signedIn(accessExpires = 60_000) {
+    const storage = memoryStorage();
+    storage.setItem(AUTH_KEYS.serverDeviceId, "7");
+    storage.setItem(AUTH_KEYS.accessToken, "acc-live");
+    storage.setItem(AUTH_KEYS.accessExpiresAt, String(accessExpires));
+    storage.setItem(AUTH_KEYS.refreshToken, "ref-live");
+    storage.setItem(AUTH_KEYS.refreshExpiresAt, "900000");
+    return storage;
+  }
+
+  it("logs out locally before revoking the device on the controller", async () => {
+    const storage = signedIn();
+    const calls: Array<{ url: string; method: string; auth?: string; refreshGone: boolean }> = [];
+    const fetchImpl: JsonFetchLike = (url, init) => {
+      calls.push({ url, method: init.method, auth: init.headers?.Authorization, refreshGone: storage.getItem(AUTH_KEYS.refreshToken) === "" });
+      return Promise.resolve(jsonResponse(204, null));
+    };
+    const session = new DeviceAuthSession(storage, fetchImpl, () => 1_000);
+    await expect(session.logOut("https://pm.example")).resolves.toBe(true);
+    expect(calls).toEqual([
+      { url: "https://pm.example/api/mobile/devices/7", method: "DELETE", auth: "Bearer acc-live", refreshGone: true },
+    ]);
+    expect(session.status().kind).toBe("unenrolled");
+    expect(session.accessToken()).toBeNull();
+  });
+
+  it("still logs out when the controller cannot be reached", async () => {
+    const storage = signedIn();
+    const session = new DeviceAuthSession(storage, () => Promise.reject(new Error("offline")), () => 1_000);
+    await expect(session.logOut("https://pm.example")).resolves.toBe(false);
+    expect(session.status().kind).toBe("unenrolled");
+    expect(storage.getItem(AUTH_KEYS.refreshToken)).toBe("");
+    expect(storage.getItem(AUTH_KEYS.accessToken)).toBe("");
+  });
+
+  it("refreshes an expired access token with the set-aside refresh token to revoke", async () => {
+    const storage = signedIn(500);
+    const calls: string[] = [];
+    const fetchImpl: JsonFetchLike = (url, init) => {
+      calls.push(`${init.method} ${url} ${init.headers?.Authorization ?? init.body ?? ""}`);
+      return Promise.resolve(url.endsWith("/refresh") ? jsonResponse(200, tokensPayload("new", 900_000)) : jsonResponse(204, null));
+    };
+    const session = new DeviceAuthSession(storage, fetchImpl, () => 1_000);
+    await expect(session.logOut("https://pm.example")).resolves.toBe(true);
+    expect(calls).toEqual([
+      'POST https://pm.example/api/mobile/devices/refresh {"refreshToken":"ref-live"}',
+      "DELETE https://pm.example/api/mobile/devices/7 Bearer acc-new",
+    ]);
+    expect(storage.getItem(AUTH_KEYS.refreshToken)).toBe("");
+  });
+
   it("enrolls again after signOut under the same device id", async () => {
     const storage = memoryStorage();
     const bodies: string[] = [];

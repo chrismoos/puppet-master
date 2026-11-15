@@ -12,7 +12,7 @@ import { PLAN_FOCUS_KEY } from "@puppet-master/client-core/state/planFocus";
 import { bindClientToForeground, isForeground, watchForeground } from "./src/adapters/lifecycle";
 import { createSocketConnector, reactNativeWebSocketFactory } from "./src/adapters/socket";
 import { CachedSecureStorage } from "./src/adapters/storage";
-import { ALL_AUTH_KEYS, AuthRejectedError, DeviceAuthSession, type DeviceAuthStatus } from "./src/auth/session";
+import { ALL_AUTH_KEYS, AUTH_KEYS, AuthRejectedError, DeviceAuthSession, type DeviceAuthStatus } from "./src/auth/session";
 import { bearerJsonFetch } from "./src/auth/api";
 import { setLinkResolver } from "./src/adapters/openLink";
 import { resolveTappedUrl } from "./src/forwardLinks";
@@ -20,10 +20,12 @@ import {
   configureForegroundNotifications,
   listenForTokenChanges,
   requestAndRegisterPush,
+  clearPushOnLogOut,
   deviceLog,
 } from "./src/push";
 import {
   ALL_CONFIG_KEYS,
+  CONFIG_KEYS,
   readControllerConfig,
   writeControllerConfig,
   type ControllerConfig,
@@ -69,6 +71,7 @@ export default function App() {
   const [storage, setStorage] = useState<CachedSecureStorage | null>(null);
   const [config, setConfig] = useState<ControllerConfig | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: "login" });
+  const [loginPrefill, setLoginPrefill] = useState<ControllerConfig | null>(null);
   const [legacyRejected, setLegacyRejected] = useState(false);
   const configRef = useRef<ControllerConfig | null>(null);
   configRef.current = config;
@@ -89,8 +92,13 @@ export default function App() {
       // connects without waiting for the enrollment effect. When the
       // URLs differ (new fixture), skip the cached config and let
       // enrollment set the correct one.
+      // A saved address alone is not a login: after logging out the address
+      // stays to fill in the form, and the app opens on it.
+      const signedIn = Boolean(hydrated.getItem(AUTH_KEYS.refreshToken));
       if (enrollEnv && saved && saved.baseUrl !== enrollEnv.controllerUrl) {
         // Stale config from a different fixture — enrollment will replace it.
+      } else if (saved && !signedIn) {
+        setLoginPrefill(saved);
       } else if (saved) {
         setConfig(saved);
         setScreen({ kind: "sessions" });
@@ -394,12 +402,22 @@ export default function App() {
   };
 
   const handleLogOut = () => {
-    if (!auth) return;
-    auth.signOut();
+    if (!auth || !storage) return;
+    const baseUrl = config?.baseUrl;
     client.stop();
+    // The legacy session token is a credential too; the address stays to fill in the login form.
+    storage.setItem(CONFIG_KEYS.sessionToken, "");
     setConfig(null);
     setLegacyRejected(false);
     setScreen({ kind: "login" });
+    void clearPushOnLogOut();
+    if (baseUrl) {
+      void auth.logOut(baseUrl).then((revoked) => {
+        if (!revoked) deviceLog("[logout] the controller was not reached; this device was logged out locally only");
+      });
+    } else {
+      auth.signOut();
+    }
   };
 
   // TerminalScreen manages its own keyboard geometry for PTY resizing, so
@@ -415,7 +433,7 @@ export default function App() {
         <Text style={styles.loading}>Loading…</Text>
       ) : screen.kind === "login" ? (
         <LoginScreen
-          initial={config}
+          initial={config ?? loginPrefill}
           auth={auth}
           notice={banner.needsEnrollment ? banner.detail : null}
           onEnrolled={enrol}

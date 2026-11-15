@@ -4,6 +4,7 @@ import {
   AuthHttpError,
   enrollDevice,
   refreshTokens,
+  revokeDevice,
   type EnrollProof,
   type JsonFetchLike,
   type MobileTokens,
@@ -21,6 +22,9 @@ export const AUTH_KEYS = {
 } as const;
 
 export const ALL_AUTH_KEYS: readonly string[] = Object.values(AUTH_KEYS);
+
+/** The most logging out waits on the controller before giving up on revoking. */
+const REVOKE_TIMEOUT_MS = 5_000;
 
 /** Refresh this long before the access token's stated expiry. */
 const ACCESS_EXPIRY_SLACK_MS = 30_000;
@@ -354,8 +358,41 @@ export class DeviceAuthSession {
   /** Forgets the stored tokens; the device id is kept so re-enrolling
    * reuses the same installation identity. */
   signOut(): void {
+    this.stopProactiveRefresh();
     this.clearTokens();
     this.setStatus({ kind: "unenrolled" });
+  }
+
+  /** Logs this device out. The tokens are forgotten here first, and only
+   * once the secure store has dropped them does it try to revoke the device
+   * on the controller with the credentials it set aside, so being offline
+   * still leaves the phone logged out. Resolves to whether the controller
+   * revoked the device; it never throws. */
+  async logOut(baseUrl: string): Promise<boolean> {
+    const deviceId = this.serverDeviceId();
+    const accessToken = this.accessToken();
+    const accessExpiresAt = Number(this.storage.getItem(AUTH_KEYS.accessExpiresAt) ?? "0");
+    const refreshToken = this.storage.getItem(AUTH_KEYS.refreshToken) || null;
+    this.signOut();
+    await this.flushStorage();
+    if (!deviceId) return false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REVOKE_TIMEOUT_MS);
+    try {
+      const usable = accessToken && accessExpiresAt - ACCESS_EXPIRY_SLACK_MS > this.now();
+      const token = usable
+        ? accessToken
+        : refreshToken
+          ? (await refreshTokens(baseUrl, refreshToken, this.fetchImpl, controller.signal)).tokens.accessToken
+          : null;
+      if (!token) return false;
+      await revokeDevice(baseUrl, token, deviceId, this.fetchImpl, controller.signal);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private storeTokens(tokens: MobileTokens): void {

@@ -277,6 +277,25 @@ export interface PushRegistration {
   publicKey?: string;
 }
 
+/** Revokes this device on the controller, so its tokens stop working and it
+ * gets no more push notifications. */
+export async function revokeDevice(
+  baseUrl: string,
+  accessToken: string,
+  serverDeviceId: string,
+  fetchImpl: JsonFetchLike,
+  signal?: AbortSignal,
+): Promise<void> {
+  await jsonRequest(
+    fetchImpl,
+    "DELETE",
+    `${origin(baseUrl)}/api/mobile/devices/${serverDeviceId}`,
+    undefined,
+    accessToken,
+    signal,
+  );
+}
+
 /** Registers or rotates this device's push endpoint on the controller. */
 export async function registerPushEndpoint(
   baseUrl: string,

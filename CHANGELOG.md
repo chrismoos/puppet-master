@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [iOS] Logging out now keeps you logged out after the app is closed. It forgets the device's credentials on the phone even offline, revokes the device on the controller when it can so notifications stop, and clears delivered notifications and the badge.
+
 - [iOS] The launch screen and the cover shown in the app switcher use the app's own dark background with the logo on it, instead of a white or black screen and a logo in a mismatched box. Menus open just below their ⋯ button.
 
 - [iOS] Bucket tiles across the top of the session list, with each bucket's icon and the web rail's indicators, narrow it to one bucket, and tapping the selected bucket again lists every bucket.

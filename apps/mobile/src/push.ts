@@ -149,6 +149,16 @@ function forgetToken(token: string): void {
   if (registeredToken === token) registeredToken = undefined;
 }
 
+/** Clears what a logged-out session leaves on the phone: delivered
+ * notifications, the app badge, and the record of the registered token, so
+ * the next login registers again. The phone keeps its APNs registration,
+ * which a new login reuses. Never throws. */
+export async function clearPushOnLogOut(): Promise<void> {
+  registeredToken = undefined;
+  await Notifications.dismissAllNotificationsAsync().catch(() => {});
+  await Notifications.setBadgeCountAsync(0).catch(() => {});
+}
+
 /** Asks for notification permission, obtains the native APNs token,
  * and registers it with the controller. Returns true if registration
  * succeeded, false if permission was denied or the token could not be
