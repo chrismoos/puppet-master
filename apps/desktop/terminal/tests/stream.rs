@@ -278,3 +278,70 @@ async fn a_replay_reports_online_and_a_refusal_carries_its_close_code() {
 
 /// The controller's close code for a worker whose terminal engine differs.
 const INCOMPATIBLE: u16 = 4412;
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::result_large_err)]
+async fn a_snapshot_saved_at_another_width_takes_the_size_sent_before_it() {
+    let mut worker = pm_ghostty::Terminal::new(SNAPSHOT_COLS, 6).unwrap();
+    worker.write(b"0123456789abcdefghij");
+    let snapshot = worker.snapshot().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket =
+            tokio_tungstenite::accept_hdr_async(tcp, |_: &Request, mut response: Response| {
+                response.headers_mut().insert(
+                    "Sec-WebSocket-Protocol",
+                    protocol::SUBPROTOCOL.parse().unwrap(),
+                );
+                Ok(response)
+            })
+            .await
+            .unwrap();
+        socket
+            .send(Message::Binary(
+                protocol::resize(GENERATION, PTY_COLS, PTY_ROWS).into(),
+            ))
+            .await
+            .unwrap();
+        let flags = FLAG_REPLAY | FLAG_REPLAY_SNAPSHOT | FLAG_REPLAY_GHOSTTY;
+        socket
+            .send(output(
+                flags | FLAG_REPLAY_START | FLAG_REPLAY_END,
+                &snapshot,
+            ))
+            .await
+            .unwrap();
+        while socket.next().await.is_some() {}
+    });
+    let stream = Stream::open(
+        Attach {
+            url: format!("ws://127.0.0.1:{port}/ws/terminal/7?generation={GENERATION}&viewer={VIEWER}&ticket=t"),
+            generation: GENERATION,
+            viewer: VIEWER,
+            claim: None,
+        },
+        |_| {},
+    );
+    let screen = stream.screen();
+    let grid = || {
+        let mut guard = screen.lock().unwrap();
+        guard.as_mut().map(|vt| {
+            let frame = vt.update().unwrap();
+            (frame.cols, frame.rows, frame.row_text(0))
+        })
+    };
+    eventually("the restored screen", || grid().is_some()).await;
+    assert_eq!(
+        grid(),
+        Some((PTY_COLS, PTY_ROWS, "0123456789abcdefghij".into())),
+        "the narrow snapshot's wrapped line fills the PTY's width"
+    );
+    drop(stream);
+    server.abort();
+}
+
+const SNAPSHOT_COLS: u16 = 10;
+const PTY_COLS: u16 = 40;
+const PTY_ROWS: u16 = 12;

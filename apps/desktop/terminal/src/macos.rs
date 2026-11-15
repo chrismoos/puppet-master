@@ -72,6 +72,21 @@ enum ViewInput {
     },
 }
 
+impl ViewInput {
+    /// Whether this input is the user at this window, which takes the size back from another viewer as the browser does.
+    fn is_presence(&self) -> bool {
+        match self {
+            ViewInput::Key(_)
+            | ViewInput::Text(_)
+            | ViewInput::Paste(_)
+            | ViewInput::Hover { .. }
+            | ViewInput::Scroll { .. } => true,
+            ViewInput::Mouse { action, .. } => *action == MouseAction::Press,
+            ViewInput::Preedit(_) | ViewInput::Copy | ViewInput::Zoom(_) => false,
+        }
+    }
+}
+
 /// Returns whether the input was handled.
 type InputSink = Box<dyn Fn(ViewInput) -> bool>;
 
@@ -840,7 +855,6 @@ impl NativeTerminal {
         let owner = self.owner.clone();
         let placement = self.placement.clone();
         let read_only = self.read_only;
-        // Typing here takes the size back from another viewer, as the browser does.
         let reclaim = {
             let stream = stream.clone();
             move || {
@@ -910,6 +924,9 @@ impl NativeTerminal {
             if read_only && typing {
                 return false;
             }
+            if input.is_presence() {
+                reclaim();
+            }
             let mut guard = screen.lock().unwrap();
             let Some(vt) = guard.as_mut() else {
                 return false;
@@ -932,7 +949,6 @@ impl NativeTerminal {
                     vt.clear_selection();
                     let _ = vt.scroll(isize::MAX);
                     drop(guard);
-                    reclaim();
                     stream.input(text.into_bytes(), false);
                     painter.redraw();
                     true
@@ -943,7 +959,6 @@ impl NativeTerminal {
                         return false;
                     }
                     vt.clear_selection();
-                    reclaim();
                     let submitted = press.key == keys::ENTER || press.key == keys::NUMPAD_ENTER;
                     let _ = vt.scroll(isize::MAX);
                     drop(guard);
@@ -1264,5 +1279,49 @@ fn layout_for(placement: Placement, scale: f64) -> Layout {
         font_px: (placement.font_size * scale) as f32,
         padding: (placement.padding * scale) as f32,
         visible: placement.visible,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mouse(action: MouseAction) -> ViewInput {
+        ViewInput::Mouse {
+            action,
+            button: MouseButton::Left,
+            point: NSPoint::new(0.0, 0.0),
+            clicks: 1,
+            mods: 0,
+            command: false,
+        }
+    }
+
+    #[test]
+    fn pointer_input_takes_the_size_back_like_typing() {
+        let hover = ViewInput::Hover {
+            point: NSPoint::new(1.0, 1.0),
+            command: false,
+        };
+        let scroll = ViewInput::Scroll {
+            lines: 1.0,
+            precise_pixels: None,
+            point: NSPoint::new(0.0, 0.0),
+            mods: 0,
+        };
+        assert!(hover.is_presence());
+        assert!(scroll.is_presence());
+        assert!(mouse(MouseAction::Press).is_presence());
+        assert!(ViewInput::Text("a".into()).is_presence());
+        assert!(ViewInput::Paste("a".into()).is_presence());
+    }
+
+    #[test]
+    fn releases_and_page_commands_leave_the_size_alone() {
+        assert!(!mouse(MouseAction::Release).is_presence());
+        assert!(!mouse(MouseAction::Motion).is_presence());
+        assert!(!ViewInput::Copy.is_presence());
+        assert!(!ViewInput::Zoom(1).is_presence());
+        assert!(!ViewInput::Preedit("か".into()).is_presence());
     }
 }

@@ -14,7 +14,7 @@
 
 - [Daemon] A shell you open in a pane is your own: opening it, stopping it, typing in it or exiting it no longer sends the agent a message. Hiding or restoring any pane no longer messages the agent either.
 
-- [macOS] A desktop app opens your controller in its own window, with no title bar or native window buttons, desktop notifications, a Dock badge for sessions waiting on you, and new windows for pages that would open in a new tab. The window has its own close, minimize and full screen buttons on the top bar. Every terminal is drawn natively with Metal in your terminal theme, with selection, copy, ⌘-click links, input methods, mouse support for programs that ask for it, file drops, page zoom, connection status, a scrollbar, VoiceOver, and instant switching back to recent terminals. Build it with `make desktop-build`.
+- [macOS] A desktop app opens your controller in its own window, with no title bar or native window buttons, desktop notifications, a Dock badge for sessions waiting on you, and new windows for pages that would open in a new tab. The window has its own close, minimize and full screen buttons on the top bar. Every terminal is drawn natively with Metal in your terminal theme, with selection, copy, ⌘-click links, input methods, mouse support for programs that ask for it, file drops, page zoom, connection status, a scrollbar, VoiceOver, and instant switching back to recent terminals. A terminal another device resized fits the window again as soon as you type, click, scroll or move the pointer over it. Build it with `make desktop-build`.
 
 - [Web] Pages an agent opens in a pane follow Puppet Master's dark or light appearance instead of always rendering light.
 

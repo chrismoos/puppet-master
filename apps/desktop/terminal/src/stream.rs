@@ -212,6 +212,8 @@ async fn session(
 struct Decoding {
     replay: Replay,
     osc: crate::osc::OscWatch,
+    /// The PTY's size from the latest resize frame, which can arrive before the replay it applies to.
+    pty: Option<(u16, u16)>,
 }
 
 fn handle(
@@ -233,17 +235,23 @@ fn handle(
                 let Some(complete) = decoding.replay.push(flags, &data) else {
                     return Ok(0);
                 };
-                let restored = if complete.ghostty_snapshot {
+                let mut restored = if complete.ghostty_snapshot {
                     Vt::restore(&complete.data).map_err(|error| error.to_string())?
                 } else {
-                    let (cols, rows) = screen.lock().unwrap().as_ref().map_or((80, 24), |vt| {
-                        (vt.frame().cols.max(1), vt.frame().rows.max(1))
+                    let (cols, rows) = decoding.pty.unwrap_or_else(|| {
+                        screen.lock().unwrap().as_ref().map_or((80, 24), |vt| {
+                            (vt.frame().cols.max(1), vt.frame().rows.max(1))
+                        })
                     });
                     let mut vt = Vt::new(cols, rows).map_err(|error| error.to_string())?;
                     vt.write(&complete.data);
                     vt
                 };
-                let mut restored = restored;
+                if let Some((cols, rows)) = decoding.pty {
+                    restored
+                        .resize(cols, rows, 0, 0)
+                        .map_err(|error| error.to_string())?;
+                }
                 if let Some(theme) = theme.lock().unwrap().as_ref() {
                     restored.set_theme(theme);
                 }
@@ -272,6 +280,7 @@ fn handle(
             cols,
             rows,
         }) if g == generation => {
+            decoding.pty = Some((cols, rows));
             if let Some(vt) = screen.lock().unwrap().as_mut() {
                 vt.resize(cols, rows, 0, 0)
                     .map_err(|error| error.to_string())?;
