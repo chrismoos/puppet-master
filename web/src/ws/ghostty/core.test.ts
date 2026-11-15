@@ -266,6 +266,24 @@ describe("Ghostty terminal core", () => {
     expect(output).toEqual(["\u001b[0n"]);
   });
 
+  it("observes each completed synchronized update before the next one starts", async () => {
+    const core = await createCore();
+    const completed: string[] = [];
+    const observe = () => completed.push(core.snapshot().rowData[0]!.text.trimEnd());
+    core.write("\x1b[?2026hfirst\x1b[?2026l\x1b[?2026h\rsecond\x1b[?2026l\x1b[?2026h\rpartial", observe);
+    expect(completed).toEqual(["first", "second"]);
+    expect(core.isSynchronizedOutput()).toBe(true);
+  });
+
+  it("observes a synchronized update whose closing sequence spans writes", async () => {
+    const core = await createCore();
+    const completed: string[] = [];
+    const observe = () => completed.push(core.snapshot().rowData[0]!.text.trimEnd());
+    for (const part of ["\x1b[?2026hready\x1b[?20", "26l\x1b[?2026h\rpartial"]) core.write(part, observe);
+    expect(completed).toEqual(["ready"]);
+    expect(core.isSynchronizedOutput()).toBe(true);
+  });
+
   it("ends synchronized output and keeps parsing progress reports afterward", async () => {
     const core = await createCore();
     core.write("\u001b[?2026h");

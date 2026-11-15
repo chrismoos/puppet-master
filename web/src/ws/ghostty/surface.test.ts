@@ -56,6 +56,7 @@ describe("GhosttyTerminalSurface lifecycle", () => {
     const core = {
       scrollbarState: () => ({ total: bottom + 4, len: 4, offset }),
       isAlternateScreen: () => false,
+      isViewportActive: () => offset === bottom,
       scroll: (delta: number) => { offset += delta; },
       scrollToBottom: () => { offset = bottom; },
     };
@@ -70,6 +71,23 @@ describe("GhosttyTerminalSurface lifecycle", () => {
     surface.scrollToBottom();
 
     expect(positions).toEqual([12, bottom]);
+  });
+
+  it("leaves an already active viewport unchanged when live output pins it", () => {
+    const core = { isViewportActive: () => true, scrollToBottom: vi.fn() };
+    const onViewportChange = vi.fn();
+    const requestRender = vi.fn();
+    const surface = Object.assign(Object.create(GhosttyTerminalSurface.prototype), {
+      core,
+      options: { onViewportChange },
+      requestRender,
+    }) as GhosttyTerminalSurface;
+
+    surface.scrollToBottom();
+
+    expect(core.scrollToBottom).not.toHaveBeenCalled();
+    expect(onViewportChange).not.toHaveBeenCalled();
+    expect(requestRender).not.toHaveBeenCalled();
   });
 
   it("measures local geometry without reflowing until the PTY size is echoed", () => {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- [Web] Resizing inline agent terminals keeps the screen visible while the program clears and redraws it.
+
+- [Web] Streaming terminal output stays current while programs redraw their prompts, without waiting for later batches or repainting the whole screen for every update.
+
 - [Daemon] Each prompt you send a Claude Code, Codex or Gemini session tells the agent what its dashboard goal and headline say and how long ago it set them, so it updates them when your request moves on, and an hour-old report is called stale.
 
 - [Web] Page and browser panes can be closed, not just hidden. Pane headers show an × at the far right in place of the stop square, and closing a terminal pane still asks first.

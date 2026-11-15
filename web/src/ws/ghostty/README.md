@@ -29,6 +29,10 @@ The vendored WebAssembly files match `web/src/ws/ghostty/vendor/VERSION`. To reb
 GHOSTTY_SOURCE_DIR=/path/to/ghostty-source GHOSTTY_ZIG=/path/to/zig bash scripts/build-ghostty-runtime.sh
 ```
 
+Synchronized output keeps partial redraws off the canvas. A completed update can paint on the next browser frame even when another update has already started in the same incoming chunk. The most recent complete update replaces older pending updates, and their dirty rows accumulate until painted. An update that never finishes is released after 500 ms. Live output already at the bottom keeps its viewport without forcing a full repaint.
+
+After resizing, an empty screen clear preserves the last painted content until the redraw arrives, with a 500 ms limit for programs that intentionally leave the screen empty.
+
 The browser loads one shared WebAssembly runtime for all terminal surfaces. A surface is created asynchronously; output, replay mode, and resize requests remain ordered while it initializes.
 
 Native runtime artifacts and their shared build profile are documented in

@@ -40,6 +40,7 @@ const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 const CURSOR_BLINK_INTERVAL_MS = 500;
 /** End an unterminated synchronized update instead of freezing the last frame. */
 const SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS = 500;
+const RESIZE_REDRAW_TIMEOUT_MS = 500;
 /** How long a pane's size must hold before it counts as settled. */
 const RESIZE_SETTLE_MS = 150;
 const TERMINAL_FONT_LOAD_TEXT = "iMW0@# .";
@@ -645,6 +646,9 @@ export class GhosttyTerminalSurface {
   private snapshot: GhosttySnapshot | null = null;
   private frame = 0;
   private synchronizedRenderTimer: number | null = null;
+  private resizeRedrawDeadline = 0;
+  private resizeRedrawTimer: number | null = null;
+  private completedUpdate: { snapshot: GhosttySnapshot; scrollbar: GhosttyScrollbar | null } | null = null;
   private cursorTimer: number | null = null;
   private compositionInputToSuppress: string | null = null;
   private compositionSuppressionTimer: number | null = null;
@@ -856,6 +860,7 @@ export class GhosttyTerminalSurface {
     this.forceFullRender = true;
     this.scrollbarDirty = true;
     if (!visible) {
+      this.completedUpdate = null;
       this.cancelRender();
       this.setSelectionAutoscroll(0);
       return;
@@ -903,12 +908,15 @@ export class GhosttyTerminalSurface {
   write(data: string | Uint8Array, onParsed?: () => void): void {
     if (this.disposed) return;
     this.writeCount += 1;
-    this.core.write(
-      data,
-      this.synchronizedRenderTimer === null
-        ? undefined
-        : () => this.cancelSynchronizedRenderTimer(),
-    );
+    this.core.write(data, () => {
+      this.cancelSynchronizedRenderTimer();
+      if (!this.visible || !this.hasSize) return;
+      const snapshot = this.snapshotWithPendingDirtyRows();
+      this.completedUpdate = {
+        snapshot,
+        scrollbar: this.core.scrollbarState(),
+      };
+    });
     onParsed?.();
     this.synchronizeMouseTrackingState();
     this.cursorOn = true;
@@ -919,6 +927,7 @@ export class GhosttyTerminalSurface {
   resetAndWrite(data: string | Uint8Array, onParsed?: () => void): void {
     if (this.disposed) return;
     this.resetCount += 1;
+    this.completedUpdate = null;
     this.cancelSynchronizedRenderTimer();
     this.lastMouseMotionData = "";
     this.core.resetAndWrite(data);
@@ -933,6 +942,7 @@ export class GhosttyTerminalSurface {
   restoreSnapshot(data: Uint8Array, onParsed?: () => void): void {
     if (this.disposed) return;
     this.resetCount += 1;
+    this.completedUpdate = null;
     this.cancelSynchronizedRenderTimer();
     this.lastMouseMotionData = "";
     this.core.restoreSnapshot(data);
@@ -947,6 +957,7 @@ export class GhosttyTerminalSurface {
   setTheme(theme: GhosttyTheme): void {
     if (this.disposed) return;
     this.theme = theme;
+    this.completedUpdate = null;
     this.core.setTheme(theme);
     this.updateScrollbarTheme();
     this.forceFullRender = true;
@@ -955,7 +966,11 @@ export class GhosttyTerminalSurface {
 
   resize(cols: number, rows: number): void {
     if (this.disposed) return;
+    if (this.snapshot?.rowData.some((row) => row.text.trim().length > 0)) {
+      this.resizeRedrawDeadline = performance.now() + RESIZE_REDRAW_TIMEOUT_MS;
+    }
     this.resizeCount += 1;
+    this.completedUpdate = null;
     this.cols = Math.max(1, cols);
     this.rows = Math.max(1, rows);
     this.syncGridMetricStyles();
@@ -1312,6 +1327,7 @@ export class GhosttyTerminalSurface {
   }
 
   scrollToBottom(): void {
+    if (this.core.isViewportActive()) return;
     this.core.scrollToBottom();
     this.forceFullRender = true;
     this.scrollbarDirty = true;
@@ -2170,8 +2186,7 @@ export class GhosttyTerminalSurface {
     this.scrollViewport(offset - state.offset);
   }
 
-  private updateScrollbar(): void {
-    const state = this.readScrollbarState();
+  private updateScrollbar(state = this.readScrollbarState()): void {
     const geometry =
       state === null
         ? null
@@ -2208,6 +2223,10 @@ export class GhosttyTerminalSurface {
 
   private cancelRender(): void {
     this.cancelSynchronizedRenderTimer();
+    if (this.resizeRedrawTimer !== null) {
+      window.clearTimeout(this.resizeRedrawTimer);
+      this.resizeRedrawTimer = null;
+    }
     if (this.frame !== 0) {
       window.cancelAnimationFrame(this.frame);
       this.frame = 0;
@@ -2240,8 +2259,7 @@ export class GhosttyTerminalSurface {
       this.cancelSynchronizedRenderTimer();
       return false;
     }
-    // A frame queued before the opening marker would now consume partial rows.
-    if (this.frame !== 0) {
+    if (this.completedUpdate === null && this.frame !== 0) {
       window.cancelAnimationFrame(this.frame);
       this.frame = 0;
     }
@@ -2256,7 +2274,15 @@ export class GhosttyTerminalSurface {
         this.renderFrame();
       }, SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS);
     }
-    return true;
+    return this.completedUpdate === null;
+  }
+
+  private snapshotWithPendingDirtyRows(): GhosttySnapshot {
+    const current = this.core.snapshot();
+    const snapshot = { ...current, rowData: current.rowData.slice() };
+    const pending = this.completedUpdate;
+    if (!pending) return snapshot;
+    return { ...snapshot, dirtyRows: new Set([...pending.snapshot.dirtyRows, ...snapshot.dirtyRows]) };
   }
 
   private renderFrame(): void {
@@ -2272,6 +2298,28 @@ export class GhosttyTerminalSurface {
       return;
     }
     if (this.deferSynchronizedRender()) return;
+    const completed = this.completedUpdate;
+    const useCompleted = completed !== null && this.core.isSynchronizedOutput();
+    const snapshot = useCompleted ? completed.snapshot : this.snapshotWithPendingDirtyRows();
+    // Inline programs can clear outside synchronized output before rebuilding after SIGWINCH.
+    if (performance.now() < this.resizeRedrawDeadline
+      && this.snapshot?.rowData.some((row) => row.text.trim().length > 0)
+      && !snapshot.rowData.some((row) => row.text.trim().length > 0)) {
+      this.forceFullRender = true;
+      if (this.resizeRedrawTimer === null) {
+        this.resizeRedrawTimer = window.setTimeout(() => {
+          this.resizeRedrawTimer = null;
+          this.resizeRedrawDeadline = 0;
+          this.requestRender();
+        }, Math.max(0, this.resizeRedrawDeadline - performance.now()));
+      }
+      return;
+    }
+    if (this.resizeRedrawTimer !== null) {
+      window.clearTimeout(this.resizeRedrawTimer);
+      this.resizeRedrawTimer = null;
+      this.resizeRedrawDeadline = 0;
+    }
     const canvasConfiguration = this.pendingCanvasConfiguration;
     if (canvasConfiguration !== null) {
       this.pendingCanvasConfiguration = null;
@@ -2281,11 +2329,13 @@ export class GhosttyTerminalSurface {
       this.canvasConfigured = true;
       this.canvasDevicePixelRatio = canvasConfiguration.ratio;
     }
-    this.snapshot = this.core.snapshot();
+    this.snapshot = snapshot;
+    const scrollState = useCompleted ? completed.scrollbar : this.readScrollbarState();
+    this.completedUpdate = null;
+    this.scrollbarState = scrollState;
     this.syncGridFromSnapshot(this.snapshot);
     if (!this.blinkEnabled()) this.cursorOn = true;
     // Move the origin only on full repaint; dirty-row updates cannot mix origins.
-    const scrollState = this.readScrollbarState();
     const anchorBottom = scrollState !== null && scrollState.total > scrollState.len;
     const nextOriginY = this.originHoldTimer !== null
       ? heldContentOriginY(this.originY, this.mountHeight, CONTENT_PADDING, this.rows, this.metrics.height)
@@ -2320,7 +2370,7 @@ export class GhosttyTerminalSurface {
         : null;
     if (this.scrollbarDirty) {
       this.scrollbarDirty = false;
-      this.updateScrollbar();
+      this.updateScrollbar(scrollState);
     }
     this.forceFullRender = false;
     this.options.onRender?.();
