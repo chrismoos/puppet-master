@@ -139,6 +139,11 @@ async function updateCapture(state) {
     }
     try {
       await page.bringToFront();
+      // Chromium can stop screencast delivery when a still capture interrupts it.
+      await refreshFrame(state).catch(error => {
+        if (!state.closed && state.viewers.size) console.error('Browser frame refresh failed:', error.message);
+      });
+      if (state.closed || !state.viewers.size) { state.capture = null; return; }
       await page.screencast.start({
         size: MAX_VIEWPORT, quality: JPEG_QUALITY, fps: STREAM_FPS,
         onFrame: ({ data }) => {
@@ -152,9 +157,6 @@ async function updateCapture(state) {
       await page.screencast.stop().catch(() => {});
       throw error;
     }
-    await refreshFrame(state).catch(error => {
-      if (!state.closed && state.viewers.size) console.error('Browser frame refresh failed:', error.message);
-    });
   });
   state.capturing = task;
   try { await task; } finally { if (state.capturing === task) state.capturing = null; }
@@ -208,10 +210,8 @@ export async function dispatch({ session_id: id, tool, args = {} }) {
   sendStatus(state);
   const result = await state.client.callTool({ name: tool, arguments: arguments_ }, undefined, { timeout: TOOL_TIMEOUT_MS });
   state.action = result.isError ? `${state.action} failed` : `${state.action} complete`;
+  if (state.viewers.size) state.restartCapture = true;
   await updateCapture(state).catch(() => sendStatus(state, 'disconnected'));
-  await refreshFrame(state).catch(error => {
-    if (!state.closed && state.viewers.size) console.error('Browser frame refresh failed:', error.message);
-  });
   return result;
 }
 http.on('upgrade', (req, socket, head) => {
