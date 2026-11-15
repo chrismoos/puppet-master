@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- [Web] Browser panes refresh after agent actions and navigation, and reconnect without flashing or retrying endlessly.
+- [Web] Browser panes refresh after agent actions and navigation, and reconnect without flashing or retrying endlessly. Showing an already-visible browser keeps its viewer connected.
 
 - [Web] Agents can browse with managed Playwright tools and show the same browser live in a read-only pane, with isolated login contexts and automatic browser cleanup. Install the optional runtime on browsing hosts with `pm browser install`.
 

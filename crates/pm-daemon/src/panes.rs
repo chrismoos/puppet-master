@@ -1583,6 +1583,9 @@ pub async fn show_browser(
             if old.as_ref().is_some_and(|pane| pane.kind != "browser") {
                 return Err(format!("pane {id:?} is already in use"));
             }
+            let same_stream = old.as_ref().filter(|pane| {
+                pane.page_port == Some(port) && pane.browser_stream.as_deref() == Some(stream)
+            });
             let pane = Pane {
                 id: id.clone(),
                 kind: "browser".into(),
@@ -1595,12 +1598,18 @@ pub async fn show_browser(
                 launch: None,
                 cwd: None,
                 env: BTreeMap::new(),
-                page_token: Some(new_token()),
+                page_token: Some(
+                    same_stream
+                        .and_then(|pane| pane.page_token.clone())
+                        .unwrap_or_else(new_token),
+                ),
                 page_dir: None,
                 page_port: Some(port),
                 page_forward: None,
                 browser_stream: Some(stream.to_string()),
-                version: old.as_ref().map_or(0, |p| p.version + 1),
+                version: same_stream
+                    .map(|pane| pane.version)
+                    .unwrap_or_else(|| old.as_ref().map_or(0, |pane| pane.version + 1)),
                 user_input: false,
                 collapsed: false,
                 titled: true,

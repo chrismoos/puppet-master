@@ -73,6 +73,13 @@ test(`managed browser ${remote ? "on a remote worker" : "locally"} appears in a 
       const context = canvas.getContext("2d");
       return context ? Array.from(context.getImageData(point.x, point.y, 1, 1).data).slice(0, 3) : [];
     }, CONTENT_PIXEL)).toEqual(SAVED_COLOR.map(value => expect.closeTo(value, -1)));
+    const originalCanvas = await pane.locator("canvas").elementHandle();
+    for (const browserTitle of ["Account browser", "Signed-in account"]) {
+      await call("show_browser", { title: browserTitle });
+      await expect(pane.locator(".ap-title")).toHaveText(browserTitle);
+      expect(await pane.locator("canvas").evaluate((canvas, original) => canvas === original, originalCanvas)).toBe(true);
+      await expect(pane.getByRole("status")).toHaveText("Live · read-only");
+    }
     await call("browser_navigate", { url: url.replace("127.0.0.1", "localhost") + "/next" });
     await expect.poll(() => pane.locator("canvas").evaluate((canvas, point) => {
       return Array.from(canvas.getContext("2d")!.getImageData(point.x, point.y, 1, 1).data).slice(0, 3);
@@ -100,6 +107,14 @@ test(`managed browser ${remote ? "on a remote worker" : "locally"} appears in a 
     await expect(pane.locator(".browser-url")).toContainText("/another-tab");
     await call("browser_resize", { width: 900, height: 600 });
     await expect(pane.locator(".browser-caption")).toContainText("900 × 600");
+    const previousBrowserCanvas = await pane.locator("canvas").elementHandle();
+    await call("browser_contexts", { action: "close" });
+    await call("browser_navigate", { url });
+    await call("show_browser", { title: "Replacement browser" });
+    await expect(pane.locator(".ap-title")).toHaveText("Replacement browser");
+    expect(await pane.locator("canvas").evaluate((canvas, previous) => canvas === previous, previousBrowserCanvas)).toBe(false);
+    await expect(pane.getByRole("status")).toHaveText("Live · read-only");
+    await expect(pane.locator(".browser-caption")).toContainText(`${VIEWPORT_WIDTH} × ${VIEWPORT_HEIGHT}`);
     await call("close_pane", { id: "browser-default" });
     await expect(pane).toHaveCount(0);
     await call("browser_contexts", { action: "close", browser_context: "other-user" });
