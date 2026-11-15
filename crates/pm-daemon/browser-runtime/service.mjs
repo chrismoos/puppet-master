@@ -12,7 +12,8 @@ const MAX_CONTEXTS = 4;
 const STREAM_TOKEN_BYTES = 24;
 const IDLE_MS = Number(process.env.PM_BROWSER_IDLE_MS) || 15 * 60 * 1000;
 const SWEEP_MS = Math.min(IDLE_MS, 30 * 1000);
-const FRAME_INTERVAL_MS = 1000 / 15;
+const STREAM_FPS = 15;
+const FRAME_INTERVAL_MS = 1000 / STREAM_FPS;
 const MAX_BUFFER_BYTES = 512 * 1024;
 const MIN_VIEWPORT = { width: 320, height: 240 };
 const MAX_VIEWPORT = { width: 1920, height: 1200 };
@@ -22,6 +23,9 @@ const WS_NORMAL_CLOSE = 1000;
 const VIEWPORT = { width: 1280, height: 800 };
 const JPEG_QUALITY = 70;
 const TOOL_TIMEOUT_MS = 60 * 1000;
+const FRAME_REFRESH_TIMEOUT_MS = 3000;
+const ACTION_TIMEOUT_MS = 10000;
+const NAVIGATION_TIMEOUT_MS = 30000;
 const allowedTools = new Set(JSON.parse(readFileSync(new URL('tools.json', import.meta.url))).map(t => t.name));
 const sessions = new Map();
 const queues = new Map();
@@ -50,12 +54,24 @@ async function owner(id) {
 async function makeContext(entry, name) {
   if (entry.contexts.size >= MAX_CONTEXTS) throw Error(`At most ${MAX_CONTEXTS} browser contexts per session. Reuse or close an existing context.`);
   const context = await entry.browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
-  const server = await createConnection({ timeouts: { action: 10000, navigation: 30000 }, outputMode: 'stdout' }, () => Promise.resolve(context));
+  const server = await createConnection({ timeouts: { action: ACTION_TIMEOUT_MS, navigation: NAVIGATION_TIMEOUT_MS }, outputMode: 'stdout' }, () => Promise.resolve(context));
   const client = new Client({ name: 'puppet-master-browser', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  const state = { context, client, server, name, viewers: new Set(), page: null, cdp: null, capturing: null, frame: null, action: '', path: randomBytes(STREAM_TOKEN_BYTES).toString('hex') };
+  const state = { context, client, server, name, viewers: new Set(), page: null, capture: null, capturing: null, frame: null, action: '', path: randomBytes(STREAM_TOKEN_BYTES).toString('hex') };
+  function watchPage(page) {
+    page.on('framenavigated', frame => {
+      if (frame !== page.mainFrame() || state.page !== page) return;
+      state.restartCapture = true;
+      if (state.viewers.size) void updateCapture(state).catch(() => sendStatus(state, 'disconnected'));
+    });
+    page.on('close', () => {
+      if (state.page === page && state.viewers.size) void updateCapture(state).catch(() => sendStatus(state, 'disconnected'));
+    });
+  }
+  context.on('page', watchPage);
+  for (const page of context.pages()) watchPage(page);
   views.set(state.path, state);
   entry.contexts.set(name, state);
   return state;
@@ -80,43 +96,65 @@ function sendStatus(state, status = 'live') {
   const message = JSON.stringify({ state: status, url: page?.url() || '', action: state.action, ...viewport });
   for (const socket of state.viewers) if (socket.readyState === WebSocket.OPEN && socket.bufferedAmount < MAX_BUFFER_BYTES) socket.send(message);
 }
+function publishFrame(state, frame) {
+  state.frame = frame;
+  for (const socket of state.viewers) if (socket.readyState === WebSocket.OPEN && socket.bufferedAmount < MAX_BUFFER_BYTES) socket.send(frame);
+}
+async function refreshFrame(state) {
+  const page = state.page;
+  if (!state.viewers.size || !page || page.isClosed()) return;
+  const frame = await page.screenshot({ type: 'jpeg', quality: JPEG_QUALITY, timeout: FRAME_REFRESH_TIMEOUT_MS });
+  if (state.viewers.size && state.page === page && !state.closed) publishFrame(state, frame);
+}
 async function stopCapture(state) {
   clearTimeout(state.frameTimer);
   state.pendingFrame = null;
-  const cdp = state.cdp;
-  state.cdp = null;
-  if (cdp) await cdp.detach().catch(() => {});
+  const capture = state.capture;
+  state.capture = null;
+  if (capture) await capture.page.screencast.stop().catch(() => {});
 }
 async function updateCapture(state) {
   const task = (state.capturing || Promise.resolve()).catch(() => {}).then(async () => {
     if (state.closed) return;
     if (!state.viewers.size) { await stopCapture(state); return; }
     const page = await currentPage(state);
-    if (state.page !== page || !state.viewers.size) {
+    if (state.page !== page || state.restartCapture) {
       await stopCapture(state);
       state.page = page;
       state.frame = null;
+      state.restartCapture = false;
     }
     sendStatus(state, page ? 'live' : 'empty');
-    if (!state.viewers.size || !page || state.cdp) return;
-    const cdp = await state.context.newCDPSession(page);
-    state.cdp = cdp;
+    if (!state.viewers.size || !page || state.capture) return;
+    const capture = { page };
+    state.capture = capture;
     let lastFrame = 0;
     function flushFrame() {
       state.frameTimer = null;
-      if (!state.pendingFrame || state.cdp !== cdp) return;
+      if (!state.pendingFrame || state.capture !== capture) return;
       lastFrame = Date.now();
-      const frame = Buffer.from(state.pendingFrame, 'base64');
+      const frame = state.pendingFrame;
       state.pendingFrame = null;
-      state.frame = frame;
-      for (const socket of state.viewers) if (socket.readyState === WebSocket.OPEN && socket.bufferedAmount < MAX_BUFFER_BYTES) socket.send(frame);
+      publishFrame(state, frame);
     }
-    cdp.on('Page.screencastFrame', event => {
-      void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
-      state.pendingFrame = event.data;
-      if (!state.frameTimer) state.frameTimer = setTimeout(flushFrame, Math.max(0, FRAME_INTERVAL_MS - (Date.now() - lastFrame)));
+    try {
+      await page.bringToFront();
+      await page.screencast.start({
+        size: MAX_VIEWPORT, quality: JPEG_QUALITY, fps: STREAM_FPS,
+        onFrame: ({ data }) => {
+          if (state.capture !== capture) return;
+          state.pendingFrame = data;
+          if (!state.frameTimer) state.frameTimer = setTimeout(flushFrame, Math.max(0, FRAME_INTERVAL_MS - (Date.now() - lastFrame)));
+        },
+      });
+    } catch (error) {
+      state.capture = null;
+      await page.screencast.stop().catch(() => {});
+      throw error;
+    }
+    await refreshFrame(state).catch(error => {
+      if (!state.closed && state.viewers.size) console.error('Browser frame refresh failed:', error.message);
     });
-    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: JPEG_QUALITY, maxWidth: MAX_VIEWPORT.width, maxHeight: MAX_VIEWPORT.height });
   });
   state.capturing = task;
   try { await task; } finally { if (state.capturing === task) state.capturing = null; }
@@ -171,6 +209,9 @@ export async function dispatch({ session_id: id, tool, args = {} }) {
   const result = await state.client.callTool({ name: tool, arguments: arguments_ }, undefined, { timeout: TOOL_TIMEOUT_MS });
   state.action = result.isError ? `${state.action} failed` : `${state.action} complete`;
   await updateCapture(state).catch(() => sendStatus(state, 'disconnected'));
+  await refreshFrame(state).catch(error => {
+    if (!state.closed && state.viewers.size) console.error('Browser frame refresh failed:', error.message);
+  });
   return result;
 }
 http.on('upgrade', (req, socket, head) => {

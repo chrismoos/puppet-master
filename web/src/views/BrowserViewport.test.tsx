@@ -60,3 +60,26 @@ it("pauses delivery while the dashboard tab is hidden and resumes when visible",
   act(() => document.dispatchEvent(new Event("visibilitychange")));
   expect(FakeSocket.sockets).toHaveLength(2);
 });
+
+it("keeps the last image during retries and bounds reconnects even when each socket sends status", () => {
+  vi.useFakeTimers();
+  try {
+    act(() => root.render(<BrowserViewport path="pane-pages/token/stream" active onReady={() => {}} />));
+    const retryDelay = 1500;
+    const maximumConnections = 4;
+    for (let attempt = 0; attempt < maximumConnections; attempt++) {
+      const socket = FakeSocket.sockets.at(-1)!;
+      act(() => socket.onmessage?.({ data: JSON.stringify({ state: "live" }) }));
+      act(() => socket.onclose?.({ code: 1006 }));
+      if (attempt < maximumConnections - 1) {
+        expect(host.querySelector(".browser-disconnected")).toBeNull();
+        expect(host.textContent).toContain("Reconnecting");
+        act(() => vi.advanceTimersByTime(retryDelay));
+      }
+    }
+    expect(FakeSocket.sockets).toHaveLength(maximumConnections);
+    expect(host.textContent).toContain("Browser stream disconnected");
+    act(() => vi.advanceTimersByTime(retryDelay * maximumConnections));
+    expect(FakeSocket.sockets).toHaveLength(maximumConnections);
+  } finally { vi.useRealTimers(); }
+});

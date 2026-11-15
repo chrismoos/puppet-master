@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { copyFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const runtime = process.env.PM_BROWSER_RUNTIME_DIR;
 assert(runtime, 'Set PM_BROWSER_RUNTIME_DIR to an installed runtime.');
@@ -91,6 +92,20 @@ test('managed browsing isolates logins, runs official tools, streams active tabs
     await once(socket, 'close');
     const same = await b.call(1, '__view');
     assert.equal(same.path, view.path);
+    await evaluate(b, 1, '() => { let color = 0; window.streamPulse = setInterval(() => { document.body.style.backgroundColor = `rgb(${color = (color + 31) % 255},50,90)`; }, 80); }');
+    const cycles = 5;
+    const freshFrames = 3;
+    for (let cycle = 0; cycle < cycles; cycle++) {
+      const viewer = new WebSocket(`ws://127.0.0.1:${view.port}/${view.path}`);
+      const images = new Set();
+      viewer.on('message', (data, binary) => { if (binary) images.add(createHash('sha1').update(data).digest('hex')); });
+      t.after(() => viewer.close());
+      await once(viewer, 'open');
+      await waitFor(() => images.size >= freshFrames);
+      viewer.close();
+      await once(viewer, 'close');
+    }
+    await evaluate(b, 1, '() => clearInterval(window.streamPulse)');
     assert.match(resultText(await evaluate(b, 1, '() => location.pathname')), /second-tab/);
     await b.call(1, '__close_session');
     assert.deepEqual(JSON.parse(resultText(await b.call(1, 'browser_contexts'))).contexts, []);

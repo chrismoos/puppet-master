@@ -10,6 +10,7 @@ const VIEWPORT_WIDTH = 1280;
 const VIEWPORT_HEIGHT = 800;
 const CONTENT_PIXEL = { x: 20, y: 100 };
 const SAVED_COLOR = [20, 130, 80];
+const NEXT_PAGE_COLOR = [40, 70, 180];
 const RUNTIME_INSTALL_TIMEOUT_MS = 180_000;
 
 test.describe.configure({ mode: "serial" });
@@ -23,8 +24,13 @@ test.beforeAll(() => {
 
 for (const remote of [false, true]) {
 test(`managed browser ${remote ? "on a remote worker" : "locally"} appears in a read-only pane and preserves isolated logins`, async ({ page, isolatedDaemon }) => {
-  const app = createServer((_request, response) => {
+  const app = createServer((request, response) => {
     response.setHeader("Content-Type", "text/html");
+    response.setHeader("Cross-Origin-Opener-Policy", request.url === "/next" ? "same-origin" : "unsafe-none");
+    if (request.url === "/next") {
+      response.end('<title>Next document</title><style>body{margin:0;background:rgb(40,70,180)}</style><h1>Next document</h1>');
+      return;
+    }
     response.end('<title>Managed settings</title><style>body{margin:0;background:rgb(180,40,40)}</style><h1>Settings</h1><input aria-label="Name"><button onclick="document.body.style.background=\'rgb(20,130,80)\';localStorage.setItem(\'account\',document.querySelector(\'input\').value)">Save</button>');
   });
   await new Promise<void>(resolve => app.listen(0, "127.0.0.1", resolve));
@@ -67,11 +73,25 @@ test(`managed browser ${remote ? "on a remote worker" : "locally"} appears in a 
       const context = canvas.getContext("2d");
       return context ? Array.from(context.getImageData(point.x, point.y, 1, 1).data).slice(0, 3) : [];
     }, CONTENT_PIXEL)).toEqual(SAVED_COLOR.map(value => expect.closeTo(value, -1)));
+    await call("browser_navigate", { url: url.replace("127.0.0.1", "localhost") + "/next" });
+    await expect.poll(() => pane.locator("canvas").evaluate((canvas, point) => {
+      return Array.from(canvas.getContext("2d")!.getImageData(point.x, point.y, 1, 1).data).slice(0, 3);
+    }, CONTENT_PIXEL)).toEqual(NEXT_PAGE_COLOR.map(value => expect.closeTo(value, -1)));
+    await call("browser_navigate_back");
+    const actualColorText = await call("browser_evaluate", { function: '() => getComputedStyle(document.body).backgroundColor.match(/\\d+/g).slice(0, 3).map(Number)' });
+    const actualColor = JSON.parse(actualColorText.split("### Result\n")[1].split("\n###")[0]) as number[];
+    await expect.poll(() => pane.locator("canvas").evaluate((canvas, point) => {
+      return Array.from(canvas.getContext("2d")!.getImageData(point.x, point.y, 1, 1).data).slice(0, 3);
+    }, CONTENT_PIXEL)).toEqual(actualColor.map(value => expect.closeTo(value, -1)));
     await pane.getByRole("button", { name: "Hide", exact: true }).click();
     await expect(pane).toHaveCount(0);
     await expect(call("browser_evaluate", { function: '() => localStorage.getItem("account")' })).resolves.toContain("First account");
+    await call("browser_evaluate", { function: '() => { document.body.style.background = "rgb(40,70,180)"; }' });
     await call("show_browser", { title: "Account browser" });
     await expect(pane.getByRole("status")).toHaveText("Live · read-only");
+    await expect.poll(() => pane.locator("canvas").evaluate((canvas, point) => {
+      return Array.from(canvas.getContext("2d")!.getImageData(point.x, point.y, 1, 1).data).slice(0, 3);
+    }, CONTENT_PIXEL)).toEqual(NEXT_PAGE_COLOR.map(value => expect.closeTo(value, -1)));
     await expect(page.locator(".ap-browser")).toHaveCount(1);
     await call("browser_contexts", { action: "create", browser_context: "other-user", reason: "Verify another signed-in account" });
     await call("browser_navigate", { url, browser_context: "other-user" });

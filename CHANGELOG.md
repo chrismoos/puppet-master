@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Browser panes refresh after agent actions and navigation, and reconnect without flashing or retrying endlessly.
+
 - [Web] Agents can browse with managed Playwright tools and show the same browser live in a read-only pane, with isolated login contexts and automatic browser cleanup. Install the optional runtime on browsing hosts with `pm browser install`.
 
 - [Web] Alert cards hide on their own again after you dismiss or open the last card with the pointer still on it. Before, every later card stayed until you pointed at the stack.

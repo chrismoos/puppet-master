@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 const RECONNECT_MS = 1500;
 const MAX_RECONNECTS = 3;
+const STABLE_CONNECTION_MS = 30_000;
 
 type BrowserStatus = { state: string; url?: string; action?: string; width?: number; height?: number };
 
@@ -23,6 +24,7 @@ export function BrowserViewport({ path, active, onReady }: { path: string; activ
     let disposed = false;
     let socket: WebSocket | undefined;
     let timer: number | undefined;
+    let stableTimer: number | undefined;
     let attempts = 0;
     let pending: ArrayBuffer | null = null;
     let drawing = false;
@@ -50,14 +52,16 @@ export function BrowserViewport({ path, active, onReady }: { path: string; activ
       } finally { drawing = false; }
     }
     function connect() {
-      setStatus(previous => ({ ...previous, state: "connecting" }));
+      setStatus(previous => ({ ...previous, state: receivedFrame ? "reconnecting" : "connecting" }));
       const url = new URL(path, document.baseURI);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       const connection = socket = new WebSocket(url);
       connection.binaryType = "arraybuffer";
+      connection.onopen = () => {
+        stableTimer = window.setTimeout(() => { attempts = 0; }, STABLE_CONNECTION_MS);
+      };
       connection.onmessage = event => {
         if (disposed || socket !== connection) return;
-        attempts = 0;
         if (typeof event.data === "string") {
           try { setStatus(JSON.parse(event.data) as BrowserStatus); } catch { setStatus(previous => ({ ...previous, state: "disconnected" })); }
         } else if (event.data instanceof ArrayBuffer) {
@@ -67,8 +71,13 @@ export function BrowserViewport({ path, active, onReady }: { path: string; activ
       };
       connection.onclose = event => {
         if (disposed || socket !== connection) return;
-        setStatus(previous => ({ ...previous, state: "disconnected" }));
-        if (event.code !== 1000 && attempts++ < MAX_RECONNECTS) timer = window.setTimeout(connect, RECONNECT_MS);
+        window.clearTimeout(stableTimer);
+        if (event.code !== 1000 && attempts++ < MAX_RECONNECTS) {
+          setStatus(previous => ({ ...previous, state: "reconnecting" }));
+          timer = window.setTimeout(connect, RECONNECT_MS);
+        } else {
+          setStatus(previous => ({ ...previous, state: "disconnected" }));
+        }
       };
       connection.onerror = () => connection.close();
     }
@@ -77,6 +86,7 @@ export function BrowserViewport({ path, active, onReady }: { path: string; activ
       disposed = true;
       pending = null;
       window.clearTimeout(timer);
+      window.clearTimeout(stableTimer);
       socket?.close();
       if (!receivedFrame) ready.current();
     };
@@ -86,7 +96,7 @@ export function BrowserViewport({ path, active, onReady }: { path: string; activ
     <div className="browser-viewport">
       <div className="browser-location">
         <span className="browser-url" title={status.url}>{status.url || "Managed browser"}</span>
-        <span className="browser-connection" role="status">{state === "live" ? "Live · read-only" : state === "connecting" ? "Connecting…" : state === "paused" ? "Paused" : state === "empty" ? "No open tab" : "Disconnected"}</span>
+        <span className="browser-connection" role="status">{state === "live" ? "Live · read-only" : state === "connecting" ? "Connecting…" : state === "reconnecting" ? "Reconnecting…" : state === "paused" ? "Paused" : state === "empty" ? "No open tab" : "Disconnected"}</span>
       </div>
       <div className="browser-screen">
         <canvas ref={canvas} role="img" aria-label="Live agent browser" />

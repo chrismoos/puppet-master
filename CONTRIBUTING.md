@@ -54,14 +54,15 @@ pm daemon --socket /tmp/pm-dev/pm.sock --db /tmp/pm-dev/pm.db \
 
 `make browser-test` installs the pinned runtime and Chromium in the task's
 build environment and exercises real MCP tools, isolated cookies and storage,
-streaming, tab changes, resizing, and idle cleanup. It needs Node.js, npm, and
+streaming, repeated viewer reconnects, tab changes, resizing, and idle cleanup. It needs Node.js, npm, and
 Chromium's Linux system libraries where applicable. Run it with the same
 `CARGO_TARGET_DIR` as the rest of the task.
 
 The functional browser suite includes `e2e/managed-browser.spec.ts`. That spec
 provisions its runtime under the lane's binary directory and uses a local test
 app. It verifies the actual browser image in the native pane, hiding and
-restoring, tab following, viewport sizing, and login isolation. It does not
+restoring, navigation across origins and browser isolation headers, tab following,
+viewport sizing, and login isolation. It does not
 need an agent provider account or an external website. For focused coverage:
 
 ```sh
