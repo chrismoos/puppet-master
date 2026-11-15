@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [iOS] The launch screen and the cover shown in the app switcher use the app's own dark background with the logo on it, instead of a white or black screen and a logo in a mismatched box. Menus open just below their ⋯ button.
+
 - [iOS] Bucket tiles across the top of the session list, with each bucket's icon and the web rail's indicators, narrow it to one bucket, and tapping the selected bucket again lists every bucket.
 
 - [iOS] In a session with panes, swipe left or right with two fingers to move between the agent, its shell panes and page panes, and double-tap the header to go back to the agent. Dots in the header show which pane is on screen, ⋯ has Agent and New shell pane, and Terminals groups the agent, panes and shell tabs.

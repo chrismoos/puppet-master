@@ -38,6 +38,19 @@
           "faceIDPermission": false
         }
       ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0b0e14",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 120,
+          "resizeMode": "contain",
+          "dark": {
+            "backgroundColor": "#0b0e14",
+            "image": "./assets/splash-icon.png"
+          }
+        }
+      ],
       "./plugins/swift-term",
       [
         "expo-build-properties",
@@ -52,6 +65,7 @@
       "./plugins/pod-deployment-target",
       "./plugins/ui-tests",
       "./plugins/voice"
-    ]
+    ],
+    "backgroundColor": "#0b0e14"
   }
 }

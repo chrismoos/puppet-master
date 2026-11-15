@@ -65,7 +65,7 @@ DERIVED ?= ios/build
 NSE_SRC := plugins/push-crypto/ios/NotificationService.swift
 NSE_DST := ios/PuppetMasterNSE/NotificationService.swift
 
-.PHONY: help build run device reset prebuild prebuild-clean bundle icon doctor clean testflight testflight-check testflight-test sync-nse uitest uitest-full bump version
+.PHONY: help build run device reset prebuild prebuild-clean bundle icon splash-icon doctor clean testflight testflight-check testflight-test sync-nse uitest uitest-full bump version
 
 # Advice printed by these targets is read from either directory, and the
 # root Makefile spells them ios-run, ios-reset and so on. Accepting both
@@ -106,6 +106,13 @@ icon: $(ICON) ## Render the app icon from its SVG (needs rsvg-convert).
 $(ICON): assets/icon.svg
 	rsvg-convert -w 1024 -h 1024 -b '#0B1422' assets/icon.svg -o $(ICON)
 
+splash-icon: assets/splash-icon.png ## Render the launch screen logo from its SVG (needs rsvg-convert).
+
+# The launch screen and the app-switcher cover draw the logo on the app's own
+# background, so this render keeps its transparency.
+assets/splash-icon.png: assets/splash-icon.svg
+	rsvg-convert -w 512 -h 512 assets/splash-icon.svg -o assets/splash-icon.png
+
 bundle: $(TERMINAL_BUNDLE) ## Generate the WebView terminal bundle Metro resolves.
 
 $(TERMINAL_BUNDLE): $(NODE_MODULES) terminal-web/build.mjs terminal-web/index.html $(wildcard terminal-web/src/*.ts)
@@ -123,7 +130,7 @@ prebuild: $(PODS) ## Generate ios/ and install pods, if the app config or depend
 # say so. Pods are installed unconditionally for the same reason —
 # prebuild runs pod install only when it judges the Podfile changed,
 # which installing a dependency does not always do.
-$(PODS): app.json package.json $(VOICE_STAMP) $(TERMINAL_BUNDLE) $(ICON) $(NODE_MODULES)
+$(PODS): app.json package.json $(VOICE_STAMP) $(TERMINAL_BUNDLE) $(ICON) assets/splash-icon.png $(NODE_MODULES)
 	@rm -f "$(PROVIDER)"
 	$(PNPM) exec expo prebuild -p ios
 	cd ios && pod install

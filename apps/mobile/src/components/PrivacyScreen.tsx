@@ -3,7 +3,8 @@ import { AppState, Image, StyleSheet, Text, View } from "react-native";
 
 import { colors } from "../theme";
 
-const logoSource = require("../../assets/icon.png");
+// The logo without the app icon's square tile, which would show as a box on the app's background.
+const logoSource = require("../../assets/splash-icon.png");
 
 /**
  * Covers the app while iOS takes its app-switcher snapshot.
