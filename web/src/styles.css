@@ -8652,7 +8652,7 @@ body.ap-resizing iframe { pointer-events: none; }
 }
 .ap-btn:hover { color: var(--bright); background: var(--panel-2); }
 .ap-btn.on { color: var(--amber); }
-.ap-btn-stop:hover { color: var(--red); }
+.ap-btn-close:hover { color: var(--red); }
 .ap-pane.is-collapsed .ap-head { border-bottom: 0; }
 .ap-pane.is-sideways .ap-head {
   height: 100%;

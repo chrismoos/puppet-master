@@ -1512,10 +1512,17 @@ fn shell_exit_notice(pane: &Pane) -> Option<String> {
 
 fn stop_notice(pane: &Pane) -> Option<String> {
     (!pane.user_opened).then(|| {
-        format!(
-            "The user stopped pane \"{}\" and its program. Do not start it again unless the user asks.",
-            pane.id
-        )
+        if pane.kind == "page" || pane.kind == "browser" {
+            format!(
+                "The user closed {} pane \"{}\". Do not open it again unless the user asks.",
+                pane.kind, pane.id
+            )
+        } else {
+            format!(
+                "The user stopped pane \"{}\" and its program. Do not start it again unless the user asks.",
+                pane.id
+            )
+        }
     })
 }
 
@@ -1651,6 +1658,15 @@ mod tests {
         assert!(shell_exit_notice(&agents).is_some_and(|n| n.contains("\"build\" exited")));
         assert!(stop_notice(&agents).is_some_and(|n| n.contains("stopped pane \"build\"")));
         assert!(typing_notice(&agents).is_some_and(|n| n.contains("enabled typing")));
+    }
+
+    #[test]
+    fn closing_a_page_pane_tells_the_agent_it_was_closed() {
+        let mut page = pane("report");
+        page.kind = "page".into();
+        assert!(stop_notice(&page).is_some_and(|n| n.contains("closed page pane \"report\"")));
+        page.kind = "browser".into();
+        assert!(stop_notice(&page).is_some_and(|n| n.contains("closed browser pane \"report\"")));
     }
 
     #[test]

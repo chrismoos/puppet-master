@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Page and browser panes can be closed, not just hidden. Pane headers show an × at the far right in place of the stop square, and closing a terminal pane still asks first.
+
 - [Web] Agents can browse with managed Playwright tools and show the same browser live in a read-only pane, with isolated login contexts and automatic browser cleanup.
 
 - [Web] Alert cards hide on their own again after you dismiss or open the last card with the pointer still on it. Before, every later card stayed until you pointed at the stack.

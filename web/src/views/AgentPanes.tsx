@@ -35,7 +35,7 @@ async function paneAction(sessionId: string, pane: string, action: string): Prom
   }
 }
 
-function Icon({ name }: { name: "keyboard" | "keyboard-off" | "stop" | "hide" | "reload" | "open" }) {
+function Icon({ name }: { name: "keyboard" | "keyboard-off" | "close" | "hide" | "reload" | "open" }) {
   const common = { viewBox: "0 0 16 16", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   switch (name) {
     case "keyboard":
@@ -47,10 +47,10 @@ function Icon({ name }: { name: "keyboard" | "keyboard-off" | "stop" | "hide" | 
           {name === "keyboard-off" && <path d="M2 2l12 12" />}
         </svg>
       );
-    case "stop":
+    case "close":
       return (
-        <svg {...common}>
-          <rect x="4" y="4" width="8" height="8" rx="1.2" fill="currentColor" stroke="none" />
+        <svg {...common} strokeWidth={1.6}>
+          <path d="M4 4l8 8M12 4l-8 8" />
         </svg>
       );
     case "hide":
@@ -789,7 +789,8 @@ function PaneView({
         : terminal
           ? "running"
           : "starting";
-  const statusClass = meta.kind === "page" || meta.kind === "browser" || status === "running" ? "ok" : status.startsWith("exit") ? (meta.exit_code === 0 ? "dim" : "bad") : "dim";
+  const webView = meta.kind === "page" || meta.kind === "browser";
+  const statusClass = webView || status === "running" ? "ok" : status.startsWith("exit") ? (meta.exit_code === 0 ? "dim" : "bad") : "dim";
   const pageUrl = meta.page_token ? `pane-pages/${meta.page_token}/?v=${meta.version}.${localReload}` : "";
   return (
     <div
@@ -852,18 +853,16 @@ function PaneView({
             <a className="ap-btn" title="Open in a new tab" aria-label="Open in a new tab" href={pageUrl} target="_blank" rel="noreferrer"><Icon name="open" /></a>
           </>
         )}
-        {meta.kind !== "page" && meta.kind !== "browser" && (
-          <button
-            type="button"
-            className="ap-btn ap-btn-stop"
-            title="Stop the program and remove the pane"
-            aria-label="Stop"
-            onClick={() => setConfirmingStop(true)}
-          >
-            <Icon name="stop" />
-          </button>
-        )}
         <button type="button" className="ap-btn" title="Hide the pane. It keeps running; bring it back from the tab strip." aria-label="Hide" onClick={() => void paneAction(sessionId, meta.id, "hide")}><Icon name="hide" /></button>
+        <button
+          type="button"
+          className="ap-btn ap-btn-close"
+          title={webView ? "Close this view" : "Stop the program and close the pane"}
+          aria-label="Close"
+          onClick={() => (webView ? void paneAction(sessionId, meta.id, "stop") : setConfirmingStop(true))}
+        >
+          <Icon name="close" />
+        </button>
       </div>
       {confirmingStop && createPortal(
         <ConfirmDialog

@@ -19,7 +19,7 @@ function layoutOf(text: string): { rev: number; layout: unknown; unplaced: strin
   return JSON.parse(text);
 }
 
-test("an agent's panes sit beside it and the user resizes, collapses, hides, restores and stops them", async ({ page, isolatedDaemon }) => {
+test("an agent's panes sit beside it and the user resizes, collapses, hides, restores and closes them", async ({ page, isolatedDaemon }) => {
   await logIn(page);
   await openSession(page);
   const cwd = isolatedDaemon.session(SESSION)!.cwd;
@@ -68,7 +68,7 @@ test("an agent's panes sit beside it and the user resizes, collapses, hides, res
   await expect(statusPane).toBeVisible();
   await expect(chip).toHaveCount(0);
 
-  await jobPane.getByRole("button", { name: "Stop" }).click();
+  await jobPane.getByRole("button", { name: "Close" }).click();
   const dialog = page.getByRole("dialog", { name: "stop this program" });
   await expect(dialog).toBeVisible();
   const dialogBox = (await dialog.boundingBox())!;
@@ -84,6 +84,10 @@ test("an agent's panes sit beside it and the user resizes, collapses, hides, res
   await expect(shortPane.locator(".ap-status")).toHaveText("exit 4");
   await expect(shortPane.locator(".ap-output")).toContainText("finished-output");
   await expect(shortPane.locator(".ap-output")).toContainText("[exited with status 4]");
+
+  await statusPane.getByRole("button", { name: "Close" }).click();
+  await expect(statusPane).toHaveCount(0);
+  await expect.poll(async () => layoutOf(await isolatedDaemon.callAgentTool(SESSION, "get_layout", {})).panes.map((pane) => pane.id)).not.toContain("status");
 });
 
 test("the user opens a shell beside the agent from its menu and drags it to the other side", async ({ page, isolatedDaemon }) => {
