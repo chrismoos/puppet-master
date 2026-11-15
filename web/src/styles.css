@@ -38,6 +38,13 @@
 
   /* Status blocks: a tinted panel, its border, and the text on it. */
   --warn-bg: light-dark(#fdf3e0, #2b2111);
+  /* Alert icon tiles keep vivid colors in both appearances, as app icons do. */
+  --tile-amber: light-dark(#f5a524, #f5a524);
+  --tile-violet: light-dark(#8b5cf6, #8b5cf6);
+  --tile-red: light-dark(#e5484d, #e5484d);
+  --tile-green: light-dark(#22a06b, #22a06b);
+  --tile-blue: light-dark(#3b82f6, #3b82f6);
+  --tile-ink: light-dark(#ffffff, #ffffff);
   --warn-line: light-dark(#d9a441, #765821);
   --warn-text: light-dark(#7a4e00, #ffd27f);
   --ok-bg: light-dark(#e6f5ec, #162a21);
@@ -161,6 +168,13 @@
    controls. Code, keys, and identifiers stay on --mono. */
 [data-theme="graphite"],
 [data-theme="studio"] {
+  /* Alert icon tiles keep vivid colors in both appearances, as app icons do. */
+  --tile-amber: light-dark(#f5a524, #f5a524);
+  --tile-violet: light-dark(#8b5cf6, #8b5cf6);
+  --tile-red: light-dark(#e5484d, #e5484d);
+  --tile-green: light-dark(#22a06b, #22a06b);
+  --tile-blue: light-dark(#3b82f6, #3b82f6);
+  --tile-ink: light-dark(#ffffff, #ffffff);
   --font-ui: var(--sans);
   --btn-transform: none;
   --btn-tracking: 0;
@@ -8782,7 +8796,6 @@ body.ap-moving iframe { pointer-events: none; }
   width: min(480px, calc(100vw - 28px));
   font-size: 12px;
 }
-/* Tiles keep vivid colors in both appearances, as app icons do, so they are not the text-contrast accents. */
 .alert-card {
   position: relative;
   display: grid;
@@ -8791,18 +8804,18 @@ body.ap-moving iframe { pointer-events: none; }
   align-content: start;
   overflow: hidden;
   color: var(--text);
-  background: light-dark(rgba(247, 247, 249, 0.94), rgba(38, 41, 48, 0.94));
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.07), rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, color-mix(in srgb, var(--panel), var(--bright) 6%), transparent 6%);
+  border: 1px solid color-mix(in srgb, var(--bright) 9%, transparent);
   border-radius: 16px;
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
   backdrop-filter: blur(24px) saturate(1.6);
-  box-shadow: light-dark(0 10px 30px rgba(19, 24, 33, 0.16), 0 10px 30px rgba(0, 0, 0, 0.5));
+  box-shadow: var(--shadow-md);
   animation: alert-card-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 @keyframes alert-card-in {
   from { opacity: 0; transform: translateX(24px); }
 }
-.alert-card:hover { background: light-dark(rgba(250, 250, 252, 0.97), rgba(44, 47, 55, 0.96)); }
+.alert-card:hover { background: color-mix(in srgb, color-mix(in srgb, var(--panel), var(--bright) 9%), transparent 3%); }
 .alert-card-open {
   position: absolute;
   inset: 0;
@@ -8823,10 +8836,10 @@ body.ap-moving iframe { pointer-events: none; }
   width: 34px;
   height: 34px;
   margin-top: 12px;
-  color: #fff;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--alert-tile) 72%, #fff), var(--alert-tile));
+  color: var(--tile-ink);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--alert-tile) 72%, var(--tile-ink)), var(--alert-tile));
   border-radius: 9px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 2px color-mix(in srgb, black 25%, transparent);
 }
 .alert-card-icon svg { width: 18px; height: 18px; }
 .alert-card-head {
@@ -8859,7 +8872,7 @@ body.ap-moving iframe { pointer-events: none; }
   padding: 0;
   font: 300 16px/1 system-ui, sans-serif;
   color: var(--muted);
-  background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1));
+  background: color-mix(in srgb, var(--bright) 8%, transparent);
   border: 0;
   border-radius: 50%;
   cursor: pointer;
@@ -8900,8 +8913,8 @@ body.ap-moving iframe { pointer-events: none; }
   font-size: 12px;
   color: var(--text);
   text-decoration: none;
-  background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.06));
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.07), rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, var(--bright) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bright) 9%, transparent);
   border-radius: 8px;
 }
 .alert-card-link:hover { border-color: color-mix(in srgb, var(--blue) 55%, var(--line)); }
@@ -8931,11 +8944,11 @@ body.ap-moving iframe { pointer-events: none; }
 .alert-stack-more { color: var(--muted); background: var(--panel); box-shadow: var(--shadow-md); }
 .alert-stack-clear { color: var(--text); background: var(--panel-2); cursor: pointer; }
 .alert-stack-clear:hover { color: var(--bright); }
-.alert-card-needs-input { --alert-tile: #f5a524; }
-.alert-card-approval { --alert-tile: #8b5cf6; }
-.alert-card-failed { --alert-tile: #e5484d; }
-.alert-card-finished { --alert-tile: #22a06b; }
-.alert-card-message { --alert-tile: #3b82f6; }
+.alert-card-needs-input { --alert-tile: var(--tile-amber); }
+.alert-card-approval { --alert-tile: var(--tile-violet); }
+.alert-card-failed { --alert-tile: var(--tile-red); }
+.alert-card-finished { --alert-tile: var(--tile-green); }
+.alert-card-message { --alert-tile: var(--tile-blue); }
 @media (prefers-reduced-motion: reduce) {
   .alert-card { animation: none; }
 }
