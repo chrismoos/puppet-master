@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Alert cards hide on their own again after you dismiss or open the last card with the pointer still on it. Before, every later card stayed until you pointed at the stack.
+
 - [iOS] Logging out now keeps you logged out after the app is closed. It forgets the device's credentials on the phone even offline, revokes the device on the controller when it can so notifications stop, and clears delivered notifications and the badge.
 
 - [iOS] The launch screen and the cover shown in the app switcher use the app's own dark background with the logo on it, instead of a white or black screen and a logo in a mismatched box. Menus open just below their ⋯ button.

@@ -116,8 +116,39 @@ export function AlertStack({
   onDismissAll: () => void;
   now?: () => number;
 }) {
-  const [paused, setPaused] = useState(false);
   if (alerts.length === 0) return null;
+  return (
+    <ShownStack
+      alerts={alerts}
+      onOpen={onOpen}
+      onOpenLink={onOpenLink}
+      onDismiss={onDismiss}
+      onDismissAll={onDismissAll}
+      now={now}
+    />
+  );
+}
+
+/**
+ * Mounted only while a card is up, so the pause it holds ends with the stack.
+ * A stack emptied under the pointer never receives its mouseleave.
+ */
+function ShownStack({
+  alerts,
+  onOpen,
+  onOpenLink,
+  onDismiss,
+  onDismissAll,
+  now,
+}: {
+  alerts: readonly InAppAlert[];
+  onOpen: (alert: InAppAlert) => void;
+  onOpenLink: (alert: InAppAlert) => void;
+  onDismiss: (key: string) => void;
+  onDismissAll: () => void;
+  now: () => number;
+}) {
+  const [paused, setPaused] = useState(false);
   const visible = alerts.slice(0, MAX_VISIBLE_ALERTS);
   const hidden = alerts.length - visible.length;
   const nowMs = now();

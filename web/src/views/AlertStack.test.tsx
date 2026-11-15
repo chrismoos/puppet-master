@@ -166,6 +166,32 @@ describe("AlertStack", () => {
     expect(stack()).toBeNull();
   });
 
+  it("starts a card raised after the stack emptied under the pointer with its countdown running", () => {
+    let raise: (next: InAppAlert) => void = () => {};
+    function Live() {
+      const [alerts, setAlerts] = useState<InAppAlert[]>([alert("a", "finished")]);
+      raise = (next) => setAlerts((current) => [next, ...current]);
+      return (
+        <AlertStack
+          alerts={alerts}
+          now={() => NOW}
+          onOpen={() => {}}
+          onOpenLink={() => {}}
+          onDismiss={(key) => setAlerts((current) => current.filter((a) => a.key !== key))}
+          onDismissAll={() => setAlerts([])}
+        />
+      );
+    }
+    act(() => root.render(<Live />));
+    hover(stack()!, true);
+    act(() => cards()[0].querySelector<HTMLButtonElement>(".alert-card-close")!.click());
+    expect(stack()).toBeNull();
+
+    act(() => raise(alert("b", "finished", { raisedAtMs: NOW + 1 })));
+    act(() => vi.advanceTimersByTime(AUTO_HIDE_MS.finished));
+    expect(stack()).toBeNull();
+  });
+
   it("renders a message's title in bold before its body, and its link as its own target", () => {
     render([
       alert("m", "message", {
