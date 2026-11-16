@@ -8,7 +8,7 @@ pub mod worker_frame;
 /// capabilities a peer may use, not a compatibility boundary: a controller
 /// registers a worker announcing any version and adapts to what that
 /// version supports.
-pub const WORKER_PROTOCOL_VERSION: u32 = 26;
+pub const WORKER_PROTOCOL_VERSION: u32 = 27;
 pub const WORKER_PROTOCOL_MANAGED_BROWSER: u32 = 26;
 pub const WORKER_PROTOCOL_GHOSTTY_SNAPSHOT: u32 = 24;
 /// A shell spawn may carry a command and environment, which the worker runs
@@ -129,6 +129,14 @@ pub const WORKER_PROTOCOL_HARNESS_INSTALL: u32 = 14;
 /// turn the way they always have, rather than being held in a state the
 /// worker cannot tell the controller to leave.
 pub const WORKER_PROTOCOL_HOOK_BACKGROUND_WORK: u32 = 13;
+
+/// First protocol in which a worker can launch Grok Build. Older workers do
+/// not recognize its AgentKind wire value, so the controller refuses that
+/// launch instead of sending them a message they cannot decode.
+pub const WORKER_PROTOCOL_GROK: u32 = 27;
+
+const _: () = assert!(WORKER_PROTOCOL_GROK <= WORKER_PROTOCOL_VERSION);
+const _: () = assert!(WORKER_PROTOCOL_GROK > WORKER_PROTOCOL_MANAGED_BROWSER);
 
 /// First protocol in which a worker can launch Antigravity. Older workers do
 /// not recognize its AgentKind wire value, so the controller refuses that

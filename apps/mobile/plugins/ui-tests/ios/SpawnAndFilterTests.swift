@@ -64,7 +64,7 @@ final class SpawnAndFilterTests: XCTestCase {
         let agentField = element(beginningWith: "Inherit (")
         XCTAssertTrue(agentField.waitForExistence(timeout: 5), "agent picker missing")
         agentField.tap()
-        for agent in ["Claude", "Codex", "Gemini", "OpenCode", "Antigravity"] {
+        for agent in ["Claude", "Codex", "Gemini", "OpenCode", "Antigravity", "Grok Build"] {
             XCTAssertTrue(element(agent).waitForExistence(timeout: 3), "\(agent) missing from the agent picker")
         }
         // The fixture's agent shim answers as codex.

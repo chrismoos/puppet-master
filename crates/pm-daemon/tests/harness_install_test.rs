@@ -123,3 +123,59 @@ async fn local_check_uses_the_projects_resolved_agent_without_creating_a_session
     assert_ne!(status.state, "installing");
     assert!(env.daemon.subscribe().0.sessions.is_empty());
 }
+
+#[tokio::test]
+async fn workers_older_than_grok_get_neither_its_install_check_nor_its_spawn() {
+    let (env, _restart) = restartable_hooked_agent_daemon_env(AgentKind::Grok);
+    let mut reg = enroll(&env, pm_protocol::WORKER_PROTOCOL_GROK - 1);
+    let error = env
+        .daemon
+        .harness_status(env.project_id, reg.worker_id, Some(AgentKind::Grok), false)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("cannot launch Grok Build"));
+    let error = env
+        .daemon
+        .spawn_session_with_agent_override(
+            env.project_id,
+            Some(AgentKind::Grok),
+            "",
+            "",
+            None,
+            pm_protocol::domain::PermissionMode::Inherit,
+            Some(reg.worker_id),
+            false,
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("cannot launch Grok Build"));
+    assert!(reg.rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn current_workers_receive_the_grok_install_check() {
+    let (env, _restart) = restartable_hooked_agent_daemon_env(AgentKind::Grok);
+    let mut reg = enroll(&env, pm_protocol::WORKER_PROTOCOL_GROK);
+    let daemon = env.daemon.clone();
+    let (project_id, worker_id) = (env.project_id, reg.worker_id);
+    tokio::spawn(async move {
+        daemon
+            .harness_status(project_id, worker_id, Some(AgentKind::Grok), false)
+            .await
+    });
+    let message = tokio::time::timeout(TEST_TIMEOUT, reg.rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        message,
+        ControllerMsg::HarnessRequest {
+            agent: AgentKind::Grok,
+            install: false,
+            ..
+        }
+    ));
+}

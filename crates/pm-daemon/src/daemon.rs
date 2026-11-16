@@ -3485,16 +3485,18 @@ impl Daemon {
         worker_id: u64,
         agent: AgentKind,
     ) -> Result<(), DaemonError> {
-        if worker_id == LOCAL_WORKER_ID || agent != AgentKind::Antigravity {
+        let (first_protocol, name) = match agent {
+            AgentKind::Antigravity => (pm_protocol::WORKER_PROTOCOL_ANTIGRAVITY, "Antigravity"),
+            AgentKind::Grok => (pm_protocol::WORKER_PROTOCOL_GROK, "Grok Build"),
+            _ => return Ok(()),
+        };
+        if worker_id == LOCAL_WORKER_ID {
             return Ok(());
         }
-        if self.worker_link(worker_id)?.protocol_version()
-            < pm_protocol::WORKER_PROTOCOL_ANTIGRAVITY
-        {
+        if self.worker_link(worker_id)?.protocol_version() < first_protocol {
             return Err(DaemonError::Rejected(format!(
-                "this worker runs an older Puppet Master that cannot launch Antigravity; \
-                 update it to a build speaking worker protocol {} or newer",
-                pm_protocol::WORKER_PROTOCOL_ANTIGRAVITY
+                "this worker runs an older Puppet Master that cannot launch {name}; \
+                 update it to a build speaking worker protocol {first_protocol} or newer"
             )));
         }
         Ok(())
@@ -10376,6 +10378,7 @@ impl Daemon {
             }
             return Ok((agent, crate::harness_install::request(agent, install)));
         }
+        self.ensure_worker_supports_agent(worker_id, agent)?;
         let link = self.worker_link(worker_id)?;
         if link.protocol_version() < pm_protocol::WORKER_PROTOCOL_HARNESS_INSTALL {
             if install {
@@ -11858,6 +11861,13 @@ mod agent_resolution_tests {
                 AgentDialects {
                     agent: AgentKind::Gemini,
                     dialects: vec![ModelDialect::GoogleGenai],
+                    supports_background_model: false,
+                },
+                // Grok reads a custom endpoint only from the user's own
+                // config file, so no profile entry reaches it either.
+                AgentDialects {
+                    agent: AgentKind::Grok,
+                    dialects: vec![],
                     supports_background_model: false,
                 },
                 // OpenCode is bring-your-own-key across providers, so it

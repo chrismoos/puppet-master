@@ -67,6 +67,7 @@ impl From<AgentKind> for wire::AgentKind {
             AgentKind::Gemini => wire::AgentKind::Gemini,
             AgentKind::OpenCode => wire::AgentKind::Opencode,
             AgentKind::Antigravity => wire::AgentKind::Antigravity,
+            AgentKind::Grok => wire::AgentKind::Grok,
             AgentKind::Test => wire::AgentKind::Test,
         }
     }
@@ -81,6 +82,7 @@ impl TryFrom<i32> for AgentKind {
             Ok(wire::AgentKind::Gemini) => Ok(AgentKind::Gemini),
             Ok(wire::AgentKind::Opencode) => Ok(AgentKind::OpenCode),
             Ok(wire::AgentKind::Antigravity) => Ok(AgentKind::Antigravity),
+            Ok(wire::AgentKind::Grok) => Ok(AgentKind::Grok),
             Ok(wire::AgentKind::Test) => Ok(AgentKind::Test),
             _ => Err(DecodeError::UnknownEnum("AgentKind", v)),
         }

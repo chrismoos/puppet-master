@@ -1271,7 +1271,7 @@ mod tests {
     fn finding_no_agent_at_all_is_reported_rather_than_left_silent() {
         let note = agent_path_note(&[]);
         assert!(note.contains("fail every spawn"), "{note}");
-        for agent in ["claude", "codex", "gemini", "opencode", "agy"] {
+        for agent in ["claude", "codex", "gemini", "opencode", "agy", "grok"] {
             assert!(note.contains(agent), "{note}");
         }
 

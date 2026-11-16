@@ -88,6 +88,8 @@ export function agentLabel(agent: AgentKind): string {
       return "opencode";
     case AgentKind.ANTIGRAVITY:
       return "antigravity";
+    case AgentKind.GROK:
+      return "grok";
     case AgentKind.TEST:
       return "test";
     case AgentKind.UNSPECIFIED:

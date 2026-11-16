@@ -15,6 +15,7 @@ enum AgentKind {
   AGENT_KIND_GEMINI = 4;
   AGENT_KIND_OPENCODE = 5;
   AGENT_KIND_ANTIGRAVITY = 6;
+  AGENT_KIND_GROK = 7;
 }
 
 enum AgentSelectionSource {

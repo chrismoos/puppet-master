@@ -291,7 +291,7 @@ enum Command {
     Spawn {
         #[arg(long, short)]
         project: u64,
-        /// Agent to run: claude, codex, gemini, opencode, or antigravity.
+        /// Agent to run: claude, codex, gemini, opencode, antigravity, or grok.
         #[arg(long, default_value = "claude")]
         agent: String,
         /// Short label shown in listings; defaults to the prompt.
@@ -461,7 +461,7 @@ enum Command {
     InternalHook {
         kind: String,
         /// The agent CLI running the hook, when its context differs from
-        /// the shared payload shape (only Claude Code sets it).
+        /// the shared payload shape (Claude Code and Grok Build set it).
         #[arg(long)]
         agent: Option<String>,
     },
@@ -2513,9 +2513,9 @@ async fn run_hook(socket: &Target, kind: &str, agent: Option<&str>) -> anyhow::R
     // `additionalContext` into the model, re-firing on startup, resume,
     // `/clear`, and `/compact`. Emitting the reporting brief here makes
     // the contract durable across a context reset. Codex ignores the
-    // stdout, so it is harmless there. Antigravity strictly parses hook
-    // results as protojson and fails on unrecognized fields.
-    if kind == pm_protocol::domain::HookKind::Started && !is_antigravity_payload(&json) {
+    // stdout, so it is harmless there.
+    let reads_context = hook_output_reaches_model(agent, &json);
+    if kind == pm_protocol::domain::HookKind::Started && reads_context {
         let forwards = session_forward_inventory(socket, &session_token).await;
         let claude = agent == Some(pm_adapters::CLAUDE_HOOK_AGENT);
         println!("{}", session_start_additional_context(&forwards, claude));
@@ -2556,10 +2556,20 @@ async fn run_hook(socket: &Target, kind: &str, agent: Option<&str>) -> anyhow::R
     if let Some(output) = stop_hook_block(kind, stop_hook_active, &nudge) {
         println!("{output}");
     }
-    if let Some(output) = prompt_hook_context(kind, &field(&["hook_event_name"]), &nudge) {
+    if let Some(output) =
+        prompt_hook_context(kind, &field(&["hook_event_name"]), &nudge).filter(|_| reads_context)
+    {
         println!("{output}");
     }
     Ok(())
+}
+
+/// Whether the agent passes a session-start or prompt hook's added context
+/// to its model. Antigravity strictly parses hook results as protojson and
+/// fails on unrecognized fields, and Grok Build reads neither event's
+/// added context.
+fn hook_output_reaches_model(agent: Option<&str>, json: &serde_json::Value) -> bool {
+    !is_antigravity_payload(json) && agent != Some(pm_adapters::GROK_HOOK_AGENT)
 }
 
 /// Hook events whose stdout `additionalContext` reaches the model with the
@@ -3818,6 +3828,41 @@ mod tests {
             ""
         );
         assert!(!is_antigravity_payload(&serde_json::json!({})));
+    }
+
+    /// Grok Build sends Claude's snake_case keys beside its own camelCase
+    /// ones, so its conversation id and transcript arrive through the
+    /// shared receiver, while its hooks print nothing for the model.
+    #[test]
+    fn grok_payloads_are_read_but_get_no_added_context() {
+        let grok = serde_json::json!({
+            "hookEventName": "session_start",
+            "sessionId": "1f27742b-dd9c",
+            "session_id": "1f27742b-dd9c",
+            "transcriptPath": "/fixture/grok.jsonl",
+            "transcript_path": "/fixture/grok.jsonl",
+        });
+        assert_eq!(payload_field(&grok, HOOK_SESSION_ID_KEYS), "1f27742b-dd9c");
+        assert_eq!(
+            payload_field(&grok, HOOK_TRANSCRIPT_PATH_KEYS),
+            "/fixture/grok.jsonl"
+        );
+        assert!(!hook_output_reaches_model(
+            Some(pm_adapters::GROK_HOOK_AGENT),
+            &grok
+        ));
+        assert!(hook_output_reaches_model(
+            Some(pm_adapters::CLAUDE_HOOK_AGENT),
+            &serde_json::json!({ "session_id": "s" })
+        ));
+        assert!(hook_output_reaches_model(
+            None,
+            &serde_json::json!({ "session_id": "s" })
+        ));
+        assert!(!hook_output_reaches_model(
+            None,
+            &serde_json::json!({ "conversationId": "c" })
+        ));
     }
 
     /// Antigravity fires PreInvocation before every model call, so only

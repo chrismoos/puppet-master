@@ -8,6 +8,8 @@
 
 - [Web] Active sessions preload recent terminal content in recently viewed order, with bounded memory and older scrollback fetched as you scroll.
 
+- [Daemon] Grok Build sessions can be spawned and resumed alongside the other agents, with dashboard reporting, needs-input detection and permission modes. They always use Grok's fullscreen interface, a resumed one keeps the instructions it started with, and a remote worker launches them once it runs this release.
+
 - [Web] Terminal text keeps consistent top padding when scrollback fills or pane height changes.
 
 - [Web] A shell opened from the pane menu receives keyboard focus when it is ready.

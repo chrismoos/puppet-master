@@ -2034,6 +2034,164 @@ impl AgentAdapter for AntigravityAdapter {
     }
 }
 
+pub struct GrokAdapter;
+
+/// The `--agent` value Grok Build's hooks carry so `pm _hook` prints
+/// nothing to an agent that passes no hook output to its model.
+pub const GROK_HOOK_AGENT: &str = "grok";
+
+/// Grok Build's `--permission-mode` values for our agent-agnostic modes.
+/// Default mode passes nothing, leaving the CLI on its configured policy.
+fn grok_permission_args(mode: PermissionMode) -> Vec<String> {
+    match mode {
+        PermissionMode::Auto => vec!["--permission-mode".into(), "acceptEdits".into()],
+        PermissionMode::Bypass => vec!["--permission-mode".into(), "bypassPermissions".into()],
+        PermissionMode::Default | PermissionMode::Inherit => vec![],
+    }
+}
+
+/// The agent definition a Grok Build session runs as. Its interactive CLI
+/// takes no per-session hook or MCP file, but `--agent` loads a definition
+/// whose frontmatter carries both, and JSON is valid YAML frontmatter. The
+/// body becomes part of the system prompt, which Grok fixes when the
+/// conversation is created, so a resumed session keeps its original body.
+fn grok_agent_definition(ctx: &SpawnCtx) -> String {
+    let pm_exe = &ctx.integration.pm_exe;
+    let hook = |kind: &str, matcher: Option<&str>| {
+        let mut group = serde_json::json!({
+            "hooks": [{
+                "type": "command",
+                "command": format!(
+                    "{} --agent {GROK_HOOK_AGENT}",
+                    hook_shell_command(pm_exe, kind)
+                ),
+            }]
+        });
+        if let Some(matcher) = matcher {
+            group["matcher"] = matcher.into();
+        }
+        serde_json::json!([group])
+    };
+    let mut frontmatter = serde_json::json!({
+        "name": MCP_SERVER_NAME,
+        "description": "A Puppet Master managed session.",
+        "hooks": {
+            "SessionStart": hook("session-start", None),
+            "UserPromptSubmit": hook("prompt-submitted", None),
+            "Notification": hook("needs-input", Some(GROK_PERMISSION_NOTIFICATION)),
+            "Stop": hook("turn-ended", None),
+            "StopCancelled": hook("turn-ended", None),
+            "StopFailure": hook("turn-failed", None),
+        },
+    });
+    if ctx.integration.mcp_url.is_some() {
+        frontmatter["mcpServers"] = serde_json::json!([{
+            MCP_SERVER_NAME: {
+                "command": pm_exe.display().to_string(),
+                "args": ["_mcp"],
+            }
+        }]);
+    }
+    format!("---\n{frontmatter}\n---\n{}", ctx.compiled_instructions)
+}
+
+/// The Notification type Grok raises only while an approval prompt waits.
+const GROK_PERMISSION_NOTIFICATION: &str = "permission_prompt";
+
+impl GrokAdapter {
+    fn agent_path(ctx: &SpawnCtx) -> PathBuf {
+        ctx.integration.files_dir.join(format!(
+            "session-{}-grok-agent.md",
+            ctx.integration.session_id
+        ))
+    }
+
+    /// Writes the agent definition and returns the flags shared by spawn
+    /// and resume. Grok reloads the definition's hooks and MCP servers from
+    /// its path on resume, so the file is rewritten at the same path. The
+    /// fullscreen setting is not read: Grok's inline renderer leaves stale
+    /// rows behind when the terminal resizes, so sessions keep its
+    /// alternate-screen TUI.
+    fn integration_args(&self, ctx: &SpawnCtx) -> Result<Vec<String>, AdapterError> {
+        let path = Self::agent_path(ctx);
+        write_session_file(&path, grok_agent_definition(ctx))?;
+        let mut args = vec!["--agent".into(), path.display().to_string()];
+        if ctx.integration.mcp_url.is_some() {
+            args.push("--allow".into());
+            args.push(format!("MCPTool({MCP_SERVER_NAME}__*)"));
+        }
+        args.extend(grok_permission_args(ctx.permission_mode));
+        Ok(args)
+    }
+
+    fn env(ctx: &SpawnCtx) -> Vec<(String, String)> {
+        ctx.integration
+            .mcp_url
+            .iter()
+            .map(|url| (ENV_MCP_URL.to_string(), url.clone()))
+            .collect()
+    }
+
+    fn plan(ctx: &SpawnCtx, args: Vec<String>, agent_session_id: String) -> SpawnPlan {
+        SpawnPlan {
+            spec: CommandSpec {
+                program: AgentKind::Grok.program().into(),
+                args,
+                env: Self::env(ctx),
+                cwd: ctx.cwd.clone(),
+            }
+            .with_integration_env(&ctx.integration),
+            agent_session_id: Some(agent_session_id),
+            // Grok reports an approval pause through OSC 7501 and its
+            // permission_prompt notification, not OSC 9.
+            detect_osc9_needs_input: false,
+        }
+    }
+}
+
+impl AgentAdapter for GrokAdapter {
+    fn kind(&self) -> AgentKind {
+        AgentKind::Grok
+    }
+
+    fn submits_after_bracketed_paste(&self) -> bool {
+        true
+    }
+
+    /// Grok reads a custom endpoint only from a model entry in the user's
+    /// own config.toml, which a session must not rewrite.
+    fn dialects(&self) -> &'static [ModelDialect] {
+        &[]
+    }
+
+    fn has_lifecycle_hooks(&self) -> bool {
+        true
+    }
+
+    fn spawn_command(&self, ctx: &SpawnCtx) -> Result<SpawnPlan, AdapterError> {
+        let agent_session_id = random_uuid_v4();
+        let mut args = self.integration_args(ctx)?;
+        args.push("--session-id".into());
+        args.push(agent_session_id.clone());
+        if let Some(prompt) = prompt_with_reporting(ctx) {
+            args.push("--".into());
+            args.push(prompt);
+        }
+        Ok(Self::plan(ctx, args, agent_session_id))
+    }
+
+    fn resume_command(
+        &self,
+        ctx: &SpawnCtx,
+        agent_session_id: &str,
+    ) -> Result<SpawnPlan, AdapterError> {
+        let mut args = self.integration_args(ctx)?;
+        args.push("--resume".into());
+        args.push(agent_session_id.to_string());
+        Ok(Self::plan(ctx, args, agent_session_id.to_string()))
+    }
+}
+
 /// Runs an explicit binary (the scripted test agent); registered only
 /// by the test suite.
 pub struct TestAgentAdapter {
@@ -2139,6 +2297,7 @@ impl AdapterRegistry {
         r.register(Box::new(GeminiAdapter));
         r.register(Box::new(OpenCodeAdapter));
         r.register(Box::new(AntigravityAdapter));
+        r.register(Box::new(GrokAdapter));
         r
     }
 
@@ -4436,5 +4595,185 @@ console.log(JSON.stringify(sent));
             .spec;
         assert_eq!(spec.cwd, PathBuf::from("/tmp/proj"));
         assert!(antigravity_dir_of(&spec).starts_with(tmp.path()));
+    }
+
+    /// The agent definition `--agent` names, split into its JSON
+    /// frontmatter and the Markdown body that joins the system prompt.
+    fn grok_definition_of(spec: &CommandSpec) -> (serde_json::Value, String) {
+        let path = flag_value(spec, "--agent");
+        let text = std::fs::read_to_string(path).unwrap();
+        let rest = text
+            .strip_prefix("---\n")
+            .expect("frontmatter opens the file");
+        let (frontmatter, body) = rest.split_once("\n---\n").expect("frontmatter closes");
+        (serde_json::from_str(frontmatter).unwrap(), body.to_string())
+    }
+
+    fn flag_value<'a>(spec: &'a CommandSpec, flag: &str) -> &'a str {
+        let i = spec.args.iter().position(|a| a == flag).unwrap();
+        &spec.args[i + 1]
+    }
+
+    #[test]
+    fn grok_chooses_its_session_id_and_sends_the_prompt_last() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plan = GrokAdapter
+            .spawn_command(&ctx(tmp.path().to_path_buf()))
+            .unwrap();
+        assert_eq!(plan.spec.program, "grok");
+        let id = plan
+            .agent_session_id
+            .clone()
+            .expect("known before the first hook");
+        assert_eq!(flag_value(&plan.spec, "--session-id"), id);
+        assert_eq!(
+            plan.spec.args[plan.spec.args.len() - 2..],
+            ["--".to_string(), "fix the tests".to_string()]
+        );
+        assert!(!plan.detect_osc9_needs_input);
+    }
+
+    #[test]
+    fn grok_starts_with_no_prompt_when_there_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ctx(tmp.path().to_path_buf());
+        c.task_prompt.clear();
+        let spec = GrokAdapter.spawn_command(&c).unwrap().spec;
+        assert!(!spec.args.iter().any(|a| a == "--"));
+    }
+
+    #[test]
+    fn grok_resumes_by_id_with_the_same_definition() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = ctx(tmp.path().to_path_buf());
+        let spawned = GrokAdapter.spawn_command(&c).unwrap();
+        let resumed = GrokAdapter.resume_command(&c, "conv-1").unwrap();
+        assert_eq!(flag_value(&resumed.spec, "--resume"), "conv-1");
+        assert_eq!(resumed.agent_session_id.as_deref(), Some("conv-1"));
+        assert!(!resumed.spec.args.iter().any(|a| a == "--session-id"));
+        assert_eq!(
+            flag_value(&resumed.spec, "--agent"),
+            flag_value(&spawned.spec, "--agent")
+        );
+    }
+
+    #[test]
+    fn grok_definition_installs_tagged_lifecycle_hooks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = GrokAdapter
+            .spawn_command(&ctx(tmp.path().to_path_buf()))
+            .unwrap()
+            .spec;
+        let (frontmatter, _) = grok_definition_of(&spec);
+        let hooks = &frontmatter["hooks"];
+        for (event, kind) in [
+            ("SessionStart", "session-start"),
+            ("UserPromptSubmit", "prompt-submitted"),
+            ("Notification", "needs-input"),
+            ("Stop", "turn-ended"),
+            ("StopCancelled", "turn-ended"),
+            ("StopFailure", "turn-failed"),
+        ] {
+            assert_eq!(
+                hooks[event][0]["hooks"][0]["command"],
+                serde_json::json!(format!("/usr/local/bin/pm _hook {kind} --agent grok")),
+                "{event}"
+            );
+        }
+        assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt");
+        assert!(hooks["Stop"][0]["matcher"].is_null());
+    }
+
+    #[test]
+    fn grok_reaches_the_reporting_server_through_the_stdio_bridge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = GrokAdapter
+            .spawn_command(&ctx_with_mcp(tmp.path().to_path_buf()))
+            .unwrap()
+            .spec;
+        let env = env_of(&spec);
+        assert_eq!(env.get(ENV_MCP_URL), Some(&"http://127.0.0.1:7676/mcp"));
+        assert_eq!(env.get(ENV_SESSION_TOKEN), Some(&"tok-abc"));
+        let (frontmatter, _) = grok_definition_of(&spec);
+        let server = &frontmatter["mcpServers"][0][MCP_SERVER_NAME];
+        assert_eq!(server["command"], "/usr/local/bin/pm");
+        assert_eq!(server["args"], serde_json::json!(["_mcp"]));
+        assert!(!frontmatter.to_string().contains("tok-abc"));
+        assert_eq!(flag_value(&spec, "--allow"), "MCPTool(puppet-master__*)");
+    }
+
+    #[test]
+    fn grok_without_mcp_declares_no_server_and_still_hooks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = GrokAdapter
+            .spawn_command(&ctx(tmp.path().to_path_buf()))
+            .unwrap()
+            .spec;
+        let (frontmatter, _) = grok_definition_of(&spec);
+        assert!(frontmatter["mcpServers"].is_null());
+        assert!(!frontmatter["hooks"]["Stop"].is_null());
+        assert!(!spec.args.iter().any(|a| a == "--allow"));
+    }
+
+    #[test]
+    fn grok_carries_the_compiled_instructions_as_the_definition_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = GrokAdapter
+            .spawn_command(&ctx(tmp.path().to_path_buf()))
+            .unwrap()
+            .spec;
+        let (_, body) = grok_definition_of(&spec);
+        assert_eq!(body, REPORTING_BRIEF);
+        assert!(!spec.args.iter().any(|a| a.contains(REPORTING_BRIEF)));
+    }
+
+    #[test]
+    fn grok_permission_flags_map_per_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (mode, expected) in [
+            (PermissionMode::Auto, Some("acceptEdits")),
+            (PermissionMode::Bypass, Some("bypassPermissions")),
+            (PermissionMode::Default, None),
+            (PermissionMode::Inherit, None),
+        ] {
+            let mut c = ctx(tmp.path().to_path_buf());
+            c.permission_mode = mode;
+            let spec = GrokAdapter.spawn_command(&c).unwrap().spec;
+            let given = spec
+                .args
+                .iter()
+                .position(|a| a == "--permission-mode")
+                .map(|i| spec.args[i + 1].as_str());
+            assert_eq!(given, expected, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn grok_keeps_its_fullscreen_tui_whatever_the_setting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ctx(tmp.path().to_path_buf());
+        for fullscreen in [false, true] {
+            c.fullscreen = fullscreen;
+            let spec = GrokAdapter.spawn_command(&c).unwrap().spec;
+            assert!(!spec.args.iter().any(|a| a == "--no-alt-screen"));
+        }
+    }
+
+    #[test]
+    fn grok_takes_no_model_profile_entry() {
+        assert!(GrokAdapter.dialects().is_empty());
+        assert!(GrokAdapter.submits_after_bracketed_paste());
+        assert!(GrokAdapter.has_lifecycle_hooks());
+    }
+
+    #[test]
+    fn grok_session_files_stay_out_of_the_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = GrokAdapter
+            .spawn_command(&ctx(tmp.path().to_path_buf()))
+            .unwrap()
+            .spec;
+        assert_eq!(spec.cwd, PathBuf::from("/tmp/proj"));
+        assert!(Path::new(flag_value(&spec, "--agent")).starts_with(tmp.path()));
     }
 }

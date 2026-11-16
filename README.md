@@ -6,7 +6,7 @@
 **All your agents in one place. At your desk and on your phone.**
 
 Puppet Master runs and supervises real **Claude Code, Codex, Gemini, OpenCode,
-and Antigravity** sessions across your projects. See what each agent is doing,
+Antigravity, and Grok Build** sessions across your projects. See what each agent is doing,
 know when it needs you, and manage your work from the web dashboard. Pick up
 the same sessions on your iPhone when you step away from your desk.
 

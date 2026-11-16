@@ -23,6 +23,7 @@ pub fn install_command(agent: AgentKind) -> Option<&'static str> {
         AgentKind::Antigravity => {
             Some("curl -fsSL https://antigravity.google/cli/install.sh | bash")
         }
+        AgentKind::Grok => Some("curl -fsSL https://x.ai/cli/install.sh | bash"),
         AgentKind::Test => None,
     }
 }
@@ -43,7 +44,11 @@ pub(crate) fn resolve_in(
         .filter(|p| p.is_absolute())
         .collect();
     if let Some(home) = home {
-        dirs.extend([home.join(".local/bin"), home.join(".opencode/bin")]);
+        dirs.extend([
+            home.join(".local/bin"),
+            home.join(".opencode/bin"),
+            home.join(".grok/bin"),
+        ]);
     }
     dirs.into_iter()
         .map(|dir| dir.join(program))
@@ -221,6 +226,25 @@ mod tests {
         assert_eq!(
             resolve_in("claude", path.as_os_str(), Some(dir.path())),
             None
+        );
+    }
+
+    #[test]
+    fn finds_grok_where_its_installer_puts_it() {
+        const EXECUTABLE_MODE: u32 = 0o755;
+        let dir = tempfile::tempdir().unwrap();
+        let installed = dir.path().join(".grok/bin");
+        std::fs::create_dir_all(&installed).unwrap();
+        let file = installed.join("grok");
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(EXECUTABLE_MODE)).unwrap();
+        assert_eq!(
+            resolve_in(
+                AgentKind::Grok.program(),
+                std::ffi::OsStr::new(""),
+                Some(dir.path())
+            ),
+            Some(file)
         );
     }
 

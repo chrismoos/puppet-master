@@ -11,6 +11,7 @@ pub enum AgentKind {
     Gemini,
     OpenCode,
     Antigravity,
+    Grok,
     /// Scripted agent used by the test suite.
     Test,
 }
@@ -174,6 +175,7 @@ impl AgentKind {
         Self::Gemini,
         Self::OpenCode,
         Self::Antigravity,
+        Self::Grok,
         Self::Test,
     ];
 
@@ -186,6 +188,7 @@ impl AgentKind {
         Self::ClaudeCode,
         Self::Codex,
         Self::Gemini,
+        Self::Grok,
         Self::OpenCode,
     ];
 
@@ -196,6 +199,7 @@ impl AgentKind {
             AgentKind::Gemini => "gemini",
             AgentKind::OpenCode => "opencode",
             AgentKind::Antigravity => "antigravity",
+            AgentKind::Grok => "grok",
             AgentKind::Test => "test",
         }
     }
@@ -216,6 +220,7 @@ impl AgentKind {
             "gemini" => Some(AgentKind::Gemini),
             "opencode" => Some(AgentKind::OpenCode),
             "antigravity" => Some(AgentKind::Antigravity),
+            "grok" => Some(AgentKind::Grok),
             "test" => Some(AgentKind::Test),
             _ => None,
         }

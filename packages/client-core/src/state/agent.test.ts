@@ -23,6 +23,7 @@ describe("the agent table", () => {
       "gemini",
       "opencode",
       "antigravity",
+      "grok",
     ]);
     for (const agent of AGENTS) {
       expect(agentValue(agent.kind)).toBe(agent.value);

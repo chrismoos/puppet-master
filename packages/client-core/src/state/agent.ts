@@ -26,6 +26,7 @@ export const AGENTS: readonly AgentOption[] = [
   { kind: AgentKind.GEMINI, value: "gemini", label: "Gemini" },
   { kind: AgentKind.OPENCODE, value: "opencode", label: "OpenCode" },
   { kind: AgentKind.ANTIGRAVITY, value: "antigravity", label: "Antigravity" },
+  { kind: AgentKind.GROK, value: "grok", label: "Grok Build" },
 ];
 
 const BY_KIND = new Map(AGENTS.map((agent) => [agent.kind, agent]));

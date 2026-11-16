@@ -64,6 +64,7 @@ body:
         - Gemini
         - OpenCode
         - Antigravity
+        - Grok Build
         - Not agent-specific
   - type: textarea
     id: logs

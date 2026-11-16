@@ -47,7 +47,7 @@ test("spawn popover shows project and bucket agent defaults plus explicit overri
     .toHaveAttribute("aria-checked", "true");
   // The rows come from the shared agent table, so every agent a spawn can
   // choose is offered here.
-  for (const label of ["Claude", "Codex", "Gemini", "OpenCode", "Antigravity"]) {
+  for (const label of ["Claude", "Codex", "Gemini", "OpenCode", "Antigravity", "Grok Build"]) {
     await expect(page.getByRole("menuitemradio", { name: label, exact: true }))
       .toBeVisible();
   }
