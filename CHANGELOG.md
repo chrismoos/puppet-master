@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Daemon] Video and audio in a published directory can be seeked: files are served in byte ranges when the browser asks for part of one.
+
 - [Web] Session switches hide the outgoing terminal before header and directory bars change its height, then reveal only the selected terminal at its final size.
 
 - [Web] Terminal glyphs keep their pixel size while a pane changes size and its replacement snapshot is pending.

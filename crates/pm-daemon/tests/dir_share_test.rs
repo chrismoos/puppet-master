@@ -216,6 +216,65 @@ async fn published_binary_preserves_its_content_type_and_bytes() {
     assert_eq!(received.as_ref(), data);
 }
 
+/// A browser seeks in audio and video by asking for byte ranges, and refuses
+/// to seek at all in a file served only whole.
+#[tokio::test]
+async fn a_published_file_answers_byte_ranges_so_media_can_seek() {
+    use axum::http::{header, Request, StatusCode};
+
+    let env = daemon_env_with_public_url(PUBLIC_URL);
+    let auth = setup_user(&env);
+    let dir = artifacts(&env, "media");
+    let data: Vec<u8> = (0..=255u8).cycle().take(10_000).collect();
+    std::fs::write(dir.join("clip.mp4"), &data).unwrap();
+    let (_session, _token, forward) = publish(&env, "media").await;
+    let fetch = |range: Option<&'static str>| {
+        let mut request = Request::builder()
+            .uri(format!("/forwards/{}/clip.mp4", forward.id))
+            .header(header::AUTHORIZATION, &auth);
+        if let Some(range) = range {
+            request = request.header(header::RANGE, range);
+        }
+        pm_daemon::http::router(env.daemon.clone())
+            .oneshot(request.body(axum::body::Body::empty()).unwrap())
+    };
+    let body = |response: axum::response::Response| async move {
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+    };
+
+    let whole = fetch(None).await.unwrap();
+    assert_eq!(whole.status(), StatusCode::OK);
+    assert_eq!(
+        whole.headers()[header::ACCEPT_RANGES],
+        "bytes",
+        "the file says it can be read in parts"
+    );
+    assert_eq!(body(whole).await.as_ref(), data.as_slice());
+
+    let middle = fetch(Some("bytes=1000-1999")).await.unwrap();
+    assert_eq!(middle.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        middle.headers()[header::CONTENT_RANGE],
+        "bytes 1000-1999/10000"
+    );
+    assert_eq!(middle.headers()[header::CONTENT_LENGTH], "1000");
+    assert_eq!(body(middle).await.as_ref(), &data[1000..2000]);
+
+    let tail = fetch(Some("bytes=-100")).await.unwrap();
+    assert_eq!(tail.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        tail.headers()[header::CONTENT_RANGE],
+        "bytes 9900-9999/10000"
+    );
+    assert_eq!(body(tail).await.as_ref(), &data[9900..]);
+
+    let past = fetch(Some("bytes=20000-")).await.unwrap();
+    assert_eq!(past.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(past.headers()[header::CONTENT_RANGE], "bytes */10000");
+}
+
 #[tokio::test]
 async fn a_directory_without_an_index_lists_its_files_with_relative_links() {
     let env = daemon_env_with_public_url(PUBLIC_URL);

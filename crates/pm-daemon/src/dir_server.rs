@@ -17,6 +17,7 @@ use axum::response::{IntoResponse, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use hyper_util::service::TowerToHyperService;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::TcpListener;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, info};
@@ -209,7 +210,7 @@ async fn handle(State(root): State<std::sync::Arc<PathBuf>>, request: Request) -
     if metadata.is_dir() {
         let index = target.join("index.html");
         if index.is_file() && !holds_key_material(&index) {
-            return file_response(&index, request.method() == Method::HEAD).await;
+            return file_response(&index, FileAsk::of(&request)).await;
         }
         // A trailing slash is what makes the listing's relative links
         // resolve inside the directory rather than beside it.
@@ -233,17 +234,101 @@ async fn handle(State(root): State<std::sync::Arc<PathBuf>>, request: Request) -
     if holds_key_material(&target) {
         return not_found();
     }
-    file_response(&target, request.method() == Method::HEAD).await
+    file_response(&target, FileAsk::of(&request)).await
 }
 
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "not found in this shared directory").into_response()
 }
 
-async fn file_response(path: &Path, head_only: bool) -> Response {
+/// What a request's `Range` header asks of a file `len` bytes long.
+#[derive(Debug, PartialEq, Eq)]
+enum ByteRange {
+    Whole,
+    /// First and last byte, both inclusive.
+    Part(u64, u64),
+    Unsatisfiable,
+}
+
+/// Reads a single `bytes=` range. Anything else, including several ranges at
+/// once, is answered with the whole file, which a client must accept.
+fn parse_range(value: &str, len: u64) -> ByteRange {
+    let Some(spec) = value.trim().strip_prefix("bytes=") else {
+        return ByteRange::Whole;
+    };
+    if spec.contains(',') {
+        return ByteRange::Whole;
+    }
+    let Some((first, last)) = spec.trim().split_once('-') else {
+        return ByteRange::Whole;
+    };
+    let (first, last) = (first.trim(), last.trim());
+    if first.is_empty() {
+        let Ok(suffix) = last.parse::<u64>() else {
+            return ByteRange::Whole;
+        };
+        if suffix == 0 || len == 0 {
+            return ByteRange::Unsatisfiable;
+        }
+        return ByteRange::Part(len.saturating_sub(suffix), len - 1);
+    }
+    let Ok(start) = first.parse::<u64>() else {
+        return ByteRange::Whole;
+    };
+    let end = if last.is_empty() {
+        len.saturating_sub(1)
+    } else {
+        match last.parse::<u64>() {
+            Ok(end) if end >= start => end.min(len.saturating_sub(1)),
+            _ => return ByteRange::Whole,
+        }
+    };
+    if start >= len {
+        return ByteRange::Unsatisfiable;
+    }
+    ByteRange::Part(start, end)
+}
+
+/// The parts of a request a file answer depends on, taken out of the request
+/// so the response future holds nothing borrowed from it.
+struct FileAsk {
+    head_only: bool,
+    range: Option<String>,
+}
+
+impl FileAsk {
+    fn of(request: &Request) -> Self {
+        let headers = request.headers();
+        // The share sends no validator, so an If-Range can never match and the
+        // whole file is the answer.
+        let range = (!headers.contains_key(header::IF_RANGE))
+            .then(|| {
+                headers
+                    .get(header::RANGE)?
+                    .to_str()
+                    .ok()
+                    .map(str::to_string)
+            })
+            .flatten();
+        Self {
+            head_only: request.method() == Method::HEAD,
+            range,
+        }
+    }
+}
+
+/// Answers a file request, honoring a single byte range so a browser can seek
+/// in audio and video.
+async fn file_response(path: &Path, ask: FileAsk) -> Response {
+    let head_only = ask.head_only;
     let Ok(metadata) = std::fs::metadata(path) else {
         return not_found();
     };
+    let len = metadata.len();
+    let range = ask
+        .range
+        .as_deref()
+        .map_or(ByteRange::Whole, |value| parse_range(value, len));
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     let content_type = if mime.type_() == "text" {
         format!("{mime}; charset=utf-8")
@@ -262,19 +347,47 @@ async fn file_response(path: &Path, head_only: bool) -> Response {
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
         ),
-        (header::CONTENT_LENGTH, HeaderValue::from(metadata.len())),
+        (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
     ];
+    let (status, first, count) = match range {
+        ByteRange::Whole => (StatusCode::OK, 0, len),
+        ByteRange::Part(first, last) => (StatusCode::PARTIAL_CONTENT, first, last - first + 1),
+        ByteRange::Unsatisfiable => {
+            return (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                headers,
+                [(
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes */{len}")).unwrap(),
+                )],
+            )
+                .into_response();
+        }
+    };
+    let mut response = (status, headers).into_response();
+    let response_headers = response.headers_mut();
+    response_headers.insert(header::CONTENT_LENGTH, HeaderValue::from(count));
+    if status == StatusCode::PARTIAL_CONTENT {
+        let last = first + count - 1;
+        response_headers.insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {first}-{last}/{len}")).unwrap(),
+        );
+    }
     if head_only {
-        return (headers, Body::empty()).into_response();
+        return response;
     }
-    match tokio::fs::File::open(path).await {
-        Ok(file) => (
-            headers,
-            Body::from_stream(ReaderStream::with_capacity(file, FILE_CHUNK_BYTES)),
-        )
-            .into_response(),
-        Err(_) => not_found(),
+    let Ok(mut file) = tokio::fs::File::open(path).await else {
+        return not_found();
+    };
+    if first > 0 && file.seek(std::io::SeekFrom::Start(first)).await.is_err() {
+        return not_found();
     }
+    *response.body_mut() = Body::from_stream(ReaderStream::with_capacity(
+        file.take(count),
+        FILE_CHUNK_BYTES,
+    ));
+    response
 }
 
 fn listing_response(root: &Path, dir: &Path) -> Response {
@@ -722,6 +835,44 @@ mod tests {
             .map(|i| (format!("f{i}"), false))
             .collect();
         assert!(listing_html("out", &rows[..LISTING_ENTRY_LIMIT], true).contains("Only the first"));
+    }
+
+    #[test]
+    fn a_single_byte_range_is_read_in_each_of_its_forms() {
+        assert_eq!(parse_range("bytes=0-99", 1000), ByteRange::Part(0, 99));
+        assert_eq!(parse_range("bytes=500-", 1000), ByteRange::Part(500, 999));
+        assert_eq!(parse_range("bytes=-200", 1000), ByteRange::Part(800, 999));
+        assert_eq!(
+            parse_range("bytes=900-5000", 1000),
+            ByteRange::Part(900, 999),
+            "an end past the file stops at its last byte"
+        );
+        assert_eq!(
+            parse_range("bytes=-5000", 1000),
+            ByteRange::Part(0, 999),
+            "a suffix longer than the file is the whole file"
+        );
+    }
+
+    #[test]
+    fn a_range_past_the_end_is_unsatisfiable() {
+        assert_eq!(parse_range("bytes=1000-", 1000), ByteRange::Unsatisfiable);
+        assert_eq!(parse_range("bytes=-0", 1000), ByteRange::Unsatisfiable);
+        assert_eq!(parse_range("bytes=0-", 0), ByteRange::Unsatisfiable);
+    }
+
+    #[test]
+    fn anything_but_one_well_formed_range_gets_the_whole_file() {
+        for value in [
+            "bytes=0-1,5-9",
+            "items=0-9",
+            "bytes=9-1",
+            "bytes=a-b",
+            "bytes=",
+            "0-9",
+        ] {
+            assert_eq!(parse_range(value, 1000), ByteRange::Whole, "{value}");
+        }
     }
 
     #[test]
