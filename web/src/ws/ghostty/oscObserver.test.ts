@@ -22,6 +22,20 @@ describe("OSC observer", () => {
     expect(seen).toEqual(["52;c;clip"]);
   });
 
+  it("preserves every byte of a multiline clipboard payload split across PTY writes", () => {
+    const text = Array.from({ length: 110 }, (_, index) =>
+      `ROW-${index}: ${"long line café 日本 ".repeat(8)}END-${index}`).join("\n");
+    const payload = `52;c;${Buffer.from(text, "utf8").toString("base64")}`;
+    const bytes = new TextEncoder().encode(`\u001b]${payload}\u001b\\`);
+    const seen: string[] = [];
+    const observer = new OscObserver((value) => seen.push(value));
+    const fragmentBytes = 4093;
+    for (let offset = 0; offset < bytes.length; offset += fragmentBytes) {
+      observer.write(bytes.subarray(offset, offset + fragmentBytes));
+    }
+    expect(seen).toEqual([payload]);
+  });
+
   it("bounds payload memory and ignores C1 bytes in UTF-8 text", () => {
     const seen: string[] = [];
     const observer = new OscObserver((payload) => seen.push(payload));

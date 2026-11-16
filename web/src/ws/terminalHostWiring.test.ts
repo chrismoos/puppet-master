@@ -127,6 +127,17 @@ describe("wireTerminalClipboard", () => {
     expect(clipboard.copySelection).not.toHaveBeenCalled();
   });
 
+  it("preserves long multiline application copies without clipping or normalizing rows", () => {
+    const term = new FakeTerminal();
+    const clipboard = fakeClipboard();
+    wireTerminalClipboard(term, clipboard as unknown as TerminalClipboard);
+    const text = Array.from({ length: 110 }, (_, index) =>
+      `ROW-${index}: ${"long line café 日本 ".repeat(8)}END-${index}  `).join("\n");
+    expect(term.osc(52, `c;${b64(text)}`)).toBe(true);
+    expect(clipboard.copyFromApplication).toHaveBeenCalledOnce();
+    expect(clipboard.copyFromApplication).toHaveBeenCalledWith(text);
+  });
+
   it("writes an OSC 52 copy exactly as the application named it", () => {
     const term = new FakeTerminal();
     const clipboard = fakeClipboard();

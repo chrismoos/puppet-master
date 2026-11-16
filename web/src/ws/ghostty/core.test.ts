@@ -160,6 +160,28 @@ describe("Ghostty terminal core", () => {
     expect(core.cursorPosition()).toEqual({ x: 0, y: 3 });
   });
 
+  it("copies every interior wrapped line between partial selection endpoints", async () => {
+    const core = await createCore();
+    core.resize(20, 20, 8, 16);
+    const lines = ["PREFIX first line", "long segment ".repeat(8) + "FIRST-END", "short", "second long segment ".repeat(4) + "SECOND-END", "last tail"];
+    core.write(lines.join("\r\n"));
+    const lastRow = lines.slice(0, -1).reduce((rows, line) => rows + Math.ceil(line.length / 20), 0);
+    core.setSelection({ x: 7, y: 0 }, { x: 3, y: lastRow });
+    expect(core.selectionText()).toBe([lines[0].slice(7), ...lines.slice(1, -1), lines.at(-1)!.slice(0, 4)].join("\n"));
+  });
+
+  it("copies complete wrapped logical lines across multiple pages of history and a resize", async () => {
+    const core = await createCore();
+    const lines = Array.from({ length: 60 }, (_, index) =>
+      `ROW-${index}: ${"long-line-segment ".repeat(1 + index % 4)}END-${index}`);
+    core.write(lines.join("\r\n"));
+    core.selectAll();
+    expect(core.selectionText().trimEnd()).toBe(lines.join("\n"));
+    core.resize(31, 6, 8, 16);
+    core.selectAll();
+    expect(core.selectionText().trimEnd()).toBe(lines.join("\n"));
+  });
+
   it("selects cells using viewport points at their row coordinates", async () => {
     const core = await createCore();
     core.write("ROW-0\r\nROW-1\r\nROW-2\r\nROW-3");
