@@ -1803,7 +1803,10 @@ async fn a_share_host_and_the_dashboard_are_served_on_one_listener() {
         },
     )
     .await;
-    let forward = publish_a_forward(&env).await;
+    let target = tokio::net::TcpSocket::new_v4().unwrap();
+    target.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let forward =
+        publish_a_forward_named(&env, "forwards", target.local_addr().unwrap().port()).await;
     assert_eq!(
         forward.url,
         format!("https://{}.pm-preview.example/", forward.slug)
