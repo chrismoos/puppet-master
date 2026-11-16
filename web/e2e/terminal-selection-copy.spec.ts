@@ -124,3 +124,51 @@ test("a selection of nothing but padding leaves the clipboard alone", async ({ p
   await expect(page.locator(".terminal-clipboard-status")).toBeHidden();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("KEPT");
 });
+
+
+test("fullscreen mouse selection reports the cell under a fractional-width glyph", async ({ page }) => {
+  await page.addInitScript(() => {
+    const measure = CanvasRenderingContext2D.prototype.measureText;
+    CanvasRenderingContext2D.prototype.measureText = function (text: string) {
+      const metrics = measure.call(this, text);
+      return text === "M" ? new Proxy(metrics, {
+        get(target, property) { return property === "width" ? 7.8 : Reflect.get(target, property, target); },
+      }) : metrics;
+    };
+  });
+  const input = await openTerminal(page);
+  await input.pressSequentially("mouseon");
+  await input.press("Enter");
+  type MouseWindow = Window & {
+    __mouseReports: string[];
+    __pmStage: {
+      visibleId: string;
+      layers: Map<string, { term: {
+        modes: { mouseTrackingMode: string };
+        onData(listener: (data: string | Uint8Array) => void): { dispose(): void };
+      } }>;
+    };
+  };
+  await expect.poll(() => page.evaluate(() => {
+    const stage = (window as MouseWindow).__pmStage;
+    return stage.layers.get(stage.visibleId)?.term.modes.mouseTrackingMode;
+  })).toBe("vt200");
+  await page.evaluate(() => {
+    const probe = window as MouseWindow;
+    probe.__mouseReports = [];
+    const stage = probe.__pmStage;
+    stage.layers.get(stage.visibleId)!.term.onData((data) => {
+      probe.__mouseReports.push(typeof data === "string" ? data : new TextDecoder().decode(data));
+    });
+  });
+  const terminal = page.locator(`${SESSION_HOST} .ghostty-terminal`);
+  const geometry = await terminalCanvasGeometry(terminal);
+  expect(geometry.cellWidth).toBeCloseTo(7.8);
+  const row = 3;
+  for (const column of [10, 80, 120]) {
+    await page.mouse.click(geometry.left + (column + 0.5) * geometry.cellWidth,
+      geometry.top + (row + 0.5) * geometry.cellHeight);
+    await expect.poll(() => page.evaluate(() => (window as MouseWindow).__mouseReports))
+      .toContain(`\u001b[<0;${column + 1};${row + 1}M`);
+  }
+});

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Fullscreen terminal applications select the text under the pointer when fonts have fractional character widths.
+
 - [Web] Returning to a scrolled session keeps the same text visible when output arrives during the switch.
 
 - [Daemon] Reading or waiting on a terminal pane keeps working when its program exits during the read.

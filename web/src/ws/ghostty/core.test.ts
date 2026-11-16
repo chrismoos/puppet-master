@@ -394,6 +394,41 @@ describe("Ghostty terminal core", () => {
     expect(core.encodePaste("draft")).toBe("\u001b[200~draft\u001b[201~");
   });
 
+  it.each([7.8, 8.2].flatMap((width) => [0, 80, 150, 199].map((column) => ({ width, column }))))("reports column $column at character width $width", async ({ width, column }) => {
+    const core = await createCore();
+    core.resize(200, 4, 8, 16);
+    core.write("\u001b[?1000h\u001b[?1006h");
+    const padding = 4;
+    const encoded = core.encodeMouse({
+      action: "press", button: 1, mods: 0,
+      x: padding + (column + 0.5) * width, y: padding + 1.5 * 16,
+      screenWidth: padding * 2 + 200 * width, screenHeight: padding * 2 + 4 * 16,
+      cellWidth: width, cellHeight: 16,
+      paddingTop: padding, paddingBottom: padding, paddingRight: padding, paddingLeft: padding,
+      anyButtonPressed: true,
+    });
+    expect(new TextDecoder().decode(encoded)).toBe(`\u001b[<0;${column + 1};2M`);
+  });
+
+  it("keeps pixel mouse coordinates independent of fractional cell widths", async () => {
+    const core = await createCore();
+    core.resize(200, 4, 8, 16);
+    core.write("\u001b[?1000h\u001b[?1016h");
+    const input = {
+      action: "press" as const, button: 1, mods: 0,
+      x: 1000, y: 24, screenWidth: 1600, screenHeight: 64,
+      cellWidth: 8, cellHeight: 16,
+      paddingTop: 4, paddingBottom: 4, paddingRight: 4, paddingLeft: 4,
+      anyButtonPressed: true,
+    };
+    const integer = core.encodeMouse(input);
+    const fractional = core.encodeMouse({ ...input, cellWidth: 7.8 });
+    expect(fractional).toEqual(integer);
+    expect(core.encodeMouse({ ...input, cellWidth: 7.8 })).toEqual(integer);
+    core.write("\u001b[?1006h");
+    expect(new TextDecoder().decode(core.encodeMouse({ ...input, cellWidth: 7.8 }))).toBe("\u001b[<0;128;2M");
+  });
+
   it("preserves raw legacy mouse bytes for X10 coordinates above 95", async () => {
     const core = await createCore();
     core.resize(200, 4, 8, 16);

@@ -35,6 +35,7 @@ export const GHOSTTY_DEC_MODE = {
   normalMouseTracking: 1000,
   buttonMouseTracking: 1002,
   anyMouseTracking: 1003,
+  sgrPixelMouse: 1016,
   bracketedPaste: 2004,
   synchronizedOutput: 2026,
 } as const;

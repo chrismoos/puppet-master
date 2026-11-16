@@ -16,6 +16,7 @@ import {
   GHOSTTY_KEY_EVENT_ACTION,
   GHOSTTY_MOUSE_ENCODER_OPTION,
   GHOSTTY_MOUSE_EVENT_ACTION,
+  GHOSTTY_MOUSE_EVENT_BUTTON,
   GHOSTTY_PALETTE_COLOR_BYTES,
   GHOSTTY_PALETTE_COLOR_COUNT,
   GHOSTTY_RENDER_STATE_DATA,
@@ -36,6 +37,7 @@ import {
 
 const GHOSTTY_SUCCESS = 0;
 const GHOSTTY_OUT_OF_SPACE = -3;
+const SGR_PIXEL_ORIGIN_PRESS = "\u001b[<0;0;0M";
 export const MAX_SCROLLBACK_BYTES = 32 * 1024 * 1024;
 /** No row costs less than a byte, so the byte limit always binds first. A
  * line limit of zero keeps about one page rather than disabling it. */
@@ -776,14 +778,26 @@ export class GhosttyTerminalCore {
       this.terminal,
     );
 
+    const pixelMouse = this.usesPixelMouseCoordinates();
+    const cellWidth = Math.max(1, Math.round(input.cellWidth));
+    const cellHeight = Math.max(1, Math.round(input.cellHeight));
+    const paddingLeft = Math.round(input.paddingLeft);
+    const paddingTop = Math.round(input.paddingTop);
+    const paddingRight = Math.round(input.paddingRight);
+    const paddingBottom = Math.round(input.paddingBottom);
+    const columns = Math.floor((input.screenWidth - input.paddingLeft - input.paddingRight) / input.cellWidth);
+    const rows = Math.floor((input.screenHeight - input.paddingTop - input.paddingBottom) / input.cellHeight);
+    // The encoder accepts integer cell sizes, while the canvas uses fractional CSS pixels.
+    const x = pixelMouse ? input.x : paddingLeft + (input.x - input.paddingLeft) * cellWidth / input.cellWidth;
+    const y = pixelMouse ? input.y : paddingTop + (input.y - input.paddingTop) * cellHeight / input.cellHeight;
     const sizeLayout = this.runtime.layout("GhosttyMouseEncoderSize");
     const size = this.runtime.alloc(sizeLayout.size);
     this.runtime.initStruct(size, "GhosttyMouseEncoderSize");
     for (const [field, value] of [
-      ["screen_width", input.screenWidth],
-      ["screen_height", input.screenHeight],
-      ["cell_width", input.cellWidth],
-      ["cell_height", input.cellHeight],
+      ["screen_width", pixelMouse ? input.screenWidth : paddingLeft + columns * cellWidth + paddingRight],
+      ["screen_height", pixelMouse ? input.screenHeight : paddingTop + rows * cellHeight + paddingBottom],
+      ["cell_width", cellWidth],
+      ["cell_height", cellHeight],
       ["padding_top", input.paddingTop],
       ["padding_bottom", input.paddingBottom],
       ["padding_right", input.paddingRight],
@@ -814,14 +828,41 @@ export class GhosttyTerminalCore {
       this.runtime.call("ghostty_mouse_event_set_button", this.mouseEvent, input.button);
     }
     this.runtime.call("ghostty_mouse_event_set_mods", this.mouseEvent, input.mods);
+    this.setMousePosition(x, y);
+    return this.encodeMouseEvent();
+  }
+
+  private usesPixelMouseCoordinates(): boolean {
+    if (!this.modeEnabled(GHOSTTY_DEC_MODE.sgrPixelMouse)) return false;
+    // DEC mode bits can stay enabled after another mouse format takes precedence.
+    const layout = this.runtime.layout("GhosttyMouseEncoderSize");
+    const size = this.runtime.alloc(layout.size);
+    this.runtime.initStruct(size, "GhosttyMouseEncoderSize");
+    for (const field of ["screen_width", "screen_height", "cell_width", "cell_height"]) {
+      this.runtime.setField(size, "GhosttyMouseEncoderSize", field, 1);
+    }
+    this.runtime.call("ghostty_mouse_encoder_set", this.mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPTION.size, size);
+    this.runtime.free(size, layout.size);
+    this.runtime.call("ghostty_mouse_event_set_action", this.mouseEvent, GHOSTTY_MOUSE_EVENT_ACTION.press);
+    this.runtime.call("ghostty_mouse_event_set_button", this.mouseEvent, GHOSTTY_MOUSE_EVENT_BUTTON.left);
+    this.runtime.call("ghostty_mouse_event_set_mods", this.mouseEvent, 0);
+    this.setMousePosition(0, 0);
+    const encoded = this.encodeMouseEvent();
+    this.runtime.call("ghostty_mouse_encoder_reset", this.mouseEncoder);
+    return new TextDecoder().decode(encoded) === SGR_PIXEL_ORIGIN_PRESS;
+  }
+
+  private setMousePosition(x: number, y: number): void {
     const positionLayout = this.runtime.layout("GhosttyMousePosition");
     const position = this.runtime.alloc(positionLayout.size);
     const positionView = this.runtime.view(position, positionLayout.size);
-    positionView.setFloat32(positionLayout.fields.x!.offset, input.x, true);
-    positionView.setFloat32(positionLayout.fields.y!.offset, input.y, true);
+    positionView.setFloat32(positionLayout.fields.x!.offset, x, true);
+    positionView.setFloat32(positionLayout.fields.y!.offset, y, true);
     this.runtime.call("ghostty_mouse_event_set_position", this.mouseEvent, position);
     this.runtime.free(position, positionLayout.size);
+  }
 
+  private encodeMouseEvent(): Uint8Array {
     const written = this.runtime.alloc(4);
     const encoded = this.encodeOutputBytes(written, (output, outputSize) =>
       this.runtime.call(
