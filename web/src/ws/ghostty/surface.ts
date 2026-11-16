@@ -133,30 +133,6 @@ function shouldBlinkTerminalCursor(state: {
   return state.focused && state.cursorBlinking && state.cursorVisible && !state.reducedMotion;
 }
 
-export function terminalContentOriginY(
-  mountHeight: number,
-  padding: number,
-  rows: number,
-  cellHeight: number,
-  anchorBottom: boolean,
-): number {
-  if (!anchorBottom) return padding;
-  const slack = mountHeight - padding * 2 - rows * cellHeight;
-  return padding + Math.max(0, slack);
-}
-
-/** Keeps content where it is while a pane is resized, moving it only as far as needed to stay inside. */
-export function heldContentOriginY(
-  originY: number,
-  mountHeight: number,
-  padding: number,
-  rows: number,
-  cellHeight: number,
-): number {
-  const lowest = Math.max(padding, mountHeight - padding - rows * cellHeight);
-  return Math.min(Math.max(originY, padding), lowest);
-}
-
 export interface TerminalScrollbarGeometry {
   readonly thumbHeight: number;
   readonly thumbTop: number;
@@ -662,9 +638,7 @@ export class GhosttyTerminalSurface {
   private scrollbarPointerOffset = 0;
   private disposed = false;
   private resizeNotifyTimer: number | null = null;
-  private originHoldTimer: number | null = null;
-  private originY = CONTENT_PADDING;
-  private mountHeight = 0;
+  private readonly originY = CONTENT_PADDING;
   private selectionEnd: { x: number; y: number } | null = null;
   private selectionAnchorScreen: { x: number; y: number } | null = null;
   private selectionEndScreen: { x: number; y: number } | null = null;
@@ -1179,8 +1153,6 @@ export class GhosttyTerminalSurface {
       this.pendingCanvasConfiguration = null;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
-    if (this.canvasConfigured && height !== this.mountHeight) this.holdOrigin();
-    this.mountHeight = height;
     // onResize is the only PTY resize channel, so the first successful fit must
     // notify even when the measured grid equals the 1x1 construction sentinel.
     if (
@@ -1195,25 +1167,6 @@ export class GhosttyTerminalSurface {
     // Repaint synchronously before paint so resize never stretches the old backing store.
     if (shouldRender || this.forceFullRender) this.renderFrame();
     return true;
-  }
-
-  /** Anchors the content now rather than after the hold, for a single change such as a pane collapsing. */
-  releaseHeldOrigin(): void {
-    if (this.originHoldTimer === null || this.disposed) return;
-    window.clearTimeout(this.originHoldTimer);
-    this.originHoldTimer = null;
-    this.forceFullRender = true;
-    if (this.hasSize) this.renderFrame();
-  }
-
-  /** Bottom-anchored content would otherwise move with every pixel of a height drag. */
-  private holdOrigin(): void {
-    if (this.originHoldTimer !== null) window.clearTimeout(this.originHoldTimer);
-    this.originHoldTimer = window.setTimeout(() => {
-      this.originHoldTimer = null;
-      this.forceFullRender = true;
-      this.requestRender();
-    }, RESIZE_SETTLE_MS);
   }
 
   /**
@@ -1360,10 +1313,6 @@ export class GhosttyTerminalSurface {
     if (this.resizeNotifyTimer !== null) {
       window.clearTimeout(this.resizeNotifyTimer);
       this.resizeNotifyTimer = null;
-    }
-    if (this.originHoldTimer !== null) {
-      window.clearTimeout(this.originHoldTimer);
-      this.originHoldTimer = null;
     }
     this.cancelRender();
     if (this.compositionSuppressionTimer !== null) {
@@ -2346,16 +2295,6 @@ export class GhosttyTerminalSurface {
     this.scrollbarState = scrollState;
     this.syncGridFromSnapshot(this.snapshot);
     if (!this.blinkEnabled()) this.cursorOn = true;
-    // Move the origin only on full repaint; dirty-row updates cannot mix origins.
-    const anchorBottom = scrollState !== null && scrollState.total > scrollState.len;
-    const nextOriginY = this.originHoldTimer !== null
-      ? heldContentOriginY(this.originY, this.mountHeight, CONTENT_PADDING, this.rows, this.metrics.height)
-      : terminalContentOriginY(this.mountHeight, CONTENT_PADDING, this.rows, this.metrics.height, anchorBottom);
-    if (nextOriginY !== this.originY) {
-      this.originY = nextOriginY;
-      this.terminal.style.setProperty("--ghostty-content-origin-y", `${this.originY}px`);
-      this.forceFullRender = true;
-    }
     this.refreshHoveredLink();
     renderGhosttySnapshot({
       context: this.context,

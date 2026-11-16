@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Terminal text keeps consistent top padding when scrollback fills or pane height changes.
+
 - [Web] A shell opened from the pane menu receives keyboard focus when it is ready.
 
 - [Web] Opening a shell pane no longer triggers continuous canvas growth and resize work that can freeze the page.

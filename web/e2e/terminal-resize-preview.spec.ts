@@ -117,7 +117,7 @@ function samplesNow(page: Page): Promise<{ borderRows: number }> {
   });
 }
 
-test("content with scrollback holds still while the window height is dragged", async ({ page }) => {
+test("terminal top padding stays fixed as history fills the screen and height changes", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   await logIn(page);
   await page.locator(".sb-session-row", { hasText: "browser-e2e" }).first().click();
@@ -126,11 +126,17 @@ test("content with scrollback holds still while the window height is dragged", a
   await expectTerminalRevealed(page, "t:");
   await expect.poll(() => settled(page)).toBe(true);
   await page.locator('.term-layer[style*="visibility: visible"] .ghostty-input').focus();
+  const terminal = page.locator('.term-layer[style*="visibility: visible"] .ghostty-terminal');
+  const initialInset = await terminal.evaluate((element) =>
+    parseFloat(getComputedStyle(element).getPropertyValue("--ghostty-content-origin-y")));
   await page.keyboard.type("seq 1 300\n");
   await expect.poll(() => page.evaluate(() => {
     const stage = (window as unknown as { __pmStage?: Stage }).__pmStage;
     return stage?.layers.get(stage.visibleId ?? "")?.term.renderSnapshot()?.rowData.some((row) => row.text === "300");
   })).toBe(true);
+  const filledInset = await terminal.evaluate((element) =>
+    parseFloat(getComputedStyle(element).getPropertyValue("--ghostty-content-origin-y")));
+  expect(filledInset, "filling the history does not move the first row down").toBe(initialInset);
   await page.evaluate(() => {
     const target = window as unknown as { __origins: string[] };
     target.__origins = [];
@@ -147,8 +153,5 @@ test("content with scrollback holds still while the window height is dragged", a
   for (let height = 650; height <= 900; height += 7) await page.setViewportSize({ width: 1200, height });
   const origins = await page.evaluate(() => (window as unknown as { __origins: string[] }).__origins.map(parseFloat));
   expect(origins.length).toBeGreaterThan(0);
-  // Bottom-anchored content would step down a pixel at a time and jump back
-  // up a row as rows come and go. Held content only ever moves up, to stay inside.
-  const downward = origins.filter((origin, index) => index > 0 && origin > origins[index - 1]!);
-  expect(downward, JSON.stringify(origins)).toEqual([]);
+  expect(origins.filter((origin) => origin !== initialInset), "spare pixels stay below the grid, including during a resize").toEqual([]);
 });

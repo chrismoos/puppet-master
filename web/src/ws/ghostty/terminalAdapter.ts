@@ -251,9 +251,6 @@ export class GhosttyTerminalAdapter {
     this.surface?.setVisible(visible);
   }
 
-  releaseHeldOrigin(): void {
-    this.surface?.releaseHeldOrigin();
-  }
 
   paintNow(): void {
     this.surface?.paintNow();
