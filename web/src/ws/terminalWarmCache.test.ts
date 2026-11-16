@@ -96,6 +96,24 @@ describe("terminal background warming", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("does not poll while a retried preload request is still in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolve!: (value: WarmSnapshot) => void;
+      const fetch = vi.fn().mockRejectedValueOnce(new Error("worker offline")).mockImplementationOnce(() => new Promise<WarmSnapshot>((done) => { resolve = done; }));
+      const cache = new TerminalWarmCache(fetch);
+      cache.update([terminal("1")]);
+      await flush();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+      resolve(snapshot("1"));
+      await flush();
+      expect(cache.stats().warmed).toBe(1);
+      cache.reset();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("refreshes an expired preview instead of retrying its obsolete history cursor", async () => {
     vi.useFakeTimers();
     try {

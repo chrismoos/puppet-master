@@ -135,6 +135,7 @@ export class TerminalWarmCache {
       }
       const existing = this.entries.get(terminal.id);
       this.running.add(terminal.id);
+      this.failed.delete(`${terminal.id}:${terminal.generation}`);
       void this.fetchSnapshot(terminal, existing?.history, existing ? RECENT_HISTORY_ROWS : undefined).then((snapshot) => {
         if (this.terminals.get(terminal.id)?.generation !== terminal.generation || this.entries.get(terminal.id) !== existing) return;
         const data = existing ? new Uint8Array(existing.data.length + snapshot.data.length) : snapshot.data;
@@ -150,7 +151,6 @@ export class TerminalWarmCache {
         const history = { ...snapshot.history, steps: (existing?.history.steps ?? 0) + snapshot.history.steps };
         this.entries.set(terminal.id, { ...snapshot, data, history, terminal, used: ++this.revision, enriched: Boolean(existing) || !snapshot.history.hasMore || data.byteLength >= RECENT_PREVIEW_BYTES });
         this.bytes += data.byteLength;
-        this.failed.delete(`${terminal.id}:${terminal.generation}`);
       }).catch((error: unknown) => {
         if (this.terminals.get(terminal.id)?.generation !== terminal.generation || this.entries.get(terminal.id) !== existing) return;
         if (error instanceof TerminalHistoryError && error.status === HTTP_GONE) this.remove(terminal.id);
