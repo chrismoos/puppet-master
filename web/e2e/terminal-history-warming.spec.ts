@@ -17,6 +17,7 @@ interface Stage {
     term: {
       buffer: { active: { baseY: number; viewportY: number } };
       scrollToLine(line: number): void;
+      onRender(listener: () => void): { dispose(): void };
       renderSnapshot(): { rowData: Array<{ text: string }> } | null;
     };
   }>;
@@ -32,10 +33,12 @@ async function viewport(page: Page) {
 }
 
 async function scroll(page: Page, line: number) {
-  await page.evaluate((target) => {
+  await page.evaluate((target) => new Promise<void>((resolve) => {
     const stage = (window as unknown as { __pmStage: Stage }).__pmStage;
-    stage.layers.get(stage.visibleId)!.term.scrollToLine(target);
-  }, line);
+    const term = stage.layers.get(stage.visibleId)!.term;
+    const rendered = term.onRender(() => { rendered.dispose(); resolve(); });
+    term.scrollToLine(target);
+  }), line);
 }
 
 test("all active sessions preload without opening terminal sockets or renderers", async ({ page }) => {
