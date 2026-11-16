@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Terminal glyphs keep their pixel size while a pane changes size and its replacement snapshot is pending.
+
 - [Web] Session switches keep the previous terminal screen visible until the selected terminal has painted at the pane's size, and reloads keep stale-size snapshots covered.
 
 - [Web] Resizing inline agent terminals keeps the screen visible while the program clears and redraws it.

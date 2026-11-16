@@ -2334,6 +2334,8 @@ export class GhosttyTerminalSurface {
       this.pendingCanvasConfiguration = null;
       this.canvas.width = canvasConfiguration.width;
       this.canvas.height = canvasConfiguration.height;
+      this.canvas.style.width = `${canvasConfiguration.width / canvasConfiguration.ratio}px`;
+      this.canvas.style.height = `${canvasConfiguration.height / canvasConfiguration.ratio}px`;
       this.context.setTransform(canvasConfiguration.ratio, 0, 0, canvasConfiguration.ratio, 0, 0);
       this.canvasConfigured = true;
       this.canvasDevicePixelRatio = canvasConfiguration.ratio;

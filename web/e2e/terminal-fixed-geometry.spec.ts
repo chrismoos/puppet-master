@@ -230,3 +230,36 @@ test("a fixed viewport keeps one grid through warm, cold, and refreshed views", 
   }
   await testInfo.attach("fixed-geometry-frames", { body: JSON.stringify({ expected, switched, refreshed }), contentType: "application/json" });
 });
+
+
+test("a held replay never stretches the painted font when its container changes size", async ({ page, isolatedDaemon }) => {
+  await installProbe(page);
+  await logIn(page);
+  const id = isolatedDaemon.session("browser-e2e")!.id;
+  await page.locator(".sb-session").filter({ has: page.locator(".sb-session-title", { hasText: /^browser-e2e$/ }) }).click();
+  await expectTerminalRevealed(page, `s:${id}`);
+  const fixture = [...await readFile(new URL("../../crates/pm-ghostty/testdata/native-state.snapshot", import.meta.url))];
+  await page.evaluate(({ sessionId, bytes }) => {
+    const target = window as ProbeWindow;
+    const key = `s:${sessionId}`;
+    target.__holdTerminal = key;
+    target.__deliverFrame(key, { data: new Uint8Array(bytes), replay: true, snapshot: true, ghosttySnapshot: true });
+  }, { sessionId: id, bytes: fixture });
+  const canvas = page.locator('.term-layer[style*="visibility: visible"] .ghostty-canvas');
+  for (const width of ["70%", "100%"]) {
+    await page.evaluate((width) => {
+      const stage = (window as ProbeWindow).__pmStage!;
+      stage.layers.get(stage.visibleId!)!.el.style.width = width;
+    }, width);
+    await twoPaints(page);
+    const scale = await canvas.evaluate((node) => {
+      const bounds = node.getBoundingClientRect();
+      const canvas = node as HTMLCanvasElement;
+      return { x: bounds.width * devicePixelRatio / canvas.width, y: bounds.height * devicePixelRatio / canvas.height };
+    });
+    expect(scale.x, "a held image preserves horizontal glyph size").toBeCloseTo(1);
+    expect(scale.y, "a held image preserves vertical glyph size").toBeCloseTo(1);
+  }
+  await page.evaluate(() => (window as ProbeWindow).__releaseFrames());
+  await twoPaints(page);
+});
