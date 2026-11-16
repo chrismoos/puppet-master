@@ -12,6 +12,7 @@ interface StageWindow {
   __pmStage?: {
     debugSnapshot(): Array<{ key: string; visible: boolean; baseY: number; viewportY: number; backgroundBytes: number }>;
     layers: Map<string, {
+      history?: { hasMore: boolean } | null;
       term: {
         renderSnapshot(): { rowData: Array<{ text: string }> } | null;
         scrollToLine(line: number): void;
@@ -183,7 +184,31 @@ test("codex-style output preserves bottom following and scrolled markers across 
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${sessionId}$`));
   await readyState(page);
-  await expect.poll(() => state(page).then((viewport) => viewport?.baseY)).toBeGreaterThanOrEqual(RELOADED_HISTORY_FLOOR);
+  const initial = await readyState(page);
+  expect(initial.baseY).toBeLessThan(RELOADED_HISTORY_FLOOR);
+  await expectAtBottom(page);
+  const MAX_HISTORY_BATCHES = 30;
+  for (let batch = 0; batch < MAX_HISTORY_BATCHES; batch += 1) {
+    const more = await page.evaluate(() => {
+      const stage = (window as unknown as StageWindow).__pmStage;
+      const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
+      return debug ? stage?.layers.get(debug.key)?.history?.hasMore ?? false : false;
+    });
+    if (!more) break;
+    const before = await readyState(page);
+    await page.evaluate(() => {
+      const stage = (window as unknown as StageWindow).__pmStage;
+      const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
+      if (debug) stage?.layers.get(debug.key)?.term.scrollToLine(0);
+    });
+    await expect.poll(() => state(page).then((viewport) => viewport?.baseY)).toBeGreaterThan(before.baseY);
+  }
+  expect((await readyState(page)).baseY).toBeGreaterThanOrEqual(RELOADED_HISTORY_FLOOR);
+  await page.evaluate(() => {
+    const stage = (window as unknown as StageWindow).__pmStage;
+    const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
+    if (debug) stage?.layers.get(debug.key)?.term.scrollToLine(debug.baseY);
+  });
   await expectAtBottom(page);
 
   // Distance-from-bottom is shared by warm shows and reload replay. Verify the
