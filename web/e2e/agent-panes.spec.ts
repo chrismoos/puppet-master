@@ -161,3 +161,38 @@ test.describe("page panes without an emulated color scheme", () => {
     await expect(reported).toHaveText("dark");
   });
 });
+
+
+const SHELL_GEOMETRY_FRAMES = 12;
+
+for (const direction of ["right", "below"] as const) {
+  test(`a shell opened ${direction} stays within its pane and accepts input`, async ({ page, isolatedDaemon }) => {
+    await logIn(page);
+    await openSession(page);
+    await page.locator(".term-host").click({ button: "right" });
+    await page.getByRole("menuitem", { name: `New shell ${direction}` }).click();
+    const shell = page.locator(".ap-root:not(.is-warm) .ap-pane.ap-shell");
+    await expect(shell).toHaveCount(1);
+    await expect(shell.locator(".ap-body")).not.toHaveClass(/is-curtained/);
+    const host = shell.locator(".workspace-terminal-host");
+    const samples = await host.evaluate(async (host, count) => {
+      const samples: Array<{ host: number; pane: number; canvas: number }> = [];
+      for (let frame = 0; frame < count; frame += 1) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const canvas = host.querySelector("canvas")!;
+        samples.push({ host: host.clientWidth, pane: host.closest(".ap-pane")!.getBoundingClientRect().width,
+          canvas: canvas.getBoundingClientRect().width });
+      }
+      return samples;
+    }, SHELL_GEOMETRY_FRAMES);
+    expect(samples.filter((sample) => sample.host > sample.pane + 1), "a canvas cannot grow its flex host beyond the pane").toEqual([]);
+    expect(new Set(samples.map((sample) => sample.host)).size, "shell host width settles instead of growing every frame").toBe(1);
+    expect(samples.filter((sample) => sample.canvas > sample.host + 1), "the painted canvas fits its shell host").toEqual([]);
+    await shell.locator(".ghostty-input").focus();
+    await page.keyboard.type("echo shell-geometry-ready\n");
+    await expect.poll(async () => JSON.parse(await isolatedDaemon.callAgentTool(SESSION, "read_pane", { id: "shell-1" })).text)
+      .toContain("shell-geometry-ready");
+    await page.locator(".sb-session").filter({ has: page.locator(".sb-session-title").getByText("browser-e2e-two", { exact: true }) }).click();
+    await expect(page).toHaveURL(new RegExp(`#/session/${isolatedDaemon.session("browser-e2e-two")!.id}$`));
+  });
+}

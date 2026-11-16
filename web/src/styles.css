@@ -4730,6 +4730,7 @@ svg.sb-rail-glyph {
 
 .workspace-terminal-host {
   position: relative;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   height: 100%;

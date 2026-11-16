@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Opening a shell pane no longer triggers continuous canvas growth and resize work that can freeze the page.
+
 - [Daemon] Video and audio in a published directory can be seeked: files are served in byte ranges when the browser asks for part of one.
 
 - [Web] Session switches hide the outgoing terminal before header and directory bars change its height, then reveal only the selected terminal at its final size.
