@@ -184,6 +184,7 @@ test("codex-style output preserves bottom following and scrolled markers across 
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${sessionId}$`));
   await readyState(page);
+  await expectTerminalRevealed(page, "s:");
   const initial = await readyState(page);
   expect(initial.baseY).toBeLessThan(RELOADED_HISTORY_FLOOR);
   await expectAtBottom(page);
