@@ -299,12 +299,11 @@ export class TerminalStage {
     this.nativeTerminals = native;
   }
 
-  /** Starts attaching a session's terminal off screen, so the press that
-   * comes before a click to open it hides the attach rather than adding to it. */
+  /** Only the selected host can supply the terminal's authoritative geometry. */
   prepare(sessionId: bigint): void {
     const key = `s:${sessionId}`;
     if (!this.root.isConnected || this.layers.has(key) || this.nativeTerminals) return;
-    this.tryBindLayerSocket(this.createLayer(sessionId, false));
+    this.createLayer(sessionId, false);
   }
 
   disposeTerminal(terminalId: bigint): void {
@@ -973,7 +972,7 @@ export class TerminalStage {
 
   private tryBindLayerSocket(layer: Layer): boolean {
     if (layer.handle) return true;
-    if (this.nativeTerminals) return false;
+    if (this.nativeTerminals || this.visibleId !== layer.key) return false;
     const measured = measureFit(layer.term);
     if (!measured || !isRealPaneFit(layer.el.clientWidth, measured.cols)) return false;
     applyMeasuredFit(layer.term, measured, false);

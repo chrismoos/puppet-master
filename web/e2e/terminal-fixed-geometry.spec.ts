@@ -15,6 +15,7 @@ interface Layer {
   };
 }
 interface Stage {
+  debugSnapshot(): Array<{ key: string; socket: { replayCount: number } | null }>;
   visibleId: string | null;
   layers: Map<string, Layer>;
   receiveFrame(key: string, frame: Frame): void;
@@ -320,4 +321,66 @@ test("directory-bar height changes cannot expose or resize the outgoing session"
     expectStable(observed);
     expectStable(observed.filter((sample) => sample.selected === `s:${id}`), grid);
   }
+});
+
+
+test("a preloaded session keeps its previous geometry after reload across different directory bars", async ({ page, isolatedDaemon }, testInfo) => {
+  isolatedDaemon.seedSessionForward("browser-e2e-two", "preview");
+  await isolatedDaemon.restart();
+  await installProbe(page);
+  await logIn(page);
+  const first = isolatedDaemon.session("browser-e2e")!.id;
+  const second = isolatedDaemon.session("browser-e2e-two")!.id;
+  const row = (title: string) => page.locator(".sb-session").filter({
+    has: page.locator(".sb-session-title", { hasText: new RegExp(`^${title}$`) }),
+  });
+  await row("browser-e2e-two").click();
+  await expectTerminalRevealed(page, `s:${second}`);
+  const historyLines = 1000;
+  const input = page.locator('.term-layer[style*="visibility: visible"] .ghostty-input');
+  await input.focus();
+  await input.pressSequentially(`lineout ${historyLines}`);
+  await input.press("Enter");
+  await expect.poll(async () => (await samples(page)).at(-1)?.shown[0]?.text ?? "").toContain("HISTORY-0999");
+  await twoPaints(page);
+  const targetFrame = (await samples(page)).at(-1)!.shown[0];
+  const targetGrid = targetFrame.painted;
+  await page.screenshot({ path: testInfo.outputPath("reload-before.png") });
+  await row("browser-e2e").click();
+  await expectTerminalRevealed(page, `s:${first}`);
+  await page.reload();
+  await expectTerminalRevealed(page, `s:${first}`);
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __pmStage: { warmStats(): { warmed: number } } }).__pmStage.warmStats().warmed,
+  )).toBe(2);
+  const attachments: Grid[] = [];
+  page.on("websocket", (socket) => {
+    const url = new URL(socket.url());
+    if (!url.pathname.startsWith("/ws/terminal/")) return;
+    attachments.push({ cols: Number(url.searchParams.get("cols")), rows: Number(url.searchParams.get("rows")) });
+  });
+  await clearSamples(page);
+  const target = (await row("browser-e2e-two").boundingBox())!;
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2);
+  await page.mouse.down();
+  await expect.poll(() => page.evaluate((id) =>
+    (window as ProbeWindow).__pmStage!.layers.get(`s:${id}`)?.term.cellSize ?? null,
+  second)).not.toBeNull();
+  await twoPaints(page);
+  await page.mouse.up();
+  await expectTerminalRevealed(page, `s:${second}`);
+  await expect.poll(() => page.evaluate((id) =>
+    (window as ProbeWindow).__pmStage!.debugSnapshot().find((entry) => entry.key === `s:${id}`)?.socket?.replayCount ?? 0,
+  second)).toBeGreaterThan(0);
+  await twoPaints(page);
+  expect(attachments).toEqual([targetGrid]);
+  const observed = (await samples(page)).filter((sample) => sample.selected === `s:${second}`);
+  expectStable(observed, targetGrid);
+  expect(observed.flatMap((sample) => sample.shown).filter((entry) => entry.text !== targetFrame.text),
+    "cached and live frames keep the same visible content in place").toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("reload-after.png") });
+  await testInfo.attach("reload-geometry", {
+    body: JSON.stringify({ previous: targetGrid, attachments, shown: observed.flatMap((sample) => sample.shown.map((entry) => entry.painted)) }),
+    contentType: "application/json",
+  });
 });

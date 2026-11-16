@@ -549,10 +549,7 @@ function Shell({
     navigate(sessionRoutePath(id, lastTabBySession.current[id]));
   }, [stage]);
 
-  // Warming a terminal claims the size its host has now. When either session
-  // shows panes the agent's slot differs between them, so the warm claim would
-  // be wrong and the terminal would draw twice; opening it binds at the right
-  // size instead.
+  // Pane layouts use their own terminal hosts after selection.
   const shownSessionId = route.name === "session" ? route.id : null;
   const prepareSession = useCallback((id: string) => {
     const tab = lastTabBySession.current[id];

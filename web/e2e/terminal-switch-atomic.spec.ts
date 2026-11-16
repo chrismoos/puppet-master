@@ -240,11 +240,13 @@ test("a session that never stops printing finishes switching at a new size", asy
   expectAtomicSwap(settled);
 });
 
-test("pressing a session row starts attaching its terminal before the click opens it", async ({ page }) => {
+test("pressing a session row prepares its renderer without opening a terminal stream", async ({ page }) => {
   await logIn(page);
   await openSession(page, 0);
   const shownBefore = await visibleKey(page);
   const tickets: string[] = [];
+  let streams = 0;
+  page.on("websocket", (socket) => { if (socket.url().includes("/ws/terminal/")) streams += 1; });
   page.on("request", (request) => {
     if (request.url().includes("/attach-ticket")) tickets.push(request.url());
   });
@@ -254,7 +256,9 @@ test("pressing a session row starts attaching its terminal before the click open
   const box = (await row.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await expect.poll(() => tickets.length).toBe(1);
+  await expect(page.locator(".ghostty-canvas")).toHaveCount(2);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  expect(streams).toBe(0);
   const pressed = await page.evaluate(() => {
     const stage = (window as unknown as StageWindow).__pmStage;
     return [...stage.layers.entries()].map(([key, layer]) => ({ key, shown: layer.el.style.visibility === "visible" }));
@@ -274,6 +278,7 @@ test("pressing a session row starts attaching its terminal before the click open
   })).toBe(true);
   expect(await visibleKey(page)).not.toBe(shownBefore);
   expect(tickets).toHaveLength(1);
+  await expect.poll(() => streams).toBe(1);
 });
 
 test("a session still reaching for its terminal stays hidden with a curtain in the terminal's colors", async ({ page }) => {
