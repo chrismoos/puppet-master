@@ -480,6 +480,7 @@ fn dashboard_router(daemon: Arc<Daemon>) -> Router {
         .route("/forwards/{id}/{*path}", any(crate::forward_route::proxy))
         .route("/ws", any(ws_upgrade))
         .route("/ws/terminal/{id}", any(terminal_ws_upgrade))
+        .route("/api/terminals/{id}/history", get(terminal_history))
         .route(
             "/api/terminals/{id}/snapshot-compatibility",
             get(terminal_snapshot_compatibility),
@@ -3424,6 +3425,7 @@ struct TerminalStreamQuery {
     /// screen paints before the whole scrollback is parsed. Absent or zero
     /// carries all of it, and every later snapshot carries all of it.
     history: Option<u16>,
+    paged: Option<bool>,
 }
 
 /// Tells the browser which side of a refused terminal is out of date, so it can
@@ -3496,6 +3498,130 @@ fn terminal_snapshot_frames(generation: u64, bytes: &[u8], binary: bool) -> Opti
     Some(pm_protocol::terminal_frame::replay_frames_with_flags(
         generation, &bytes, flags,
     ))
+}
+
+#[derive(serde::Deserialize)]
+struct TerminalHistoryQuery {
+    generation: u64,
+    ghostty: String,
+    snapshot: Option<String>,
+    rows: Option<usize>,
+    cursor: Option<usize>,
+}
+
+async fn terminal_history(
+    State(daemon): State<Arc<Daemon>>,
+    Path(terminal_id): Path<u64>,
+    Query(query): Query<TerminalHistoryQuery>,
+    headers: HeaderMap,
+) -> Response {
+    use base64::Engine;
+    if authed_identity(&daemon, &headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if require_snapshot_identity(Some(&query.ghostty)).is_err()
+        || daemon
+            .require_terminal_snapshot_compatibility(terminal_id)
+            .is_err()
+    {
+        return StatusCode::CONFLICT.into_response();
+    }
+    if !daemon
+        .terminal(terminal_id)
+        .is_ok_and(|terminal| terminal.generation == query.generation)
+    {
+        return StatusCode::CONFLICT.into_response();
+    }
+    let result = if let Some(id) = query.snapshot {
+        daemon.terminal_history.lock().unwrap().page(
+            terminal_id,
+            query.generation,
+            &id,
+            query.cursor.unwrap_or_default(),
+            query.rows,
+        )
+    } else {
+        let Ok(attach) = daemon.attach_web_terminal_for_viewer(
+            terminal_id,
+            WEB_TERMINAL_REPLAY_CAP_BYTES,
+            None,
+            0,
+            0,
+            Some(1),
+        ) else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
+        let _guard = attach.guard;
+        let snapshot = match attach.replay {
+            crate::daemon::WebTerminalReplay::Complete { bytes } => bytes,
+            crate::daemon::WebTerminalReplay::Parsed(parsed) => {
+                if !matches!(
+                    tokio::time::timeout(WEB_TERMINAL_REPLAY_TIMEOUT, parsed).await,
+                    Ok(Ok(_))
+                ) {
+                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                }
+                let Some((bytes, _, _)) =
+                    daemon.web_terminal_resnapshot(terminal_id, &attach.progress, None)
+                else {
+                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                };
+                bytes
+            }
+            crate::daemon::WebTerminalReplay::Streaming(_) => {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response()
+            }
+        };
+        daemon
+            .terminal_history
+            .lock()
+            .unwrap()
+            .insert(terminal_id, query.generation, snapshot, 0)
+    };
+    match result {
+        Some((history, bytes)) => (
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({"history": history, "data": base64::engine::general_purpose::STANDARD.encode(bytes)})),
+        ).into_response(),
+        None => StatusCode::GONE.into_response(),
+    }
+}
+
+fn terminal_replay_messages(
+    daemon: &Daemon,
+    terminal_id: u64,
+    generation: u64,
+    bytes: &[u8],
+    binary: bool,
+    paged: bool,
+) -> Option<Vec<Message>> {
+    if paged && binary {
+        const INITIAL_HISTORY_ROWS: usize = 120;
+        let (history, prefix) = daemon.terminal_history.lock().unwrap().insert(
+            terminal_id,
+            generation,
+            Bytes::copy_from_slice(bytes),
+            INITIAL_HISTORY_ROWS,
+        )?;
+        let mut messages = vec![Message::Text(
+            serde_json::json!({"type": "terminal-history", "history": history})
+                .to_string()
+                .into(),
+        )];
+        messages.extend(
+            terminal_snapshot_frames(generation, &prefix, true)?
+                .into_iter()
+                .map(Message::Binary),
+        );
+        Some(messages)
+    } else {
+        Some(
+            terminal_snapshot_frames(generation, bytes, binary)?
+                .into_iter()
+                .map(Message::Binary)
+                .collect(),
+        )
+    }
 }
 
 async fn terminal_ws_upgrade(
@@ -3596,6 +3722,7 @@ async fn terminal_ws_connection(
     query: TerminalStreamQuery,
 ) {
     let binary_snapshot = query.ghostty.is_some();
+    let paged = query.paged.unwrap_or(false) && binary_snapshot;
     let TerminalStreamQuery {
         generation,
         cols: initial_cols,
@@ -3607,7 +3734,7 @@ async fn terminal_ws_connection(
     } = query;
     // Only the first snapshot is bounded: a viewer that has painted asks
     // again and is served the whole history.
-    let mut history = requested_history
+    let mut history = (if paged { Some(1) } else { requested_history })
         .filter(|lines| *lines > 0)
         .map(usize::from);
     let terminal = match daemon.terminal(terminal_id) {
@@ -3704,11 +3831,18 @@ async fn terminal_ws_connection(
         crate::daemon::WebTerminalReplay::Complete { .. } if hold_first_snapshot => {}
         crate::daemon::WebTerminalReplay::Complete { bytes } => {
             history = None;
-            let Some(frames) = terminal_snapshot_frames(generation, &bytes, binary_snapshot) else {
+            let Some(frames) = terminal_replay_messages(
+                &daemon,
+                terminal_id,
+                generation,
+                &bytes,
+                binary_snapshot,
+                paged,
+            ) else {
                 return;
             };
             for frame in frames {
-                if sink.send(Message::Binary(frame)).await.is_err() {
+                if sink.send(frame).await.is_err() {
                     return;
                 }
             }
@@ -3731,12 +3865,18 @@ async fn terminal_ws_connection(
                 if sink.send(Message::Binary(size)).await.is_err() {
                     return;
                 }
-                let Some(frames) = terminal_snapshot_frames(generation, &snapshot, binary_snapshot)
-                else {
+                let Some(frames) = terminal_replay_messages(
+                    &daemon,
+                    terminal_id,
+                    generation,
+                    &snapshot,
+                    binary_snapshot,
+                    paged,
+                ) else {
                     return;
                 };
                 for frame in frames {
-                    if sink.send(Message::Binary(frame)).await.is_err() {
+                    if sink.send(frame).await.is_err() {
                         return;
                     }
                 }
@@ -3770,12 +3910,18 @@ async fn terminal_ws_connection(
                 }
                 if end {
                     if !binary_snapshot && !hold_first_snapshot {
-                        let Some(frames) = terminal_snapshot_frames(generation, &buffered, false)
-                        else {
+                        let Some(frames) = terminal_replay_messages(
+                            &daemon,
+                            terminal_id,
+                            generation,
+                            &buffered,
+                            false,
+                            false,
+                        ) else {
                             return;
                         };
                         for frame in frames {
-                            if sink.send(Message::Binary(frame)).await.is_err() {
+                            if sink.send(frame).await.is_err() {
                                 return;
                             }
                         }
@@ -3819,9 +3965,9 @@ async fn terminal_ws_connection(
                     if sink.send(Message::Binary(size)).await.is_err() {
                         return;
                     }
-                    let Some(frames) = terminal_snapshot_frames(generation, &snapshot, binary_snapshot) else { return; };
+                    let Some(frames) = terminal_replay_messages(&daemon, terminal_id, generation, &snapshot, binary_snapshot, paged) else { return; };
             for frame in frames {
-                        if sink.send(Message::Binary(frame)).await.is_err() {
+                        if sink.send(frame).await.is_err() {
                             return;
                         }
                     }
@@ -3890,9 +4036,9 @@ async fn terminal_ws_connection(
                     if sink.send(Message::Binary(size)).await.is_err() {
                         return;
                     }
-                    let Some(frames) = terminal_snapshot_frames(generation, &snapshot, binary_snapshot) else { return; };
+                    let Some(frames) = terminal_replay_messages(&daemon, terminal_id, generation, &snapshot, binary_snapshot, paged) else { return; };
             for frame in frames {
-                        if sink.send(Message::Binary(frame)).await.is_err() {
+                        if sink.send(frame).await.is_err() {
                             return;
                         }
                     }

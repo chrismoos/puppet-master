@@ -32,6 +32,9 @@ export class GhosttyRuntime {
   private readonly ptyWriters = new Map<number, (data: string) => void>();
   private nextPtyWriterId = 1;
   private writePtyFunctionIndex = 0;
+  private snapshotReadFunctionIndex = 0;
+  private nextReaderId = 1;
+  private readers = new Map<number, (destination: Uint8Array) => number>();
 
   private constructor(instance: WebAssembly.Instance) {
     this.exports = instance.exports;
@@ -131,6 +134,16 @@ export class GhosttyRuntime {
     this.ptyWriters.delete(id);
   }
 
+  attachSnapshotReader(read: (destination: Uint8Array) => number): { pointer: number; dispose(): void } {
+    const reader = this.layout("GhosttyReader");
+    const pointer = this.alloc(reader.size);
+    const id = this.nextReaderId++;
+    this.readers.set(id, read);
+    this.memoryDataView().setUint32(pointer + reader.fields.read.offset, this.snapshotReadFunctionIndex, true);
+    this.memoryDataView().setUint32(pointer + reader.fields.userdata.offset, id, true);
+    return { pointer, dispose: () => { this.readers.delete(id); this.free(pointer, reader.size); } };
+  }
+
   view(pointer: number, size?: number): DataView {
     return new DataView(this.memory.buffer, pointer, size);
   }
@@ -222,6 +235,15 @@ export class GhosttyRuntime {
     }
     const result = await WebAssembly.instantiate(await response.arrayBuffer(), {
       env: {
+        t3_snapshot_read: (userdata: number, pointer: number, capacity: number, outRead: number) => {
+          const read = this.readers.get(userdata);
+          if (!read) return 0;
+          try {
+            const count = read(this.bytes(pointer, capacity));
+            this.memoryDataView().setUint32(outRead, count, true);
+            return 1;
+          } catch { return 0; }
+        },
         t3_write_pty: (_terminal: number, userdata: number, pointer: number, length: number) => {
           const writer = this.ptyWriters.get(userdata);
           if (!writer || length === 0) return;
@@ -239,6 +261,12 @@ export class GhosttyRuntime {
     table.grow(1);
     table.set(index, trampoline);
     this.writePtyFunctionIndex = index;
+    const reader = result.instance.exports.ghostty_snapshot_read;
+    if (typeof reader !== "function") throw new Error("Snapshot reader trampoline is unavailable");
+    const readerIndex = table.length;
+    table.grow(1);
+    table.set(readerIndex, reader);
+    this.snapshotReadFunctionIndex = readerIndex;
   }
 }
 

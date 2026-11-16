@@ -347,6 +347,7 @@ pub struct Daemon {
     /// Consecutive resumes after exits nobody asked for, per session.
     unsolicited_resumes: Mutex<HashMap<u64, u32>>,
     web_terminal_streams: Mutex<std::collections::HashMap<u64, usize>>,
+    pub(crate) terminal_history: std::sync::Mutex<crate::terminal_history::HistoryCache>,
     pub(crate) viewer_owners: crate::viewer_ownership::ViewerOwners,
     pub(crate) terminal_streams: std::sync::Arc<crate::workers::TerminalStreamPool>,
     pub(crate) transcript_transfers: std::sync::Arc<crate::workers::TranscriptTransferPool>,
@@ -1543,6 +1544,7 @@ impl Daemon {
             shutdown_terminals: Mutex::new(std::collections::HashSet::new()),
             unsolicited_resumes: Mutex::new(HashMap::new()),
             web_terminal_streams: Mutex::new(std::collections::HashMap::new()),
+            terminal_history: std::sync::Mutex::default(),
             viewer_owners: crate::viewer_ownership::ViewerOwners::default(),
             terminal_streams: std::sync::Arc::new(crate::workers::TerminalStreamPool::default()),
             transcript_transfers: std::sync::Arc::new(

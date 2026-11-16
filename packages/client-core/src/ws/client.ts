@@ -772,6 +772,7 @@ export class PmClient {
     sessionId: bigint,
     initialSize?: TerminalSize | null,
     initialHistoryLines?: number | null,
+    pagedHistory = false,
   ): PtyHandle {
     const terminal = [...this.state.terminals.values()].find(
       (item) => item.sessionId === sessionId && item.kind === TerminalKind.AGENT,
@@ -782,6 +783,7 @@ export class PmClient {
       terminal.generation,
       initialSize,
       initialHistoryLines,
+      pagedHistory,
     );
   }
 
@@ -789,9 +791,10 @@ export class PmClient {
     terminalId: bigint,
     initialSize?: TerminalSize | null,
     initialHistoryLines?: number | null,
+    pagedHistory = false,
   ): PtyHandle {
     const generation = this.state.terminals.get(terminalId.toString())?.generation ?? 0n;
-    return this.createTerminalHandle(terminalId, generation, initialSize, initialHistoryLines);
+    return this.createTerminalHandle(terminalId, generation, initialSize, initialHistoryLines, pagedHistory);
   }
 
   private createTerminalHandle(
@@ -799,6 +802,7 @@ export class PmClient {
     generation: bigint,
     initialSize?: TerminalSize | null,
     initialHistoryLines?: number | null,
+    pagedHistory = false,
   ): PtyHandle {
     const buffer = new PtyBuffer();
     const unavailableReason = this.terminalWorkerUnavailableReason(terminalId);
@@ -811,6 +815,8 @@ export class PmClient {
       unavailableReason,
       initialSize,
       initialHistoryLines,
+      undefined,
+      pagedHistory,
     );
     const key = terminalId.toString();
     const sockets = this.terminalSockets.get(key) ?? new Set<TerminalSocket>();

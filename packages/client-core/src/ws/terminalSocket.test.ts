@@ -76,6 +76,21 @@ describe("TerminalSocket", () => {
     vi.restoreAllMocks();
   });
 
+  it("associates paged history metadata with exactly one binary replay", () => {
+    const sink = vi.fn();
+    const socket = new TerminalSocket(connect, 7n, 3n, sink, () => {}, null, null, null, undefined, true);
+    const ws = FakeWebSocket.instances.at(-1)!;
+    expect(ws.url).toContain("&paged=true");
+    const history = { snapshotId: "snapshot", cursor: 2, steps: 2, hasMore: true };
+    ws.onmessage?.({ data: JSON.stringify({ type: "terminal-history", history }) });
+    const replay = TERMINAL_FLAG_REPLAY | TERMINAL_FLAG_REPLAY_START | TERMINAL_FLAG_REPLAY_END | TERMINAL_FLAG_REPLAY_GHOSTTY;
+    ws.output(3n, replay, [1]);
+    expect(sink.mock.calls[0]?.[0].history).toEqual(history);
+    ws.output(3n, replay, [2]);
+    expect(sink.mock.calls[1]?.[0].history).toBeUndefined();
+    socket.close();
+  });
+
   it("tells a page whose terminal engine is out of date from a worker that is", () => {
     const statuses: TerminalStreamStatus[] = [];
     const socket = new TerminalSocket(connect, 7n, 3n, () => {}, () => {});

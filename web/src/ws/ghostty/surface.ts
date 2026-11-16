@@ -921,16 +921,26 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   }
 
-  restoreSnapshot(data: Uint8Array, onParsed?: () => void): void {
+  restoreSnapshot(data: Uint8Array, onParsed?: () => void, historySteps?: number): void {
     if (this.disposed) return;
     this.resetCount += 1;
     this.completedUpdate = null;
     this.cancelSynchronizedRenderTimer();
     this.lastMouseMotionData = "";
-    this.core.restoreSnapshot(data);
+    this.core.restoreSnapshot(data, historySteps);
     this.syncGridFromSnapshot(this.core.snapshot());
     this.synchronizeMouseTrackingState();
     this.cursorOn = true;
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    this.requestRender();
+    onParsed?.();
+  }
+
+  appendHistory(data: Uint8Array, steps: number, onParsed?: () => void): void {
+    if (this.disposed) return;
+    this.core.appendHistory(data, steps);
+    this.completedUpdate = null;
     this.forceFullRender = true;
     this.scrollbarDirty = true;
     this.requestRender();

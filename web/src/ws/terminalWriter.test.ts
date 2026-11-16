@@ -30,11 +30,19 @@ describe("terminal frame writes", () => {
     const data = new Uint8Array([0, 255, 1]);
     const parsed = vi.fn();
     writeTerminalFrame(view, { data, replay: true, snapshot: true, ghosttySnapshot: true }, undefined, parsed);
-    expect(view.restoreSnapshot).toHaveBeenCalledWith(data, expect.any(Function));
+    expect(view.restoreSnapshot).toHaveBeenCalledWith(data, expect.any(Function), undefined);
     expect(view.write).not.toHaveBeenCalled();
     expect(view.reset).not.toHaveBeenCalled();
     expect(view.operations.map(({ kind }) => kind)).toEqual(["replay:true", "snapshot", "replay:false"]);
     expect(parsed).toHaveBeenCalledOnce();
+  });
+
+  it("passes incremental history step counts to snapshot restoration", () => {
+    const view = terminal();
+    const data = new Uint8Array([1]);
+    writeTerminalFrame(view, { data, replay: true, ghosttySnapshot: true, history: { snapshotId: "a", cursor: 2, steps: 2, hasMore: true } });
+    expect(view.restoreSnapshot).toHaveBeenCalledWith(data, expect.any(Function), 2);
+    expect(view.scrollToLine).toHaveBeenCalledWith(8);
   });
 
   it("parses live bytes before acknowledging and preserves a reader's viewport", () => {

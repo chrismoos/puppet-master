@@ -15,7 +15,7 @@ interface TerminalFrameSurface {
   readonly rows: number;
   write(data: string | Uint8Array, callback?: () => void): void;
   reset(): void;
-  restoreSnapshot(data: Uint8Array, callback?: () => void): void;
+  restoreSnapshot(data: Uint8Array, callback?: () => void, historySteps?: number): void;
   setReplaying(replaying: boolean): void;
   scrollToBottom(): void;
   scrollToLine(line: number): void;
@@ -44,7 +44,7 @@ export function writeTerminalFrame(
       terminal.restoreSnapshot(frame.data, () => {
         terminal.setReplaying(false);
         complete(true);
-      });
+      }, frame.history?.steps);
     } catch (error) {
       terminal.setReplaying(false);
       throw error;

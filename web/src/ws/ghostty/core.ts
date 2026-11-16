@@ -374,8 +374,35 @@ export class GhosttyTerminalCore {
     }
   }
 
-  restoreSnapshot(data: Uint8Array): void {
+  private historyDecoder: { decoder: number; reader: { pointer: number; dispose(): void }; data: Uint8Array; offset: number } | null = null;
+
+  private clearHistoryDecoder(): void {
+    if (!this.historyDecoder) return;
+    if (this.historyDecoder.decoder) this.runtime.call("ghostty_snapshot_decoder_free", this.historyDecoder.decoder);
+    this.historyDecoder.reader.dispose();
+    this.historyDecoder = null;
+  }
+
+  appendHistory(data: Uint8Array, steps: number): void {
     this.ensureActive();
+    const history = this.historyDecoder;
+    if (!history) throw new Error("No incremental snapshot is active");
+    history.data = data;
+    history.offset = 0;
+    try {
+      for (let step = 0; step < steps; step += 1) {
+        const result = this.runtime.call("ghostty_snapshot_decoder_next", history.decoder);
+        const NO_VALUE = -4;
+        if (result === NO_VALUE) { this.clearHistoryDecoder(); break; }
+        this.assertSuccess("ghostty_snapshot_decoder_next", result);
+      }
+    } catch (error) { this.clearHistoryDecoder(); throw error; }
+    finally { history.data = new Uint8Array(); history.offset = 0; }
+  }
+
+  restoreSnapshot(data: Uint8Array, historySteps?: number): void {
+    this.ensureActive();
+    this.clearHistoryDecoder();
     const input = this.runtime.alloc(data.length);
     const decoderSlot = this.runtime.allocOpaque();
     const terminalSlot = this.runtime.allocOpaque();
@@ -383,19 +410,33 @@ export class GhosttyTerminalCore {
     let restored = 0;
     try {
       this.runtime.bytes(input, data.length).set(data);
-      this.assertSuccess("ghostty_snapshot_decoder_new_buf", this.runtime.call(
-        "ghostty_snapshot_decoder_new_buf", 0, decoderSlot, input, data.length,
-      ));
-      snapshotDecoder = this.runtime.readPointer(decoderSlot);
-      this.assertSuccess("ghostty_snapshot_decoder_decode", this.runtime.call(
-        "ghostty_snapshot_decoder_decode", snapshotDecoder, terminalSlot,
-      ));
-      restored = this.runtime.readPointer(terminalSlot);
-      this.assertSuccess("ghostty_snapshot_decoder_get(source offset)", this.runtime.call(
-        "ghostty_snapshot_decoder_get", snapshotDecoder, GHOSTTY_SNAPSHOT_DECODER_DATA.sourceOffset, decoderSlot,
-      ));
-      if (this.runtime.readPointer(decoderSlot) !== data.length) {
-        throw new Error("Ghostty snapshot contains trailing bytes");
+      if (historySteps === undefined) {
+        this.assertSuccess("ghostty_snapshot_decoder_new_buf", this.runtime.call(
+          "ghostty_snapshot_decoder_new_buf", 0, decoderSlot, input, data.length,
+        ));
+        snapshotDecoder = this.runtime.readPointer(decoderSlot);
+        this.assertSuccess("ghostty_snapshot_decoder_decode", this.runtime.call(
+          "ghostty_snapshot_decoder_decode", snapshotDecoder, terminalSlot,
+        ));
+        restored = this.runtime.readPointer(terminalSlot);
+        this.assertSuccess("ghostty_snapshot_decoder_get(source offset)", this.runtime.call(
+          "ghostty_snapshot_decoder_get", snapshotDecoder, GHOSTTY_SNAPSHOT_DECODER_DATA.sourceOffset, decoderSlot,
+        ));
+        if (this.runtime.readPointer(decoderSlot) !== data.length) throw new Error("Ghostty snapshot contains trailing bytes");
+      } else {
+        const history: NonNullable<typeof this.historyDecoder> = { decoder: 0, data, offset: 0, reader: this.runtime.attachSnapshotReader((destination) => {
+          const count = Math.min(destination.length, history.data.length - history.offset);
+          if (count <= 0) throw new Error("Incomplete snapshot page");
+          destination.set(history.data.subarray(history.offset, history.offset + count));
+          history.offset += count;
+          return count;
+        }) };
+        this.historyDecoder = history;
+        this.assertSuccess("ghostty_snapshot_decoder_new", this.runtime.call("ghostty_snapshot_decoder_new", 0, decoderSlot, history.reader.pointer));
+        history.decoder = this.runtime.readPointer(decoderSlot);
+        this.assertSuccess("ghostty_snapshot_decoder_ready", this.runtime.call("ghostty_snapshot_decoder_ready", history.decoder, terminalSlot));
+        restored = this.runtime.readPointer(terminalSlot);
+        this.appendHistory(data.subarray(history.offset), historySteps);
       }
       if (this.ptyWriterId) this.runtime.detachPtyWriter(this.terminal, this.ptyWriterId);
       this.runtime.call("ghostty_render_state_row_cells_free", this.runtime.readPointer(this.rowCellsSlot));
@@ -413,6 +454,9 @@ export class GhosttyTerminalCore {
       this.applyScrollbackLimits();
       this.ptyWriterId = this.ptyWriter ? this.runtime.attachPtyWriter(this.terminal, this.ptyWriter) : 0;
       if (this.theme) this.setTheme(this.theme);
+    } catch (error) {
+      this.clearHistoryDecoder();
+      throw error;
     } finally {
       if (restored) this.runtime.call("ghostty_terminal_free", restored);
       if (snapshotDecoder) this.runtime.call("ghostty_snapshot_decoder_free", snapshotDecoder);
@@ -1045,6 +1089,7 @@ export class GhosttyTerminalCore {
   }
 
   dispose(): void {
+    this.clearHistoryDecoder();
     if (this.disposed) return;
     this.disposed = true;
     if (this.mouseEvent) this.runtime.call("ghostty_mouse_event_free", this.mouseEvent);

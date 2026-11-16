@@ -43,6 +43,7 @@ pub mod stale_turn;
 pub mod storage;
 pub mod supervisor_wake;
 pub mod term_model;
+mod terminal_history;
 pub mod terminal_theme;
 pub mod text;
 pub mod ui_theme;

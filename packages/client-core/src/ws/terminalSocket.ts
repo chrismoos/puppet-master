@@ -1,5 +1,5 @@
 import { SOCKET_OPEN, type SocketConnector, type SocketLike } from "../platform";
-import type { PtySink, TerminalSize, TerminalOwnership } from "./pty";
+import type { PtySink, TerminalSize, TerminalOwnership, TerminalHistoryCursor } from "./pty";
 import {
   decodeTerminalOutput,
   decodeTerminalResize,
@@ -104,6 +104,7 @@ export class TerminalSocket {
   private ownershipListeners = new Set<(ownership: TerminalOwnership) => void>();
   private replayChunks: Uint8Array[] = [];
   private replayBytes = 0;
+  private pendingHistory: TerminalHistoryCursor | undefined;
   private replaySnapshot = false;
   private replayGhosttySnapshot = false;
   private snapshotPending = false;
@@ -137,6 +138,7 @@ export class TerminalSocket {
      * the whole scrollback is parsed. A later snapshot carries all of it. */
     private initialHistoryLines?: number | null,
     private viewer = createTerminalViewerIdentity(),
+    private pagedHistory = false,
   ) {
     if (unavailableReason) {
       this.available = false;
@@ -372,6 +374,8 @@ export class TerminalSocket {
     if (this.socketsOpened === 1 && this.initialHistoryLines) {
       url += `&history=${this.initialHistoryLines}`;
     }
+    if (this.pagedHistory) url += "&paged=true";
+    this.pendingHistory = undefined;
     const size = this.pendingResize ?? (this.socketsOpened === 1 ? this.initialSize : null);
     if (size && size.cols >= 2 && size.rows >= 1) {
       const request = this.pendingResize?.request ?? ++this.viewer.request;
@@ -393,7 +397,15 @@ export class TerminalSocket {
     }, REPLAY_TIMEOUT_MS);
 
     socket.onmessage = (event) => {
-      if (this.socket !== socket || !(event.data instanceof ArrayBuffer)) return;
+      if (this.socket !== socket) return;
+      if (typeof event.data === "string") {
+        try {
+          const control = JSON.parse(event.data);
+          if (control.type === "terminal-history" && this.pagedHistory) this.pendingHistory = control.history;
+        } catch {}
+        return;
+      }
+      if (!(event.data instanceof ArrayBuffer)) return;
       const ownership = decodeTerminalOwnership(event.data);
       if (ownership) {
         if (ownership.generation !== this.generation || ownership.revision < this.ownershipRevision) return;
@@ -446,7 +458,8 @@ export class TerminalSocket {
           this.lastReplaySnapshot = snapshot;
           this.outputBytes += data.byteLength;
           this.lastOutputAt = this.lastReplayAt;
-          this.sink({ data, replay: true, snapshot, ...(ghosttySnapshot ? { ghosttySnapshot } : {}) });
+          this.sink({ data, replay: true, snapshot, ...(ghosttySnapshot ? { ghosttySnapshot } : {}), ...(this.pendingHistory ? { history: this.pendingHistory } : {}) });
+          this.pendingHistory = undefined;
           this.flushPendingLive();
           this.markOnline(socket);
         }

@@ -5,7 +5,7 @@ import { ghosttyColorToCss } from "./ghostty/terminalAdapter";
 import { measureGhosttyCell, terminalGridSize } from "./ghostty/renderer";
 import { CONTENT_PADDING } from "./ghostty/surface";
 import type { PmClient, PtyHandle } from "@puppet-master/client-core/ws/client";
-import type { PtyFrame, TerminalSize } from "@puppet-master/client-core/ws/pty";
+import type { PtyFrame, TerminalSize, TerminalHistoryCursor } from "@puppet-master/client-core/ws/pty";
 import { terminalEvictionPriority } from "@puppet-master/client-core/ws/terminalCache";
 import { writeTerminalFrame } from "./terminalWriter";
 import { SYNC_OUTPUT_START } from "@puppet-master/client-core/ws/terminalWriter";
@@ -39,6 +39,9 @@ import {
   type TerminalViewportBookmark,
 } from "./terminalViewport";
 
+import { TerminalWarmCache, fetchTerminalHistory, type WarmTerminal } from "./terminalWarmCache";
+import { agentTerminalForSession } from "@puppet-master/client-core/state/workspace";
+
 const FONT_SIZE_PX = 13;
 
 /** Keeps recently viewed terminals attached so switching back is instant. */
@@ -49,6 +52,8 @@ const MONO_FONT_STACK =
 
 interface Layer {
   key: string;
+  history: TerminalHistoryCursor | null;
+  historyLoading: boolean;
   sessionId: bigint;
   addressedTerminal: boolean;
   el: HTMLDivElement;
@@ -137,6 +142,7 @@ export class TerminalStage {
   private terminalCommandListeners = new Set<TerminalCommandListener>();
   private theme: GhosttyTheme;
   private clipboard: TerminalClipboard;
+  private warmCache = new TerminalWarmCache();
 
   constructor(private client: PmClient, themeController: TerminalThemeController) {
     this.root = document.createElement("div");
@@ -155,6 +161,58 @@ export class TerminalStage {
     // registration through React StrictMode's setup/cleanup rehearsal, which
     // calls disposeAll() without replacing this ref-backed stage instance.
     themeController.register(this);
+  }
+
+  preloadSessions(terminals: WarmTerminal[]): void {
+    if (!this.nativeTerminals) this.warmCache.update(terminals);
+  }
+
+  selectSession(id: string): void { this.warmCache.select(id); }
+
+  warmStats(): ReturnType<TerminalWarmCache["stats"]> { return this.warmCache.stats(); }
+
+  private layerTerminal(layer: Layer): WarmTerminal | null {
+    const state = this.client.getState();
+    const terminal = layer.addressedTerminal ? state.terminals.get(layer.sessionId.toString())
+      : agentTerminalForSession(state.terminals.values(), layer.sessionId.toString());
+    return terminal ? { id: terminal.id.toString(), generation: terminal.generation.toString(), sessionId: terminal.sessionId.toString() } : null;
+  }
+
+  private async backfill(layer: Layer, target?: TerminalViewportBookmark): Promise<void> {
+    const history = layer.history;
+    const terminal = this.layerTerminal(layer);
+    const buffer = layer.term.buffer.active;
+    const restoring = target && target.linesFromBottom > buffer.baseY;
+    if (!terminal || !history?.hasMore || layer.historyLoading
+      || (!restoring && (buffer.baseY - buffer.viewportY <= 0 || buffer.viewportY > layer.term.rows * 2))) return;
+    layer.historyLoading = true;
+    const revision = layer.viewportRevision;
+    try {
+      const page = await fetchTerminalHistory(terminal, history);
+      if (this.layers.get(layer.key) !== layer || layer.history !== history) return;
+      const restoreTarget = target && revision === layer.viewportRevision ? target : undefined;
+      const viewport = restoreTarget ?? captureTerminalViewport(layer.term);
+      layer.history = page.history;
+      layer.pendingWrites += 1;
+      try {
+        layer.term.appendHistory(page.data, page.history.steps, () => {
+          restoreTerminalViewport(layer.term, viewport);
+          layer.pendingWrites -= 1;
+          layer.viewport = viewport;
+          if (restoreTarget && restoreTarget.linesFromBottom > layer.term.buffer.active.baseY && page.history.hasMore) {
+            queueMicrotask(() => void this.backfill(layer, restoreTarget));
+          } else {
+            this.rememberViewport(layer.key, layer);
+            this.revealPendingLayer(layer);
+          }
+        });
+      } catch (error) {
+        layer.pendingWrites -= 1;
+        throw error;
+      }
+    } catch {
+      if (layer.history === history) layer.handle?.refreshSnapshot();
+    } finally { layer.historyLoading = false; }
   }
 
   setTheme(theme: GhosttyTheme): void {
@@ -474,6 +532,7 @@ export class TerminalStage {
   }
 
   disposeAll(): void {
+    this.warmCache.reset();
     this.observer.disconnect();
     this.visibilityDispose?.();
     this.visibilityDispose = null;
@@ -561,6 +620,8 @@ export class TerminalStage {
     });
     layer = {
       key,
+      history: null,
+      historyLoading: false,
       sessionId,
       addressedTerminal,
       el,
@@ -608,6 +669,7 @@ export class TerminalStage {
     const scrollSub = term.onScroll(() => {
       if (this.visibleId !== key || layer.pendingWrites > 0) return;
       this.rememberViewport(key, layer);
+      void this.backfill(layer);
     });
     const rememberUserViewport = () => {
       if (this.visibleId !== key) return;
@@ -657,6 +719,11 @@ export class TerminalStage {
       layer.anticipatedFrames.push(frame);
       return;
     }
+    if (frame.replay) {
+      layer.history = frame.history ?? null;
+      const terminal = this.layerTerminal(layer);
+      if (terminal && frame.history) this.warmCache.remember(terminal, { data: frame.data, history: frame.history, capturedAt: Date.now() });
+    }
     const viewport = layer.viewport;
     const revision = layer.viewportRevision;
     const snapshotSize = layer.pendingFit;
@@ -686,6 +753,7 @@ export class TerminalStage {
               return;
             }
             layer.term.setPresentationPaused(false);
+            void this.backfill(layer, viewport);
           }
           if (layer.initialReplayPending || (layer.swapPending && frame.replay)) {
             this.revealPendingLayer(layer);
@@ -910,9 +978,11 @@ export class TerminalStage {
     if (!measured || !isRealPaneFit(layer.el.clientWidth, measured.cols)) return false;
     applyMeasuredFit(layer.term, measured, false);
     const size = { cols: measured.cols, rows: measured.rows };
+    const terminal = this.layerTerminal(layer);
+    const cached = terminal ? this.warmCache.get(terminal) : null;
     const handle = layer.addressedTerminal
-      ? this.client.openTerminal(layer.sessionId, size)
-      : this.client.openPty(layer.sessionId, size);
+      ? this.client.openTerminal(layer.sessionId, size, null, true)
+      : this.client.openPty(layer.sessionId, size, null, true);
     layer.handle = handle;
     layer.lastResize = size;
     layer.sizePrompt.requested(size);
@@ -989,6 +1059,18 @@ export class TerminalStage {
     layer.disposers.push(statusDispose, ownershipDispose, ptySizeDispose, () => viewer.dispose());
     if (documentVisible(document) && this.visibleId === layer.key) viewer.opened();
     else viewer.setVisible(false);
+    if (cached) {
+      layer.pendingWrites += 1;
+      layer.term.restoreSnapshot(cached.data, () => {
+        restoreTerminalViewport(layer.term, layer.viewport);
+        layer.pendingWrites -= 1;
+        layer.history = cached.history;
+        if (layer.term.cols === size.cols && layer.term.rows === size.rows && !layer.pendingFit) {
+          layer.replayPainted = true;
+          this.revealPendingLayer(layer);
+        }
+      }, cached.history.steps);
+    }
     handle.connect((frame) => this.receiveFrame(layer.key, frame));
     const held = layer.heldInput;
     layer.heldInput = [];
@@ -1056,6 +1138,7 @@ export class TerminalStage {
     // Live output queued behind the snapshot does not hold the reveal, or a
     // session that never goes quiet would never finish switching.
     if (!layer.replayPainted || layer.pendingFit) return;
+    if (layer.history?.hasMore && layer.viewport.linesFromBottom > layer.term.buffer.active.baseY) return;
     if (layer.revealRender) return;
     layer.revealRender = waitForTerminalRender(
       layer.term,

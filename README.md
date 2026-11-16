@@ -103,6 +103,16 @@ the controller you already run. See [apps/desktop](apps/desktop/) to build it.
 A terminal has one shared size across viewers. Web and mobile let you choose
 whether to resize it to fit your current view.
 
+The browser preloads recent content for every active session, prioritizing the
+selected session and then recently viewed sessions. Eight terminals stay ready
+to render, and other sessions share a 64 MiB recent-content cache. Background
+preloading does not resize terminals. Older scrollback loads in batches when
+you scroll toward the beginning of the loaded history. For example, open a
+session, switch to another, and scroll upward to fetch its older output.
+Disconnected sessions still use the normal reconnect view. If an older-history
+snapshot expires, the browser refreshes its recent snapshot before continuing.
+Existing stored scrollback and mobile terminal behavior are unchanged.
+
 Drop a file on a session's terminal in the browser and it is stored on the
 host that runs that session, with its path typed into the composer for you to
 send. A session on a remote host gets the file on that host, where its agent

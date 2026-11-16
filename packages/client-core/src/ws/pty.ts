@@ -1,9 +1,17 @@
+export interface TerminalHistoryCursor {
+  snapshotId: string;
+  cursor: number;
+  steps: number;
+  hasMore: boolean;
+}
+
 export interface PtyFrame {
   data: Uint8Array;
   replay: boolean;
   /** The replay payload is a serialized state snapshot, not a ring tail. */
   snapshot?: boolean;
   ghosttySnapshot?: boolean;
+  history?: TerminalHistoryCursor;
 }
 
 export interface TerminalSize {

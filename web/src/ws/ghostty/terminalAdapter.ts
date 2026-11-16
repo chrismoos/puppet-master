@@ -179,18 +179,22 @@ export class GhosttyTerminalAdapter {
     });
   }
 
-  restoreSnapshot(data: Uint8Array, callback?: () => void): void {
+  restoreSnapshot(data: Uint8Array, callback?: () => void, historySteps?: number): void {
     this.enqueue((surface) => {
       this.committedSize = null;
       this.scanner.reset();
       try {
-        surface.restoreSnapshot(data, callback);
+        surface.restoreSnapshot(data, callback, historySteps);
       } catch (error) {
         this.dispose();
         this.onError(error);
         throw error;
       }
     });
+  }
+
+  appendHistory(data: Uint8Array, steps: number, callback?: () => void): void {
+    this.enqueue((surface) => surface.appendHistory(data, steps, callback));
   }
 
   reset(): void {

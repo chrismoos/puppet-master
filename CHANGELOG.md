@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Active sessions preload recent terminal content in recently viewed order, with bounded memory and older scrollback fetched as you scroll.
+
 - [Web] Terminal text keeps consistent top padding when scrollback fills or pane height changes.
 
 - [Web] A shell opened from the pane menu receives keyboard focus when it is ready.

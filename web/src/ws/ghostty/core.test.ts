@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { GhosttyTerminalCore, MAX_SCROLLBACK_BYTES } from "./core";
 import { GHOSTTY_DEC_MODE, GHOSTTY_GRID_REF_TAG } from "./abi";
+import { loadGhosttyRuntime } from "./runtime";
 import { GhosttyTerminalSurface } from "./surface";
 
 vi.mock("./vendor/ghostty-vt.wasm?url", async () => ({
@@ -46,6 +47,58 @@ describe("Ghostty terminal core", () => {
   });
 
   afterAll(() => vi.unstubAllGlobals());
+
+  it("loads history incrementally while preserving newer live output", async () => {
+    const runtime = await loadGhosttyRuntime();
+    const slot = runtime.allocOpaque();
+    runtime.call("ghostty_terminal_new", 0, slot, 80, 8);
+    const terminal = runtime.readPointer(slot);
+    const text = new TextEncoder().encode(Array.from({ length: 1500 }, (_, row) => `history ${String(row).padStart(4, "0")}\r\n`).join(""));
+    const input = runtime.alloc(text.length);
+    runtime.bytes(input, text.length).set(text);
+    runtime.call("ghostty_terminal_vt_write", terminal, input, text.length);
+    runtime.call("ghostty_snapshot_encode_buf", terminal, 0, 0, slot);
+    const length = runtime.readPointer(slot);
+    const encoded = runtime.alloc(length);
+    expect(runtime.call("ghostty_snapshot_encode_buf", terminal, encoded, length, slot)).toBe(0);
+    const bytes = runtime.bytes(encoded, length).slice();
+    runtime.free(encoded, length);
+    runtime.free(input, text.length);
+    runtime.call("ghostty_terminal_free", terminal);
+    runtime.freeOpaque(slot);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const HEADER_BYTES = 10;
+    const READY = 5;
+    const PAGE = 3;
+    const FINISH = 6;
+    const IMAGE_PAYLOAD = 9;
+    let ready = 0;
+    let start = 0;
+    const pages: Uint8Array[] = [];
+    for (let offset = HEADER_BYTES; offset < bytes.length;) {
+      const tag = view.getUint16(offset, true);
+      const end = offset + HEADER_BYTES + view.getUint32(offset + 2, true);
+      if (tag === READY) { ready = end; start = end; }
+      else if (ready && [PAGE, FINISH, IMAGE_PAYLOAD].includes(tag)) { const boundary = tag === PAGE ? end + HEADER_BYTES : end; pages.push(bytes.slice(start, boundary)); start = boundary; }
+      offset = end;
+    }
+    expect(ready).toBeGreaterThan(0);
+    expect(pages.length).toBeGreaterThan(1);
+    const core = await createCore();
+    core.restoreSnapshot(bytes.slice(0, ready), 0);
+    core.write("\r\nLIVE AFTER SNAPSHOT");
+    const before = core.snapshot().rowData.map((row) => row.text).join("\n");
+    expect(before).toContain("LIVE AFTER SNAPSHOT");
+    for (const page of pages) core.appendHistory(page, 1);
+    expect(core.snapshot().rowData.map((row) => row.text).join("\n")).toContain("LIVE AFTER SNAPSHOT");
+    const reference = await createCore();
+    reference.restoreSnapshot(bytes);
+    reference.scroll(-100_000);
+    core.scroll(-100_000);
+    const expected = reference.snapshot().rowData.map((row) => row.text);
+    expect(expected[0]).toMatch(/^history /);
+    expect(core.snapshot().rowData.map((row) => row.text)).toEqual(expected);
+  });
 
   it("restores native backend state and continues its unfinished parser", async () => {
     const bytes = new Uint8Array(await readFile(new URL("../../../../crates/pm-ghostty/testdata/native-state.snapshot", import.meta.url)));

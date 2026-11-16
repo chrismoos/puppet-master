@@ -530,9 +530,20 @@ function Shell({
     navigate(withRememberedTab(path, lastTabBySession.current));
   }, []);
 
+  useEffect(() => {
+    if (!state.hydrated) return;
+    const terminals = [...state.sessions.values()].filter((session) => !sessionEnded(session)).flatMap((session) => {
+      const terminal = agentTerminalForSession(state.terminals.values(), session.id.toString());
+      return terminal ? [{ id: terminal.id.toString(), generation: terminal.generation.toString(), sessionId: session.id.toString(), activity: Number(session.lastUserInteractionAtUnixMs || session.lastActivityAtUnixMs) }] : [];
+    });
+    if (route.name === "session") stage.selectSession(route.id);
+    stage.preloadSessions(terminals);
+  }, [stage, state.hydrated, state.sessions, state.terminals, route]);
+
   const select = useCallback((id: string) => {
     const current = parseRoute(location.hash);
     if (current.name !== "session" || current.id !== id) stage.hide();
+    stage.selectSession(id);
     writeString(SELECTED_SESSION_KEY, id);
     setHomeSessionId(id);
     navigate(sessionRoutePath(id, lastTabBySession.current[id]));
