@@ -5037,6 +5037,7 @@ async fn pane_programs_need_bypass_run_directly_and_report_their_exit_status() {
         json!({"id": "job", "until": "exit", "timeout_ms": 10000}),
     )
     .await;
+    assert_eq!(waited["isError"], false, "{}", call_text(&waited));
     let waited: Value = serde_json::from_str(call_text(&waited)).unwrap();
     assert_eq!(waited["done"], true, "{waited}");
     assert_eq!(waited["what"], "exited with status 3");

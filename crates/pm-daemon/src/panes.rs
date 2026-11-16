@@ -19,6 +19,7 @@ const EXIT_MARKER: &str = "[pane exited with status ";
 const WATCH_INTERVAL: Duration = Duration::from_secs(1);
 const WAIT_POLL: Duration = Duration::from_millis(250);
 const WAIT_MAX: Duration = Duration::from_secs(25);
+const EXIT_HANDOFF_TIMEOUT: Duration = Duration::from_secs(1);
 const PAGE_FILE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const READ_DEFAULT_LINES: usize = 80;
 const READ_MAX_BYTES: usize = 256 * 1024;
@@ -459,11 +460,29 @@ fn new_token() -> String {
 /// the transcript saved at exit once it has ended.
 async fn terminal_bytes(daemon: &Daemon, terminal_id: u64) -> Result<Vec<u8>, String> {
     if terminal_exit(daemon, terminal_id).is_none() {
-        let (bytes, _rx, _guard) = daemon
-            .attach_terminal(terminal_id)
-            .await
-            .map_err(|error| error.to_string())?;
-        return Ok(bytes.to_vec());
+        match daemon.attach_terminal(terminal_id).await {
+            Ok((bytes, _rx, _guard)) => return Ok(bytes.to_vec()),
+            Err(error) => {
+                if terminal_exit(daemon, terminal_id).is_none() {
+                    if !matches!(
+                        &error,
+                        crate::daemon::DaemonError::Worker(crate::workers::WorkerError::Closed)
+                    ) {
+                        return Err(error.to_string());
+                    }
+                    // PTY closure can precede the controller's persisted exit event.
+                    let exited = tokio::time::timeout(EXIT_HANDOFF_TIMEOUT, async {
+                        while terminal_exit(daemon, terminal_id).is_none() {
+                            tokio::time::sleep(WAIT_POLL).await;
+                        }
+                    })
+                    .await;
+                    if exited.is_err() {
+                        return Err(error.to_string());
+                    }
+                }
+            }
+        }
     }
     let terminal = daemon
         .storage()

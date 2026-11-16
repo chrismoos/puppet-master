@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Daemon] Reading or waiting on a terminal pane keeps working when its program exits during the read.
+
 - [Web] Active sessions preload recent terminal content in recently viewed order, with bounded memory and older scrollback fetched as you scroll.
 
 - [Web] Terminal text keeps consistent top padding when scrollback fills or pane height changes.
