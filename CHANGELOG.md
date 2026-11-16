@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+- [Web] Session switches hide the outgoing terminal before header and directory bars change its height, then reveal only the selected terminal at its final size.
+
 - [Web] Terminal glyphs keep their pixel size while a pane changes size and its replacement snapshot is pending.
 
-- [Web] Session switches keep the previous terminal screen visible until the selected terminal has painted at the pane's size, and reloads keep stale-size snapshots covered.
+- [Web] Session switches and reloads keep stale-size terminal snapshots covered.
 
 - [Web] Resizing inline agent terminals keeps the screen visible while the program clears and redraws it.
 

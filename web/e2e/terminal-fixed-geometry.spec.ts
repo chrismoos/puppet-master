@@ -21,6 +21,7 @@ interface Stage {
   disposeSession(id: bigint): void;
 }
 interface Sample {
+  selected: string | null;
   shown: Array<{ key: string; painted: Grid; measured: Grid; text: string }>;
 }
 interface ProbeWindow extends Window {
@@ -83,7 +84,9 @@ async function installProbe(page: Page): Promise<void> {
       }
       hadScreen ||= shown.length > 0;
       if (stage?.visibleId && hadScreen) {
-        target.__geometrySamples.push({ shown });
+        const sessionRoute = location.hash.match(/^#\/session\/(\d+)(?:[/?]|$)/);
+        const selected = sessionRoute ? `s:${sessionRoute[1]}` : stage.visibleId;
+        target.__geometrySamples.push({ selected, shown });
         if (target.__geometrySamples.length > 2_000) target.__geometrySamples.shift();
       }
       requestAnimationFrame(sample);
@@ -106,14 +109,16 @@ async function twoPaints(page: Page): Promise<void> {
 
 function expectStable(samples: Sample[], expected?: Grid): void {
   expect(samples.length).toBeGreaterThan(0);
-  expect(samples.filter((sample) => sample.shown.length !== 1), "every switch keeps exactly one painted terminal on screen").toEqual([]);
+  expect(samples.filter((sample) => sample.shown.length > 1), "a switch never exposes two terminal layers").toEqual([]);
+  expect(samples.flatMap((sample) => sample.shown.filter((entry) => entry.key !== sample.selected)),
+    "only the selected terminal can be exposed").toEqual([]);
   const shown = samples.flatMap((sample) => sample.shown);
   expect(shown.filter((entry) => entry.painted.cols !== entry.measured.cols || entry.painted.rows !== entry.measured.rows),
     "a terminal is never exposed at a provisional size").toEqual([]);
   if (expected) expect(shown.filter((entry) => entry.painted.cols !== expected.cols || entry.painted.rows !== expected.rows)).toEqual([]);
 }
 
-test("cold switches retain the last frame while replay is delayed, including rapid returns", async ({ page, isolatedDaemon }) => {
+test("cold switches hide the outgoing frame immediately while replay is delayed, including rapid returns", async ({ page, isolatedDaemon }) => {
   await installProbe(page);
   await logIn(page);
   const first = isolatedDaemon.session("browser-e2e")!.id;
@@ -126,11 +131,11 @@ test("cold switches retain the last frame while replay is delayed, including rap
   await secondRow.click();
   await expect.poll(() => page.evaluate(() => (window as ProbeWindow).__heldFrames)).toBeGreaterThan(0);
   await twoPaints(page);
-  expect((await samples(page)).at(-1)?.shown.map((entry) => entry.key)).toEqual([`s:${first}`]);
+  expect((await samples(page)).at(-1)?.shown.map((entry) => entry.key)).toEqual([]);
   expect(await page.evaluate((id) => {
     const layer = (window as ProbeWindow).__pmStage!.layers.get(`s:${id}`)!;
     return layer.el.contains(document.activeElement);
-  }, second), "input focuses the selected terminal while the previous screen is held").toBe(true);
+  }, second), "input focuses the selected terminal while its screen is covered").toBe(true);
   await page.keyboard.type("echo cold-switch-input\n");
   await page.locator(".sb-session").filter({ has: page.locator(".sb-session-title", { hasText: /^browser-e2e$/ }) }).click();
   await secondRow.click();
@@ -262,4 +267,57 @@ test("a held replay never stretches the painted font when its container changes 
   }
   await page.evaluate(() => (window as ProbeWindow).__releaseFrames());
   await twoPaints(page);
+});
+
+
+test("directory-bar height changes cannot expose or resize the outgoing session", async ({ page, isolatedDaemon }, testInfo) => {
+  isolatedDaemon.seedSessionForward("browser-e2e-two", "preview");
+  await isolatedDaemon.restart();
+  await installProbe(page);
+  await logIn(page);
+  const first = isolatedDaemon.session("browser-e2e")!.id;
+  const second = isolatedDaemon.session("browser-e2e-two")!.id;
+  const row = (title: string) => page.locator(".sb-session").filter({
+    has: page.locator(".sb-session-title", { hasText: new RegExp(`^${title}$`) }),
+  });
+  await row("browser-e2e").click();
+  await expectTerminalRevealed(page, `s:${first}`);
+  await expect(page.locator(".forwards-bar")).toBeHidden();
+  await twoPaints(page);
+  const firstGrid = (await samples(page)).at(-1)!.shown[0].painted;
+  await page.screenshot({ path: testInfo.outputPath("atomic-before.png") });
+  await page.evaluate((id) => { (window as ProbeWindow).__holdTerminal = `s:${id}`; }, second);
+  await clearSamples(page);
+  await row("browser-e2e-two").click();
+  await expect(page.locator(".forwards-bar")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as ProbeWindow).__heldFrames)).toBeGreaterThan(0);
+  await twoPaints(page);
+  await page.screenshot({ path: testInfo.outputPath("atomic-loading.png") });
+  const loading = (await samples(page)).filter((sample) => sample.selected === `s:${second}`);
+  expect(loading.length).toBeGreaterThan(0);
+  expect(loading.every((sample) => sample.shown.length === 0), "the outgoing session is hidden throughout cold attachment").toBe(true);
+  expect(await page.evaluate((id) => {
+    const snapshot = (window as ProbeWindow).__pmStage!.layers.get(`s:${id}`)!.term.renderSnapshot()!;
+    return { cols: snapshot.cols, rows: snapshot.rows };
+  }, first), "the outgoing buffer keeps its original geometry").toEqual(firstGrid);
+  await page.evaluate(() => (window as ProbeWindow).__releaseFrames());
+  await expectTerminalRevealed(page, `s:${second}`);
+  await twoPaints(page);
+  expectStable(await samples(page));
+  const secondGrid = (await samples(page)).at(-1)!.shown[0].painted;
+  expect(secondGrid.rows).toBeLessThan(firstGrid.rows);
+  await page.screenshot({ path: testInfo.outputPath("atomic-ready.png") });
+  for (const [title, id, grid] of [
+    ["browser-e2e", first, firstGrid],
+    ["browser-e2e-two", second, secondGrid],
+    ["browser-e2e", first, firstGrid],
+  ] as const) {
+    await clearSamples(page);
+    await row(title).click();
+    await expectTerminalRevealed(page, `s:${id}`);
+    await twoPaints(page);
+    const observed = await samples(page);
+    expectStable(observed);
+    expectStable(observed.filter((sample) => sample.selected === `s:${id}`), grid);
+  }
 });

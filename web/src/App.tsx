@@ -26,7 +26,7 @@ import { createWorkspace, deleteWorkspace, listWorkspaces, reorderWorkspaces, up
 import { sessionDisplayName, sessionEnded } from "@puppet-master/client-core/format";
 import { visibleSessions } from "@puppet-master/client-core/state/sidebar";
 import { sessionRoutePath, settingsRoutePath, withRememberedTab, type SettingsSection } from "@puppet-master/client-core/router";
-import { navigate, sessionHomeId, useRoute } from "./router";
+import { navigate, parseRoute, sessionHomeId, useRoute } from "./router";
 import { Notifier } from "./notify/notifier";
 import { browserSocketConnector } from "./ws/browserSocket";
 import {
@@ -531,10 +531,12 @@ function Shell({
   }, []);
 
   const select = useCallback((id: string) => {
+    const current = parseRoute(location.hash);
+    if (current.name !== "session" || current.id !== id) stage.hide();
     writeString(SELECTED_SESSION_KEY, id);
     setHomeSessionId(id);
     navigate(sessionRoutePath(id, lastTabBySession.current[id]));
-  }, []);
+  }, [stage]);
 
   // Warming a terminal claims the size its host has now. When either session
   // shows panes the agent's slot differs between them, so the warm claim would

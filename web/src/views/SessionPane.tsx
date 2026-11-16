@@ -1,4 +1,4 @@
-import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AGENT_ONLY_LAYOUT, AgentPanes, HiddenPaneTray, isPaneForward, layoutHasPanes, paneTerminalIds, parseSessionLayout } from "./AgentPanes";
 import { ContextPanel } from "../components/ContextPanel";
 import { sessionRoutePath } from "@puppet-master/client-core/router";
@@ -304,7 +304,7 @@ export function SessionPane({
   const selectedPlan = selectedPlanId(selectedTerminal);
   const openedPlan = selectedPlan !== null && planIds.has(selectedPlan) ? selectedPlan : null;
   const selected = terminals.find((t) => t.id.toString() === selectedTerminal);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     stage.mount(host);
@@ -333,7 +333,7 @@ export function SessionPane({
     session && !openedReview && !openedPlan ? session.id.toString() : null,
     shownTerminal ? shownTerminal.id.toString() : null,
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return;
     if (ended) {
       // Ended metadata remains selectable during the history grace period,
@@ -345,6 +345,7 @@ export function SessionPane({
     if (selected) stage.showTerminal(selected.id);
     else if (agentTerminal) stage.show(BigInt(sessionId));
     else stage.hide();
+    return () => stage.hide();
   }, [active, stage, sessionId, selected?.id, agentTerminal?.id, ended]);
 
   const previousInventory = useRef<{ sessionId: string; terminalIds: Set<string> }>({

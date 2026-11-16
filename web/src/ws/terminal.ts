@@ -393,6 +393,15 @@ export class TerminalStage {
     const existing = this.layers.get(key);
     const layer = existing ?? this.createLayer(id, terminal);
     const wasVisibleId = this.visibleId;
+    if (wasVisibleId !== key) {
+      for (const other of this.layers.values()) {
+        other.el.style.visibility = "hidden";
+        other.el.style.pointerEvents = "none";
+        other.term.setVisible(false);
+        other.viewer?.setVisible(false);
+      }
+      if (!layer.initialReplayPending) layer.swapPending = true;
+    }
     if (wasVisibleId && wasVisibleId !== key) this.releaseAnticipation(this.layers.get(wasVisibleId));
     this.visibleId = key;
     // Enforce the warm-layer limit before attaching this surface.
@@ -419,27 +428,24 @@ export class TerminalStage {
     layer.lastShownAt = Date.now();
     this.layoutVisibleLayer(layer);
 
-    const heldLayer = (layer.initialReplayPending || layer.pendingFit)
-      ? [...this.layers.values()].find((other) => other.key !== key
-        && other.el.style.visibility === "visible" && other.replayPainted
-        && !other.initialReplayPending && !other.swapPending)
-      : undefined;
+    const preparing = layer.initialReplayPending || layer.pendingFit || layer.swapPending;
     for (const [otherKey, other] of this.layers) {
-      const visible = heldLayer ? other === heldLayer : otherKey === key;
-      other.el.classList.toggle(PREPARING_LAYER_CLASS, Boolean(heldLayer) && otherKey === key);
+      const visible = otherKey === key && !preparing;
+      other.el.classList.toggle(PREPARING_LAYER_CLASS, Boolean(preparing) && otherKey === key);
       other.el.style.visibility = visible ? "visible" : "hidden";
-      other.el.style.pointerEvents = visible && otherKey === key ? "auto" : "none";
+      other.el.style.pointerEvents = visible ? "auto" : "none";
       other.term.setVisible(otherKey === key);
       if (otherKey !== key) other.viewer?.setVisible(false);
     }
     this.parkHiddenLayers();
 
-    if (layer.initialReplayPending || layer.pendingFit) {
+    if (preparing) {
       if (!layer.initialReplayPending) layer.swapPending = true;
       raiseCurtain(layer);
       layer.focusAtShow = document.activeElement;
       layer.term.focus();
       this.scheduleRefitVisible();
+      this.revealPendingLayer(layer);
       if (layer.revealTimeout === null) {
         layer.revealTimeout = setTimeout(() => {
           layer.revealTimeout = null;
