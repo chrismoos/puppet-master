@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "./fixtures";
-import { logIn } from "./support";
+import { expectTerminalRevealed, logIn } from "./support";
 
 interface SocketMetric {
   bytes: number;
@@ -233,8 +233,12 @@ test("board and item-detail return preserves terminal scrollback without browser
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`#\\/session\\/${sessionId}$`));
   await expect(page.locator('.term-layer[style*="visible"]')).toBeVisible();
-  await page.locator('.term-layer[style*="visible"] .ghostty-canvas').waitFor();
+  await expectTerminalRevealed(page, "s:");
+  await page.locator('.term-layer[style*="visible"] .ghostty-input').focus();
+  const HISTORY_READING_PAGES = 24;
+  for (let index = 0; index < HISTORY_READING_PAGES; index += 1) await page.keyboard.press("Shift+PageUp");
   await expect.poll(() => terminalMetrics(page).then((metric) => metric.baseY)).toBeGreaterThan(700);
+  for (let index = 0; index < HISTORY_READING_PAGES; index += 1) await page.keyboard.press("Shift+PageDown");
 
   const visibleLayer = page.locator('.term-layer[style*="visible"]');
   const before = await terminalMetrics(page);
