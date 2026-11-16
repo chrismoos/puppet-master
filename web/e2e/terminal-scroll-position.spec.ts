@@ -16,6 +16,7 @@ interface StageWindow {
       term: {
         renderSnapshot(): { rowData: Array<{ text: string }> } | null;
         scrollToLine(line: number): void;
+        onRender(listener: () => void): { dispose(): void };
       };
     }>;
   };
@@ -214,12 +215,14 @@ test("codex-style output preserves bottom following and scrolled markers across 
 
   // Distance-from-bottom is shared by warm shows and reload replay. Verify the
   // content marker, not merely a scrollbar coordinate, across each return flow.
-  await page.evaluate(() => {
+  await page.evaluate(() => new Promise<void>((resolve) => {
     const stage = (window as unknown as StageWindow).__pmStage;
     const debug = stage?.debugSnapshot().find((candidate) => candidate.visible);
-    if (!debug) throw new Error("missing terminal debug state");
-    stage?.layers.get(debug.key)?.term.scrollToLine(debug.baseY - 120);
-  });
+    const term = debug ? stage?.layers.get(debug.key)?.term : undefined;
+    if (!debug || !term) throw new Error("missing terminal debug state");
+    const rendered = term.onRender(() => { rendered.dispose(); resolve(); });
+    term.scrollToLine(debug.baseY - 120);
+  }));
   await expect.poll(() => state(page).then((viewport) => viewport?.marker)).toMatch(/CODEX-SYNC-\d+/);
   const marker = (await readyState(page)).marker;
   await switchToOtherSessionAndBack(page);

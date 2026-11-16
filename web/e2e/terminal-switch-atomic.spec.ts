@@ -8,6 +8,7 @@ const STREAMING_FRAMES = 100_000;
 const STREAMING_FRAME_MS = 40;
 
 interface Sample {
+  selected: string | null;
   onScreen: string[];
   /** The shown layer's loading curtain covers it. */
   curtained: boolean;
@@ -19,6 +20,7 @@ interface StageWindow extends Window {
   __switchSampling: boolean;
   __switchRenderListeners: Array<{ dispose(): void }>;
   __pmStage: {
+    visibleId: string | null;
     theme: {
       background: { r: number; g: number; b: number };
       foreground: { r: number; g: number; b: number };
@@ -90,7 +92,7 @@ async function startSampling(page: Page): Promise<void> {
     const observed = new Set(w.__pmStage.layers.keys());
     const tick = () => {
       if (!w.__switchSampling) return;
-      const sample: Sample = { onScreen: [], curtained: false, layers: {} };
+      const sample: Sample = { selected: w.__pmStage.visibleId, onScreen: [], curtained: false, layers: {} };
       for (const [key, layer] of w.__pmStage.layers) {
         if (!observed.has(key)) {
           observed.add(key);
@@ -123,20 +125,21 @@ async function stopSampling(page: Page): Promise<Sample[]> {
   });
 }
 
-async function visibleKey(page: Page): Promise<string> {
+async function visibleKey(page: Page): Promise<string | null> {
   return page.evaluate(() => {
     const stage = (window as unknown as StageWindow).__pmStage;
-    return [...stage.layers.entries()].find(([, layer]) => layer.el.style.visibility === "visible")![0];
+    return [...stage.layers.entries()].find(([, layer]) => layer.el.style.visibility === "visible")?.[0] ?? null;
   });
 }
 
 async function switchAndSample(page: Page): Promise<{ from: string; to: string; samples: Sample[] }> {
   const from = await visibleKey(page);
+  if (!from) throw new Error("outgoing terminal is not visible");
   await startSampling(page);
   await page.locator(".sb-session:not(.is-selected)").first().click();
   await expect.poll(async () => {
     const key = await visibleKey(page);
-    if (key === from) return false;
+    if (!key || key === from) return false;
     return page.evaluate((k) => {
       const layer = (window as unknown as StageWindow).__pmStage.layers.get(k)!;
       return layer.replayPainted && !layer.initialReplayPending && !layer.swapPending;
@@ -145,52 +148,35 @@ async function switchAndSample(page: Page): Promise<{ from: string; to: string; 
   // e2e-real-time-wait: frames after the swap would show a late refill
   await page.waitForTimeout(500);
   const samples = await stopSampling(page);
-  return { from, to: await visibleKey(page), samples };
+  const to = await visibleKey(page);
+  if (!to) throw new Error("incoming terminal is not visible");
+  return { from, to, samples };
 }
 
-/// The pane goes from the session being left, to this session's own empty
-/// terminal, to its snapshot in one step. No frame shows a partly drawn
-/// screen, and none shows the session being left once the switch has begun.
-function expectBlankThenOnePaint(result: { from: string; to: string; samples: Sample[] }): void {
+function expectAtomicSwap(result: { from: string; to: string; samples: Sample[] }): void {
   const { from, to, samples } = result;
-  const final = samples.at(-1)!.layers[to];
-  expect(final.painted).toBe(true);
-  const states: string[] = [];
+  expect(samples.at(-1)!.onScreen).toEqual([to]);
+  let leftPrevious = false;
+  let revealed = false;
   for (const [index, sample] of samples.entries()) {
-    expect(sample.onScreen, `frame ${index}`).toHaveLength(1);
+    expect(sample.onScreen.length, `frame ${index}`).toBeLessThanOrEqual(1);
     const [shown] = sample.onScreen;
-    if (shown !== from && shown !== to) throw new Error(`frame ${index} shows ${shown}`);
-    const state = shown === from
-      ? "previous"
-      : sample.layers[to]?.painted ? "painted" : "blank";
-    if (shown === to) expect(sample.curtained, `frame ${index}`).toBe(state === "blank");
-    if (states.at(-1) !== state) states.push(state);
-  }
-  expect(states).toEqual(["previous", "blank", "painted"]);
-}
-
-/// The pane goes from the session being left straight to the session asked
-/// for, before that session's redraw at the pane's size has arrived, and
-/// never goes back. Until that redraw paints, the curtain covers the stale
-/// screen.
-function expectImmediateSwap(result: { from: string; to: string; samples: Sample[] }): void {
-  const { from, to, samples } = result;
-  const final = samples.at(-1)!.layers[to];
-  expect(final.painted).toBe(true);
-  let firstShown: Sample | null = null;
-  for (const [index, sample] of samples.entries()) {
-    expect(sample.onScreen, `frame ${index}`).toHaveLength(1);
-    const [shown] = sample.onScreen;
-    if (shown === to) {
-      firstShown ??= sample;
-      expect(sample.curtained, `frame ${index}`).toBe(!sample.layers[to]?.painted);
-    } else {
-      expect(shown, `frame ${index}`).toBe(from);
-      expect(firstShown, `frame ${index} went back to the previous session`).toBeNull();
+    if (shown === from) {
+      expect(sample.selected, `frame ${index} shows the outgoing terminal after selection`).toBe(from);
+      expect(leftPrevious, `frame ${index} returned to the previous session`).toBe(false);
+      continue;
     }
+    leftPrevious = true;
+    if (!shown) {
+      expect(revealed, `frame ${index} hid an already revealed terminal`).toBe(false);
+      continue;
+    }
+    expect(shown, `frame ${index}`).toBe(to);
+    expect(sample.layers[to]?.painted, `frame ${index} exposes an unfinished terminal`).toBe(true);
+    expect(sample.curtained, `frame ${index}`).toBe(false);
+    revealed = true;
   }
-  expect(firstShown).not.toBeNull();
-  expect(firstShown!.layers[to]?.painted, "the switch waited for the redraw").toBe(false);
+  expect(revealed).toBe(true);
 }
 
 test("a session whose snapshot is slow to arrive takes the pane empty rather than leaving the previous screen up", async ({ page }) => {
@@ -212,7 +198,7 @@ test("a session whose snapshot is slow to arrive takes the pane empty rather tha
   await expect(page.locator('.term-layer[style*="visibility: visible"]')).toHaveCount(1, { timeout: 20_000 });
 
   const result = await switchAndSample(page);
-  expectBlankThenOnePaint(result);
+  expectAtomicSwap(result);
 });
 
 async function shrinkViewport(page: Page): Promise<void> {
@@ -226,7 +212,7 @@ async function shrinkViewport(page: Page): Promise<void> {
   await expect.poll(shownCols).toBeLessThan(colsBefore);
 }
 
-test("a warm session at a stale size takes the pane at once and is redrawn at the pane's size", async ({ page }) => {
+test("a warm session at a stale size is revealed atomically at the pane's size", async ({ page }) => {
   await logIn(page);
   await openSession(page, 0);
   await fillHistory(page);
@@ -235,7 +221,7 @@ test("a warm session at a stale size takes the pane at once and is redrawn at th
   await shrinkViewport(page);
 
   const settled = await switchAndSample(page);
-  expectImmediateSwap(settled);
+  expectAtomicSwap(settled);
   const shown = settled.samples.at(-1)!.layers[settled.to];
   const other = settled.samples.at(-1)!.layers[settled.from];
   expect({ cols: shown.cols, rows: shown.rows }).toEqual({ cols: other.cols, rows: other.rows });
@@ -251,7 +237,7 @@ test("a session that never stops printing finishes switching at a new size", asy
   await shrinkViewport(page);
 
   const settled = await switchAndSample(page);
-  expectImmediateSwap(settled);
+  expectAtomicSwap(settled);
 });
 
 test("pressing a session row starts attaching its terminal before the click opens it", async ({ page }) => {
@@ -290,7 +276,8 @@ test("pressing a session row starts attaching its terminal before the click open
   expect(tickets).toHaveLength(1);
 });
 
-test("a session still reaching for its terminal shows a loading curtain in the terminal's colors", async ({ page }) => {
+test("a session still reaching for its terminal stays hidden with a curtain in the terminal's colors", async ({ page }) => {
+  await page.route("**/api/terminals/*/history?*", (route) => route.abort());
   await logIn(page);
   await openSession(page, 0);
   await fillHistory(page);
@@ -306,10 +293,12 @@ test("a session still reaching for its terminal shows a loading curtain in the t
   });
 
   await page.locator(".sb-session:not(.is-selected)").first().click();
-  const pane = page.locator('.term-layer[style*="visibility: visible"]');
+  await expect(page.locator('.term-layer[style*="visibility: visible"]')).toHaveCount(0);
+  const pane = page.locator(".term-layer.is-preparing");
   const curtain = pane.locator(".terminal-loading-curtain");
   await expect(curtain).toHaveText("loading…");
   await expect(curtain.locator("span")).toHaveCSS("opacity", "0.55");
+  await expect(pane).toHaveCSS("visibility", "hidden");
   await expect(pane.locator(".terminal-stream-status")).toBeHidden();
   const curtainColors = await curtain.evaluate((el) => {
     const style = getComputedStyle(el);
@@ -344,6 +333,7 @@ test("a session still reaching for its terminal shows a loading curtain in the t
   expect(waiting.lines).toBeLessThan(HISTORY_LINES);
 
   letTicketThrough();
+  await expect(page.locator('.term-layer[style*="visibility: visible"]')).toHaveCount(1);
   await expect(curtain).toBeHidden();
   await expect.poll(() => page.evaluate(() => {
     const stage = (window as unknown as StageWindow).__pmStage as unknown as {
@@ -365,6 +355,8 @@ interface DebugStageWindow extends Window {
     }>;
     layers: Map<string, {
       el: HTMLElement;
+      history: { hasMore: boolean } | null;
+      term: { scrollToLine(line: number): void };
     }>;
   };
 }
@@ -384,18 +376,31 @@ function shownHistory(page: Page) {
   });
 }
 
-test("a session opened cold has its whole scrollback once its screen is up", async ({ page }) => {
+test("a session opened cold fetches older scrollback when the reader scrolls up", async ({ page }) => {
   await logIn(page);
   await openSession(page, 0);
   await fillHistory(page);
 
   await page.reload();
   await expect.poll(() => shownHistory(page).then((state) => state?.lines ?? 0), { timeout: 20_000 })
-    .toBeGreaterThan(HISTORY_LINES);
-
-  const filled = (await shownHistory(page))!;
-  // The history arrives above the screen, which stays at the bottom.
-  expect(filled.viewportY).toBe(filled.lines - filled.rows);
+    .toBeGreaterThan(0);
+  const initial = (await shownHistory(page))!;
+  expect(initial.lines).toBeLessThan(HISTORY_LINES);
+  expect(initial.viewportY).toBe(initial.lines - initial.rows);
+  const MAX_HISTORY_BATCHES = 30;
+  for (let batch = 0; batch < MAX_HISTORY_BATCHES; batch += 1) {
+    const before = (await shownHistory(page))!;
+    const requested = await page.evaluate(() => {
+      const stage = (window as unknown as DebugStageWindow).__pmStage;
+      const layer = [...stage?.layers.values() ?? []].find((entry) => entry.el.style.visibility === "visible");
+      if (!layer?.history?.hasMore) return false;
+      layer.term.scrollToLine(0);
+      return true;
+    });
+    if (!requested) break;
+    await expect.poll(() => shownHistory(page).then((state) => state?.lines ?? 0)).toBeGreaterThan(before.lines);
+  }
+  expect((await shownHistory(page))!.lines).toBeGreaterThan(HISTORY_LINES);
 });
 
 function sessionRowByTitle(page: Page, title: string) {

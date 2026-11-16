@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Returning to a scrolled session keeps the same text visible when output arrives during the switch.
+
 - [Daemon] Reading or waiting on a terminal pane keeps working when its program exits during the read.
 
 - [Web] Active sessions preload recent terminal content in recently viewed order, with bounded memory and older scrollback fetched as you scroll.

@@ -667,7 +667,7 @@ export class TerminalStage {
       this.rememberViewport(key, layer);
     };
     const scrollSub = term.onScroll(() => {
-      if (this.visibleId !== key || layer.pendingWrites > 0) return;
+      if (this.visibleId !== key || layer.pendingWrites > 0 || layer.swapPending) return;
       this.rememberViewport(key, layer);
       void this.backfill(layer);
     });
@@ -965,7 +965,7 @@ export class TerminalStage {
   }
 
   private rememberViewport(key: string, layer: Layer): void {
-    if (layer.initialReplayPending || layer.swapPending) return;
+    if (layer.initialReplayPending) return;
     const viewport = captureTerminalViewport(layer.term);
     layer.viewport = viewport;
     saveTerminalViewport(key, viewport);
