@@ -188,7 +188,7 @@ for (const direction of ["right", "below"] as const) {
     expect(samples.filter((sample) => sample.host > sample.pane + 1), "a canvas cannot grow its flex host beyond the pane").toEqual([]);
     expect(new Set(samples.map((sample) => sample.host)).size, "shell host width settles instead of growing every frame").toBe(1);
     expect(samples.filter((sample) => sample.canvas > sample.host + 1), "the painted canvas fits its shell host").toEqual([]);
-    await shell.locator(".ghostty-input").focus();
+    await expect(shell.locator(".ghostty-input")).toBeFocused();
     await page.keyboard.type("echo shell-geometry-ready\n");
     await expect.poll(async () => JSON.parse(await isolatedDaemon.callAgentTool(SESSION, "read_pane", { id: "shell-1" })).text)
       .toContain("shell-geometry-ready");

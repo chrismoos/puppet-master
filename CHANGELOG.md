@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] A shell opened from the pane menu receives keyboard focus when it is ready.
+
 - [Web] Opening a shell pane no longer triggers continuous canvas growth and resize work that can freeze the page.
 
 - [Daemon] Video and audio in a published directory can be seeked: files are served in byte ranges when the browser asks for part of one.

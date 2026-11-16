@@ -275,6 +275,7 @@ export function AgentPanes({
   };
   const abandonPress = () => stage.cancelAnticipation(layerKey);
 
+  const [focusedPane, setFocusedPane] = useState<string | null>(null);
   const [moving, setMoving] = useState<MoveDrag | null>(null);
   const [menu, setMenu] = useState<{ pane: string; x: number; y: number } | null>(null);
   const openMenu = (pane: string) => (event: { clientX: number; clientY: number; preventDefault: () => void }) => {
@@ -286,6 +287,7 @@ export function AgentPanes({
     let n = 1;
     while (current.panes[`shell-${n}`]) n += 1;
     const id = `shell-${n}`;
+    setFocusedPane(id);
     void authedFetch(`/api/sessions/${sessionId}/panes`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -528,6 +530,7 @@ export function AgentPanes({
             rect={isZoomed && full ? full : placed.rect}
             axis={isZoomed ? null : placed.axis}
             active={active}
+            focused={focusedPane === id}
             zoomed={isZoomed}
             behindZoom={Boolean(zoomedPane) && !isZoomed}
             moving={moving?.id === id}
@@ -731,6 +734,7 @@ function PaneView({
   rect,
   axis,
   active,
+  focused,
   zoomed,
   behindZoom,
   moving,
@@ -747,6 +751,7 @@ function PaneView({
   rect: Rect;
   axis: "row" | "column" | null;
   active: boolean;
+  focused: boolean;
   zoomed: boolean;
   /** Another pane is zoomed over this one. */
   behindZoom: boolean;
@@ -904,7 +909,7 @@ function PaneView({
           <EndedOutput sessionId={sessionId} paneId={meta.id} terminalId={meta.terminal_id} exitCode={meta.exit_code} />
         ) : terminal ? (
           <ReadOnlyGuard enabled={!meta.user_input}>
-            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={false} active={active && !collapsed} onIssue={NO_ISSUE} onCommand={reportCommand} onFirstPaint={() => setReady(true)} stage={stage} readOnly={!meta.user_input} />
+            <TerminalViewport key={String(terminal.id)} terminal={terminal} focused={focused && ready} active={active && !collapsed} onIssue={NO_ISSUE} onCommand={reportCommand} onFirstPaint={() => setReady(true)} stage={stage} readOnly={!meta.user_input} />
           </ReadOnlyGuard>
         ) : (
           <div className="ap-wait">starting…</div>
