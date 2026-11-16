@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 — 2026-11-16
 
 - [Web] Switching to a preloaded session after reload preserves its terminal size when session headers have different heights.
 
@@ -116,6 +116,8 @@
 - [Web] On the rail, switching to a bucket reopens the session you last had open there, or its first session. A bucket's button shows an amber ring when a session needs you, pulsing until you have seen it, and a green dot for a finished turn you have not viewed. The selected bucket is marked with a bar beside its button instead of amber.
 
 - [Web] Session search moved into the bucket switcher: press `/`, open the switcher, or use the rail's search button, then type to find a bucket or a session in any bucket, or show every result in the sidebar. The search box no longer takes a row of its own.
+
+## 0.10.4 — 2026-11-08
 
 - [Web] A terminal that is not live says why in proportion to what it needs from you: a pill while it reconnects, a banner with Retry now or View worker while its connection or worker is down, and a card naming the fix (update the worker or reload the page) when its terminal engine doesn't match.
 
