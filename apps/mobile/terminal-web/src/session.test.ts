@@ -804,7 +804,7 @@ describe("TerminalViewSession on a grid it cannot resize", () => {
     return { ...h, socket };
   }
 
-  it("never writes output produced for another viewer's width", () => {
+  it("does not write another width while its own size claim is pending", () => {
     const { session, socket, term, writes } = paintedAt({ cols: 50, rows: 20 });
     const painted = writes.length;
 
@@ -814,6 +814,65 @@ describe("TerminalViewSession on a grid it cannot resize", () => {
 
     expect([term.cols, term.rows]).toEqual([50, 20]);
     expect(writes).toHaveLength(painted);
+    session.shutdown();
+  });
+
+  function takenOnFixedGrid() {
+    const h = paintedAt({ cols: 50, rows: 20 });
+    const query = new URL(h.socket.url).searchParams;
+    const owner = BigInt(query.get("viewer")!);
+    const acknowledgment = BigInt(query.get("claim")!);
+    h.socket.deliver(encodeTerminalOwnership({ generation: 3n, revision: 1n, owner, acknowledgment, cols: 50, rows: 20 }));
+    h.socket.deliver(encodeTerminalOwnership({ generation: 3n, revision: 2n, owner: owner + 1n, acknowledgment, cols: 120, rows: 40 }));
+    h.socket.deliver(encodeTerminalResize(3n, 120, 40));
+    expect(h.posts).toContainEqual({ type: "sizeMismatch", show: true });
+    return h;
+  }
+
+  it("shows another viewer's output wrapped while that viewer owns the size", () => {
+    const { session, socket, term, writes } = takenOnFixedGrid();
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+    expect(wrote(writes, [0x6c])).toBe(true);
+    expect([term.cols, term.rows]).toEqual([50, 20]);
+    session.shutdown();
+  });
+
+  it("keeps showing another viewer's output after Dismiss", () => {
+    const { session, socket, writes } = takenOnFixedGrid();
+    session.handle({ type: "dismissSize" });
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+    expect(wrote(writes, [0x6c])).toBe(true);
+    session.shutdown();
+  });
+
+  it("repaints from a snapshot when Update brings the size back after wrapped output", () => {
+    const { session, socket, writes } = takenOnFixedGrid();
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+    const before = resyncs(socket);
+
+    session.handle({ type: "updateSize" });
+    expect(resizesSent(socket).at(-1)).toEqual([50, 20]);
+    socket.deliver(encodeTerminalResize(3n, 50, 20));
+    expect(resyncs(socket)).toBeGreaterThan(before);
+    const settled = resyncs(socket);
+    socket.deliver(outputFrame(3n, REPLAY_ALL, new Uint8Array([0x6a])));
+    expect(writes.at(-1)).toContain(0x6a);
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6d])));
+    expect(wrote(writes, [0x6d])).toBe(true);
+    expect(resyncs(socket)).toBe(settled);
+    session.shutdown();
+  });
+
+  it("repaints from a snapshot when a layout change takes the size back after wrapped output", () => {
+    const { session, socket, writes, layOut } = takenOnFixedGrid();
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+    expect(wrote(writes, [0x6c])).toBe(true);
+    const before = resyncs(socket);
+
+    layOut(50, 30);
+    expect(resizesSent(socket).at(-1)).toEqual([50, 30]);
+    socket.deliver(encodeTerminalResize(3n, 50, 30));
+    expect(resyncs(socket)).toBe(before + 1);
     session.shutdown();
   });
 

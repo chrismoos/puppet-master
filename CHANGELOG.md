@@ -8,7 +8,7 @@
 
 - [Daemon] New remote agent terminals open without a five-second history timeout during startup.
 
-- [iOS] Fullscreen terminal apps no longer show garbled, overlapping text when the terminal was sized by another viewer or before the phone's layout settled.
+- [iOS] Fullscreen terminal apps no longer show garbled, overlapping text after opening a session, and the screen repaints cleanly when the phone takes the terminal size back from another viewer.
 
 ## 0.11.0 — 2026-11-16
 

@@ -63,6 +63,9 @@ export class TerminalViewSession {
   /** A held frame was produced for a width the fixed grid does not have, so
    * the matching size is followed by a snapshot instead of those frames. */
   private heldNeedsSnapshot = false;
+  /** The fixed grid shows output drawn for another viewer's width, which a
+   * snapshot replaces once the sizes match again. */
+  private drewForeignWidth = false;
   /** Whether a frame has been written, after which a size change follows by
    * snapshot instead of reflowing what is on screen. */
   private painted = false;
@@ -82,7 +85,10 @@ export class TerminalViewSession {
   constructor(private hooks: SessionHooks) {
     this.sizePrompt = new TerminalSizePrompt(
       () => hooks.measureSize ? hooks.measureSize() : { cols: hooks.term.cols, rows: hooks.term.rows },
-      (show) => hooks.post({ type: "sizeMismatch", show }),
+      (show) => {
+        hooks.post({ type: "sizeMismatch", show });
+        this.settleFixedGrid();
+      },
       (size) => {
         if (!this.socket || !this.shown()) return;
         this.followSize = size;
@@ -219,6 +225,7 @@ export class TerminalViewSession {
     this.viewer = null;
     if (resetPrompt) this.sizePrompt.reset();
     this.clearHeldFrames();
+    this.drewForeignWidth = false;
     if (this.socket) {
       this.socket.close();
       this.socket = null;
@@ -289,7 +296,7 @@ export class TerminalViewSession {
       // that a program repainting on resize then prints again.
       const term = this.resizableTerm();
       if (!term) {
-        this.flushHeldFrames();
+        this.settleFixedGrid();
         return;
       }
       if (this.painted && (term.cols !== size.cols || term.rows !== size.rows)) {
@@ -357,12 +364,30 @@ export class TerminalViewSession {
     // A replay rebuilds the screen from nothing, so it supersedes whatever
     // was waiting; a live frame must not overtake the frames ahead of it.
     if (frame.replay) this.clearHeldFrames();
+    if (this.drawsAnyWidth() && (this.heldFrames.length > 0 || this.heldNeedsSnapshot)) this.flushHeldFrames();
     if (this.heldFrames.length > 0 || this.heldNeedsSnapshot || !this.paint(frame)) this.hold(frame);
   }
 
   /** The fixed grid's layout changed size: frames held for that size can go. */
   surfaceResized(): void {
+    this.settleFixedGrid();
+  }
+
+  private settleFixedGrid(): void {
+    if (this.hooks.term.resize || !this.socket) return;
+    if (this.drewForeignWidth && this.sizesMatch()) {
+      this.drewForeignWidth = false;
+      this.clearHeldFrames();
+      this.socket.refreshSnapshot();
+      return;
+    }
     this.flushHeldFrames();
+  }
+
+  /** While another viewer owns the size, a fixed grid shows its output
+   * wrapped rather than nothing. */
+  private drawsAnyWidth(): boolean {
+    return !this.hooks.term.resize && this.sizePrompt.blocked();
   }
 
   private hold(frame: PtyFrame): void {
@@ -401,8 +426,13 @@ export class TerminalViewSession {
       const term = this.resizableTerm();
       if (term) applyEchoedPtySize(term, follow);
     }
-    return applyEchoedPtySizeThenWrite(this.hooks.term, this.socket?.ptySize() ?? null, () => {
+    const gate = this.drawsAnyWidth() ? null : this.socket?.ptySize() ?? null;
+    return applyEchoedPtySizeThenWrite(this.hooks.term, gate, () => {
       this.painted = true;
+      if (!this.hooks.term.resize) {
+        const matches = this.sizesMatch();
+        this.drewForeignWidth = frame.replay ? !matches : this.drewForeignWidth || !matches;
+      }
       writeTerminalFrame(
         this.hooks.term,
         frame,
@@ -418,7 +448,7 @@ export class TerminalViewSession {
 
   private flushHeldFrames(): void {
     if (this.heldNeedsSnapshot) {
-      if (!this.sizesMatch()) return;
+      if (!this.sizesMatch() && !this.drawsAnyWidth()) return;
       this.clearHeldFrames();
       this.socket?.refreshSnapshot();
       return;
