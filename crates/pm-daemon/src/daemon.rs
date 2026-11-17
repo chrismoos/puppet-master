@@ -4293,11 +4293,6 @@ impl Daemon {
                 now_unix_ms(),
             )?;
             self.publish(Event::SessionChanged(session.clone()));
-            // Subscribed clients need the new agent terminal too: the web
-            // opens the session by terminal identity right after spawn.
-            self.publish(Event::TerminalChanged(
-                self.storage.agent_terminal(session.id)?,
-            ));
             session
         };
         self.remember_terminal_worker(self.storage.agent_terminal(session.id)?.id, worker_id);
@@ -4360,6 +4355,10 @@ impl Daemon {
             if let Err(e) = link.send(spawn) {
                 return Err(self.fail_session(session.id, e.into()));
             }
+            // An advertised terminal can immediately receive background history requests.
+            self.publish(Event::TerminalChanged(
+                self.storage.agent_terminal(session.id)?,
+            ));
             let _guard = self.state_lock.lock().unwrap();
             let updated = self
                 .storage
@@ -4425,6 +4424,7 @@ impl Daemon {
             self.spawn_program_status(),
         ) {
             Ok(()) => {
+                self.publish(Event::TerminalChanged(terminal));
                 let _guard = self.state_lock.lock().unwrap();
                 let updated = self
                     .storage
@@ -11290,6 +11290,94 @@ mod agent_resolution_tests {
             .create_project(bucket, "api", temp.path().to_str().unwrap())
             .unwrap();
         (daemon, temp, bucket, project)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remote_terminal_is_advertised_only_after_its_spawn_is_queued() {
+        const PREPARATION_TIMEOUT: Duration = Duration::from_secs(5);
+        const POLL_INTERVAL: Duration = Duration::from_millis(1);
+        let (daemon, _temp, bucket_id, project_id) = daemon();
+        let daemon = std::sync::Arc::new(daemon);
+        let (token, _) = daemon.create_worker_enrollment("remote").unwrap();
+        let mut remote = daemon
+            .register_worker_connection(WorkerHello {
+                snapshot_compatibility: pm_protocol::GHOSTTY_SNAPSHOT_COMPATIBILITY,
+                enrollment_token: &token,
+                credential: "",
+                peer_key_hash: "remote-key",
+                hostname: "remote.example",
+                platform: "linux",
+                pm_version: "",
+                runtime: "",
+                container: "",
+                default_project_root: "/work",
+                live_sessions: &[],
+                live_terminals: &[],
+                protocol_version: pm_protocol::WORKER_PROTOCOL_VERSION,
+            })
+            .unwrap();
+        daemon
+            .set_bucket_workers(bucket_id, &[remote.worker_id], remote.worker_id, None)
+            .unwrap();
+        daemon
+            .set_project_workers(project_id, &[remote.worker_id], Some(remote.worker_id))
+            .unwrap();
+        let (_, mut events) = daemon.subscribe();
+        let preparing = daemon.generation_lifecycle.lock().unwrap();
+        let spawning = {
+            let daemon = daemon.clone();
+            let worker_id = remote.worker_id;
+            let runtime = tokio::runtime::Handle::current();
+            std::thread::spawn(move || {
+                let _entered = runtime.enter();
+                daemon.spawn_session(
+                    project_id,
+                    AgentKind::ClaudeCode,
+                    "startup",
+                    "",
+                    None,
+                    PermissionMode::Inherit,
+                    Some(worker_id),
+                    true,
+                    false,
+                    None,
+                )
+            })
+        };
+        let deadline = std::time::Instant::now() + PREPARATION_TIMEOUT;
+        let mut preparing_session = None;
+        while std::time::Instant::now() < deadline {
+            let sessions = daemon.storage.sessions_in_bucket(bucket_id).unwrap();
+            if let Some(session) = sessions.first() {
+                if daemon
+                    .storage
+                    .get_session_token(session.id)
+                    .unwrap()
+                    .is_some()
+                {
+                    preparing_session = Some(session.id);
+                    break;
+                }
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        let advertised_early = std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, Event::TerminalChanged(_)));
+        let queued_early = remote.rx.try_recv().is_ok();
+        drop(preparing);
+        let id = spawning.join().unwrap().unwrap();
+        assert_eq!(preparing_session, Some(id));
+        assert!(!queued_early);
+        assert!(
+            !advertised_early,
+            "warming must not attach before the worker receives Spawn"
+        );
+        assert!(
+            matches!(remote.rx.try_recv().unwrap(), ControllerMsg::Spawn { session_id, .. } if session_id == id)
+        );
+        assert!(std::iter::from_fn(|| events.try_recv().ok()).any(
+            |event| matches!(event, Event::TerminalChanged(terminal) if terminal.session_id == id)
+        ));
     }
 
     #[test]

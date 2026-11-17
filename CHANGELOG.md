@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- [Daemon] New remote agent terminals open without a five-second history timeout during startup.
+
 ## 0.11.0 — 2026-11-16
 
 - [Web] Switching to a preloaded session after reload preserves its terminal size when session headers have different heights.
