@@ -1493,7 +1493,7 @@ impl Daemon {
         let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let (wait_events_tx, _) = broadcast::channel(WAIT_EVENT_CHANNEL_CAPACITY);
         let (wait_cancel_tx, _) = broadcast::channel(WAIT_EVENT_CHANNEL_CAPACITY);
-        let pm_exe = std::env::current_exe()?;
+        let pm_exe = crate::update::pm_exe()?;
         if pm_adapters::path_needs_shell_quoting(&pm_exe) {
             warn!(
                 pm_exe = %pm_exe.display(),

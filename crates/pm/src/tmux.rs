@@ -145,7 +145,7 @@ pub async fn status(socket: &Target) -> anyhow::Result<()> {
 /// The shell command a tmux pane or window runs to attach, reaching the
 /// daemon this command reached.
 fn pm_command(socket: &Target, arguments: &[&str]) -> anyhow::Result<String> {
-    let pm = std::env::current_exe()?;
+    let pm = pm_daemon::update::pm_exe()?;
     let mut words = vec![pm.display().to_string()];
     words.extend(crate::remotes::target_args(socket));
     words.extend(arguments.iter().map(|argument| argument.to_string()));

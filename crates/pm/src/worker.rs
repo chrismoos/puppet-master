@@ -1581,7 +1581,7 @@ async fn serve(
     }
 
     let forwarders: Forwarders = Arc::new(Mutex::new(HashMap::new()));
-    let pm_exe = std::env::current_exe()?;
+    let pm_exe = pm_daemon::update::pm_exe()?;
     if pm_adapters::path_needs_shell_quoting(&pm_exe) {
         warn!(
             pm_exe = %pm_exe.display(),

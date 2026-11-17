@@ -1154,6 +1154,7 @@ fn require_local(socket: &Target, what: &str) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = pm_daemon::update::pm_exe();
     let invocation =
         Invocation::from_matches(&remotes::with_name_flag(Cli::command()).get_matches())
             .unwrap_or_else(|e| e.exit());

@@ -356,7 +356,7 @@ pub async fn download_verified(client: &reqwest::Client, release: &Release) -> R
 /// top. The rename is atomic, and the running image stays mapped, so the
 /// current process keeps working until it re-execs.
 pub fn install_over_current_exe(binary: &[u8]) -> Result<PathBuf> {
-    let exe = running_exe()?;
+    let exe = pm_exe()?;
     let directory = exe
         .parent()
         .map(Path::to_path_buf)
@@ -408,17 +408,39 @@ fn write_executable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
-/// The path of the binary this process is running, refusing a path that
-/// no longer resolves. Installing works by renaming over the running
-/// image, which unlinks its inode, and Linux then answers
-/// `/proc/self/exe` with a `" (deleted)"` suffix. Renaming onto that name
-/// would create a file called `pm (deleted)` and leave the real binary
-/// untouched, so an exe path that does not exist is fatal here.
-fn running_exe() -> Result<PathBuf> {
-    resolve_exe(std::env::current_exe().context("locating the running pm binary")?)
+/// Linux suffixes `/proc/self/exe` with this once the running image is
+/// unlinked, which any rename over the binary does.
+const DELETED_EXE_SUFFIX: &str = " (deleted)";
+
+static PM_EXE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The path of the pm binary this process was started from.
+///
+/// Resolved once and kept, because asking again after the binary has been
+/// replaced on disk (a self-update, an install, a rebuild) gets back a
+/// `" (deleted)"` path that cannot be exec'd or embedded in a hook command.
+/// `main` calls this first thing so the answer is taken while the image is
+/// still linked. `argv[0]` is no substitute: it may be relative, a bare
+/// name resolved through `PATH`, or anything the parent chose to pass.
+pub fn pm_exe() -> Result<PathBuf> {
+    if let Some(exe) = PM_EXE.get() {
+        return Ok(exe.clone());
+    }
+    let exe = resolve_exe(std::env::current_exe().context("locating the running pm binary")?)?;
+    Ok(PM_EXE.get_or_init(|| exe).clone())
 }
 
+/// Refuses an exe path that no longer resolves, since renaming onto
+/// `pm (deleted)` would create that file and leave the real binary in
+/// place. A replacement installed at the original name is accepted.
 fn resolve_exe(raw: PathBuf) -> Result<PathBuf> {
+    let raw = if raw.exists() {
+        raw
+    } else {
+        without_deleted_suffix(&raw)
+            .filter(|path| path.exists())
+            .unwrap_or(raw)
+    };
     let exe = std::fs::canonicalize(&raw).unwrap_or(raw);
     if !exe.exists() {
         bail!(
@@ -427,6 +449,13 @@ fn resolve_exe(raw: PathBuf) -> Result<PathBuf> {
         );
     }
     Ok(exe)
+}
+
+fn without_deleted_suffix(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    let stripped = bytes.strip_suffix(DELETED_EXE_SUFFIX.as_bytes())?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
 }
 
 /// Replaces this process with the build now at `exe`, keeping the
@@ -566,15 +595,15 @@ mod tests {
         if marker.exists() {
             return;
         }
-        let image = std::fs::read(running_exe().expect("the first image is on disk")).unwrap();
+        let image = std::fs::read(pm_exe().expect("the first image is on disk")).unwrap();
         let exe = install_over_current_exe(&image).expect("replacing the running harness");
         std::fs::write(&marker, b"").unwrap();
         panic!("re-exec failed: {:#}", reexec_current(&exe));
     }
 
-    /// What a post-install `current_exe()` hands back on Linux. Renaming
-    /// onto it would create a file literally called `pm (deleted)` and
-    /// leave the real binary in place, so it has to be refused.
+    /// What a post-install `current_exe()` hands back on Linux when
+    /// nothing was put back at the original name. Renaming onto it would
+    /// create a file literally called `pm (deleted)`, so it is refused.
     #[test]
     fn an_exe_path_that_no_longer_exists_is_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -585,13 +614,42 @@ mod tests {
             real.canonicalize().unwrap()
         );
 
-        let vanished = dir.path().join("pm (deleted)");
+        let vanished = dir.path().join("gone (deleted)");
         let error = resolve_exe(vanished).unwrap_err().to_string();
         assert!(error.contains("no longer at"), "unexpected error: {error}");
         assert!(
-            !dir.path().join("pm (deleted)").exists(),
+            !dir.path().join("gone (deleted)").exists(),
             "refusing the path must not create it"
         );
+    }
+
+    /// The shape after an install or rebuild: the old image is unlinked and
+    /// a new binary sits at the same name, which is where pm now lives.
+    #[test]
+    fn a_deleted_exe_resolves_to_its_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("pm");
+        std::fs::write(&real, b"#!/bin/sh\n").unwrap();
+        let reported = dir.path().join(format!("pm{DELETED_EXE_SUFFIX}"));
+        assert_eq!(resolve_exe(reported).unwrap(), real.canonicalize().unwrap());
+    }
+
+    /// A binary genuinely named with the suffix is left alone.
+    #[test]
+    fn a_real_file_with_the_suffix_is_taken_as_is() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pm"), b"").unwrap();
+        let odd = dir.path().join(format!("pm{DELETED_EXE_SUFFIX}"));
+        std::fs::write(&odd, b"").unwrap();
+        assert_eq!(
+            resolve_exe(odd.clone()).unwrap(),
+            odd.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn the_cached_exe_is_stable_across_calls() {
+        assert_eq!(pm_exe().unwrap(), pm_exe().unwrap());
     }
 
     #[test]

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Daemon] Agent lifecycle hooks on a worker keep working after the pm binary is updated or rebuilt in place while the worker runs.
+
 - [Web] Clicking a terminal URL excludes closing parentheses that surround the link while preserving parentheses in the URL.
 
 - [Daemon] New remote agent terminals open without a five-second history timeout during startup.

@@ -664,8 +664,7 @@ fn report_linger(user: &str) -> LingerAction {
 }
 
 fn resolve_spec(scope: Scope, invocation: Invocation) -> anyhow::Result<UnitSpec> {
-    let exe = std::env::current_exe().context("locating the running pm binary")?;
-    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let exe = pm_daemon::update::pm_exe()?;
     let home = home_dir()?;
     let config_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
