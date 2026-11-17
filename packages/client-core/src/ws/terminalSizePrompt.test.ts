@@ -112,4 +112,29 @@ describe("TerminalSizePrompt", () => {
 
     for (const h of [owned, dismissed, matching]) expect(h.resize).not.toHaveBeenCalled();
   });
+
+  it("takes the size back for a gesture even after Dismiss", () => {
+    const following = harness();
+    following.prompt.observe({ cols: 50, rows: 24, local: false });
+    expect(following.prompt.take()).toBe(true);
+    expect(following.resize).toHaveBeenCalledExactlyOnceWith({ cols: 120, rows: 40 });
+
+    const dismissed = harness();
+    dismissed.prompt.observe({ cols: 50, rows: 24, local: false });
+    dismissed.prompt.dismiss();
+    expect(dismissed.prompt.take()).toBe(true);
+    expect(dismissed.resize).toHaveBeenCalledExactlyOnceWith({ cols: 120, rows: 40 });
+    expect(dismissed.prompt.blocked()).toBe(false);
+  });
+
+  it("does not take a size it owns or one that already matches", () => {
+    const owned = harness();
+    expect(owned.prompt.take()).toBe(false);
+
+    const matching = harness();
+    matching.prompt.observe({ cols: 120, rows: 40, local: false });
+    expect(matching.prompt.take()).toBe(false);
+
+    for (const h of [owned, matching]) expect(h.resize).not.toHaveBeenCalled();
+  });
 });

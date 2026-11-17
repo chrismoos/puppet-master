@@ -368,6 +368,10 @@ export class TerminalViewSession {
     if (this.heldFrames.length > 0 || this.heldNeedsSnapshot || !this.paint(frame)) this.hold(frame);
   }
 
+  takeSize(): void {
+    if (this.shown()) this.sizePrompt.take();
+  }
+
   /** The fixed grid's layout changed size: frames held for that size can go. */
   surfaceResized(): void {
     this.settleFixedGrid();

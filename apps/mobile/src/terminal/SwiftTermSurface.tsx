@@ -36,6 +36,7 @@ interface NativeTerminalProps {
   onLink(event: NativeSyntheticEvent<{ url: string }>): void;
   onSelection(event: NativeSyntheticEvent<{ active: boolean }>): void;
   onAppScroll(event: NativeSyntheticEvent<{ up: boolean }>): void;
+  onAppScrollGesture(): void;
 }
 
 const NativeTerminal = Platform.OS === "ios"
@@ -181,6 +182,7 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
         onTitle={(event) => messageRef.current({ type: "title", title: event.nativeEvent.title })}
         onSelection={(event) => messageRef.current({ type: "selection", active: event.nativeEvent.active })}
         onAppScroll={(event) => messageRef.current({ type: "appScrolled", up: event.nativeEvent.up })}
+        onAppScrollGesture={() => sessionRef.current?.takeSize()}
         onLink={(event) => {
           const url = event.nativeEvent.url;
           messageRef.current({ type: "link", url });

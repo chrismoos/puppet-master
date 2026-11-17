@@ -13,6 +13,7 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
     let onLink = EventDispatcher()
     let onSelection = EventDispatcher()
     let onAppScroll = EventDispatcher()
+    let onAppScrollGesture = EventDispatcher()
 
     public required init(appContext: AppContext? = nil) {
         var options = TerminalOptions.default
@@ -45,6 +46,9 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
         }
         terminalView.onAppScrolledChange = { [weak self] up in
             self?.onAppScroll(["up": up])
+        }
+        terminalView.onAppScrollGesture = { [weak self] in
+            self?.onAppScrollGesture([:])
         }
         for gesture in terminalView.gestureRecognizers ?? [] {
             guard let tap = gesture as? UITapGestureRecognizer, tap !== dismissKeyboardTap else { continue }
@@ -369,7 +373,7 @@ public final class PuppetSwiftTermModule: Module {
         Name("PuppetSwiftTerm")
 
         View(PuppetSwiftTermView.self) {
-            Events("onInput", "onResize", "onScroll", "onTitle", "onLink", "onSelection", "onAppScroll")
+            Events("onInput", "onResize", "onScroll", "onTitle", "onLink", "onSelection", "onAppScroll", "onAppScrollGesture")
 
             Prop("fontSize") { (view, value: Double) in
                 view.configure(fontSize: value, foreground: nil, background: nil, selection: nil)
@@ -462,6 +466,8 @@ final class PuppetTerminalView: TerminalView, UIEditMenuInteractionDelegate {
 
     /// Reports when a full-screen app is scrolled up inside itself, or back.
     var onAppScrolledChange: ((Bool) -> Void)?
+    /// Called when a swipe starts scrolling a full-screen app that reads the mouse.
+    var onAppScrollGesture: (() -> Void)?
     /// Called whenever the viewport moves, by a drag, a fling or code.
     /// SwiftTerm reports its scroll position only when the terminal itself
     /// scrolls, so a reader scrolling idle scrollback went unnoticed.
@@ -750,6 +756,9 @@ final class PuppetTerminalView: TerminalView, UIEditMenuInteractionDelegate {
         case .began:
             lastPanY = point.y
             accumPx = 0
+            if terminal.isCurrentBufferAlternate && terminal.mouseMode != .off {
+                onAppScrollGesture?()
+            }
         case .changed:
             accumPx += point.y - lastPanY
             lastPanY = point.y

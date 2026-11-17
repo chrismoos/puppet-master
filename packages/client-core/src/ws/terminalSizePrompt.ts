@@ -70,6 +70,15 @@ export class TerminalSizePrompt {
     return true;
   }
 
+  /** Takes the size back for a deliberate gesture, even after Dismiss. */
+  take(): boolean {
+    if (this.state !== "following" && this.state !== "dismissed") return false;
+    const fit = this.measure();
+    if (!fit || (fit.cols === this.owner?.cols && fit.rows === this.owner.rows)) return false;
+    this.update();
+    return true;
+  }
+
   dismiss(): void {
     this.state = "dismissed";
     this.changed(false);

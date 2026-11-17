@@ -10,6 +10,8 @@
 
 - [iOS] Fullscreen terminal apps no longer show garbled, overlapping text after opening a session, and the screen repaints cleanly when the phone takes the terminal size back from another viewer.
 
+- [iOS] Scrolling a fullscreen terminal app takes the terminal size back from another viewer, even after dismissing the size prompt.
+
 ## 0.11.0 — 2026-11-16
 
 - [Web] Switching to a preloaded session after reload preserves its terminal size when session headers have different heights.

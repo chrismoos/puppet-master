@@ -845,6 +845,29 @@ describe("TerminalViewSession on a grid it cannot resize", () => {
     session.shutdown();
   });
 
+  it("takes the size back when a scroll gesture starts after Dismiss", () => {
+    const { session, socket, writes } = takenOnFixedGrid();
+    session.handle({ type: "dismissSize" });
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+    const before = resyncs(socket);
+
+    session.takeSize();
+    expect(resizesSent(socket).at(-1)).toEqual([50, 20]);
+    socket.deliver(encodeTerminalResize(3n, 50, 20));
+    expect(resyncs(socket)).toBeGreaterThan(before);
+    expect(wrote(writes, [0x6c])).toBe(true);
+    session.shutdown();
+  });
+
+  it("does not take the size for a scroll gesture while hidden", () => {
+    const { session, socket } = takenOnFixedGrid();
+    session.handle({ type: "setVisible", visible: false });
+    const before = resizesSent(socket).length;
+    session.takeSize();
+    expect(resizesSent(socket)).toHaveLength(before);
+    session.shutdown();
+  });
+
   it("repaints from a snapshot when Update brings the size back after wrapped output", () => {
     const { session, socket, writes } = takenOnFixedGrid();
     socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
