@@ -113,11 +113,18 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
         let bytes = [UInt8](data)
         // A reset (RIS) starts a replay that rebuilds the screen over the
         // writes that follow: hold the current picture until it is done.
-        if bytes.count >= 2 && bytes[0] == 0x1b && bytes[1] == 0x63 {
+        let startsWithReset = bytes.count >= 2 && bytes[0] == 0x1b && bytes[1] == 0x63
+        if startsWithReset {
             hold(.replay)
         }
         noteActivity()
         feeding = true
+        // SwiftTerm's RIS leaves the alternate screen without clearing it, so a
+        // snapshot that re-enters it would show the old rows, scroll region and
+        // margins wherever it writes nothing.
+        if startsWithReset && terminalView.getTerminal().isCurrentBufferAlternate {
+            terminalView.feed(byteArray: Self.leaveAlternateScreenClearing[...])
+        }
         terminalView.feed(byteArray: bytes[...])
         if !atBottom {
             // A full scrollback drops lines off the top without growing, so
@@ -137,6 +144,9 @@ public final class PuppetSwiftTermView: ExpoView, TerminalViewDelegate, UIGestur
     /// reports it) from its model, already back at the bottom, before the
     /// viewport is pinned again. Those reports hid the jump button.
     private var feeding = false
+
+    /// DECRST 1047 switches to the normal screen and clears the alternate one.
+    private static let leaveAlternateScreenClearing: [UInt8] = Array("\u{1b}[?1047l".utf8)
     private var reportedAtBottom: Bool?
 
     /// Reports where the viewport actually is, from what is on screen.
