@@ -57,10 +57,11 @@ describe("applyEchoedPtySizeThenWrite", () => {
   it("writes even when no echo has arrived yet", () => {
     const resize = vi.fn();
     const write = vi.fn();
-    expect(applyEchoedPtySizeThenWrite({ cols: 80, rows: 24, resize }, null, write)).toBe(true);
+    const term = { cols: 80, rows: 24, resize };
+    expect(applyEchoedPtySizeThenWrite(term, null, write)).toBe(true);
     expect(resize).not.toHaveBeenCalled();
     expect(write).toHaveBeenCalledOnce();
-    expect(applyEchoedPtySize({ cols: 80, rows: 24, resize }, { cols: 1, rows: 1 })).toBe(false);
+    expect(applyEchoedPtySize(term, { cols: 1, rows: 1 })).toBe(false);
   });
 });
 

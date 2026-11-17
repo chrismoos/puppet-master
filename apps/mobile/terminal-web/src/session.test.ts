@@ -751,3 +751,156 @@ describe("TerminalViewSession replayPainted", () => {
     session.shutdown();
   });
 });
+
+describe("TerminalViewSession on a grid it cannot resize", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  function fixedGridHarness(grid: { cols: number; rows: number }) {
+    const sockets: FakeSocket[] = [];
+    const posts: ViewMessage[] = [];
+    const writes: Uint8Array[] = [];
+    const term = {
+      get cols() { return grid.cols; },
+      get rows() { return grid.rows; },
+      write: (data: Uint8Array, callback?: () => void) => {
+        writes.push(data);
+        callback?.();
+      },
+    };
+    const session = new TerminalViewSession({
+      measureSize: () => ({ ...grid }),
+      post: (msg) => posts.push(msg),
+      openSocket: (url, subprotocol) => {
+        const socket = new FakeSocket(url, subprotocol);
+        sockets.push(socket);
+        return socket;
+      },
+      term,
+      now: () => 1_000,
+    });
+    const layOut = (cols: number, rows: number) => {
+      grid.cols = cols;
+      grid.rows = rows;
+      if (session.shouldFit()) session.sendResize(cols, rows);
+      session.surfaceResized();
+    };
+    return { session, sockets, posts, writes, term, layOut };
+  }
+
+  const wrote = (writes: Uint8Array[], frame: number[]) =>
+    writes.some((w) => w.length === frame.length && w.every((b, i) => b === frame[i]));
+
+  const resyncs = (socket: FakeSocket) =>
+    socket.sent.filter((f) => new DataView(f).getUint8(0) === TERMINAL_TAG_RESYNC).length;
+
+  function paintedAt(grid: { cols: number; rows: number }) {
+    const h = fixedGridHarness(grid);
+    h.session.handleRaw(JSON.stringify({ ...JSON.parse(BEARER_INIT), initialCols: grid.cols, initialRows: grid.rows }));
+    const socket = h.sockets[0];
+    socket.deliver(encodeTerminalResize(3n, grid.cols, grid.rows));
+    socket.deliver(outputFrame(3n, REPLAY_ALL, new Uint8Array([0x68])));
+    expect(h.writes.length).toBeGreaterThan(0);
+    return { ...h, socket };
+  }
+
+  it("never writes output produced for another viewer's width", () => {
+    const { session, socket, term, writes } = paintedAt({ cols: 50, rows: 20 });
+    const painted = writes.length;
+
+    socket.deliver(encodeTerminalResize(3n, 120, 40));
+    socket.deliver(outputFrame(3n, REPLAY_ALL, new Uint8Array([0x69])));
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+
+    expect([term.cols, term.rows]).toEqual([50, 20]);
+    expect(writes).toHaveLength(painted);
+    session.shutdown();
+  });
+
+  it("repaints from a snapshot once the PTY is back at the grid's size", () => {
+    const { session, socket, writes } = paintedAt({ cols: 50, rows: 20 });
+    socket.deliver(encodeTerminalResize(3n, 120, 40));
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+    const painted = writes.length;
+    const before = resyncs(socket);
+
+    socket.deliver(encodeTerminalResize(3n, 50, 20));
+    expect(resyncs(socket)).toBe(before + 1);
+    expect(writes).toHaveLength(painted);
+
+    socket.deliver(outputFrame(3n, REPLAY_ALL, new Uint8Array([0x6a])));
+    expect(writes.at(-1)).toContain(0x6a);
+    expect(wrote(writes, [0x6c])).toBe(false);
+    session.shutdown();
+  });
+
+  it("takes the size back instead of the wide output when its layout changes", () => {
+    const { session, socket, writes, layOut } = paintedAt({ cols: 50, rows: 20 });
+    socket.deliver(encodeTerminalResize(3n, 120, 40));
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+
+    layOut(50, 30);
+    expect(resizesSent(socket).at(-1)).toEqual([50, 30]);
+    socket.deliver(encodeTerminalResize(3n, 50, 30));
+
+    expect(wrote(writes, [0x6c])).toBe(false);
+    expect(resyncs(socket)).toBeGreaterThan(0);
+    session.shutdown();
+  });
+
+  it("holds and then writes frames that differ from the grid only in rows", () => {
+    const { session, socket, writes, layOut } = paintedAt({ cols: 50, rows: 20 });
+    const before = resyncs(socket);
+
+    layOut(50, 12);
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6c])));
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6d])));
+    expect(wrote(writes, [0x6c])).toBe(false);
+
+    socket.deliver(encodeTerminalResize(3n, 50, 12));
+    expect(writes.slice(-2).map((w) => [...w])).toEqual([[0x6c], [0x6d]]);
+    expect(resyncs(socket)).toBe(before);
+    session.shutdown();
+  });
+
+  it("asks for a snapshot instead of holding more than the replay cap", () => {
+    const { session, socket, writes, layOut } = paintedAt({ cols: 50, rows: 20 });
+    layOut(50, 12);
+    const cap = JSON.parse(BEARER_INIT).replayCapBytes as number;
+    const big = new Uint8Array(cap).fill(0x6c);
+    socket.deliver(outputFrame(3n, 0, big));
+    socket.deliver(outputFrame(3n, 0, new Uint8Array([0x6d])));
+    const before = resyncs(socket);
+
+    socket.deliver(encodeTerminalResize(3n, 50, 12));
+    expect(writes.some((w) => w.byteLength === cap) || wrote(writes, [0x6d])).toBe(false);
+    expect(resyncs(socket)).toBe(before + 1);
+    session.shutdown();
+  });
+
+  it("does not paint a first replay made for another width, and re-requests it at the grid's size", () => {
+    const { session, sockets, term, writes, layOut } = fixedGridHarness({ cols: 80, rows: 24 });
+    session.handleRaw(encodeHostMessage({
+      type: "init",
+      socketBaseUrl: "wss://pm.example",
+      terminalId: "7",
+      generation: "3",
+      accessToken: "bearer-tok-1",
+      replayCapBytes: 131072,
+      fontSize: 14,
+    }));
+    const socket = sockets[0];
+    socket.deliver(encodeTerminalResize(3n, 120, 40));
+    socket.deliver(outputFrame(3n, REPLAY_ALL, new Uint8Array([0x68])));
+    expect(writes).toHaveLength(0);
+    expect([term.cols, term.rows]).toEqual([80, 24]);
+
+    layOut(50, 20);
+    socket.deliver(encodeTerminalResize(3n, 50, 20));
+    expect(writes).toHaveLength(0);
+    expect(resyncs(socket)).toBe(1);
+    socket.deliver(outputFrame(3n, REPLAY_ALL, new Uint8Array([0x69])));
+    expect(writes.at(-1)).toContain(0x69);
+    session.shutdown();
+  });
+});

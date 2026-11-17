@@ -8,6 +8,8 @@
 
 - [Daemon] New remote agent terminals open without a five-second history timeout during startup.
 
+- [iOS] Fullscreen terminal apps no longer show garbled, overlapping text when the terminal was sized by another viewer or before the phone's layout settled.
+
 ## 0.11.0 — 2026-11-16
 
 - [Web] Switching to a preloaded session after reload preserves its terminal size when session headers have different heights.

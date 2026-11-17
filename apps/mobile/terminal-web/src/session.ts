@@ -5,7 +5,11 @@ import {
   type RepaintSizeSource,
   type ViewerSizeController,
 } from "@puppet-master/client-core/ws/terminalRepaint";
-import { applyEchoedPtySize, applyEchoedPtySizeThenWrite } from "@puppet-master/client-core/ws/terminalResize";
+import {
+  applyEchoedPtySize,
+  applyEchoedPtySizeThenWrite,
+  type ResizableTerminal,
+} from "@puppet-master/client-core/ws/terminalResize";
 import { createTerminalViewerIdentity, TerminalSocket } from "@puppet-master/client-core/ws/terminalSocket";
 import { TerminalSizePrompt } from "@puppet-master/client-core/ws/terminalSizePrompt";
 import type { TerminalSize } from "@puppet-master/client-core/ws/pty";
@@ -24,7 +28,9 @@ import type { MouseTrackingMode } from "../../src/terminal/scrollRouting";
 export interface SessionHooks {
   post(msg: ViewMessage): void;
   openSocket(url: string, subprotocol?: string): SocketLike;
-  term: TerminalWriteTarget & RepaintSizeSource & { resize(cols: number, rows: number): void };
+  /** A term without resize has a grid only its own layout sizes, so output
+   * produced for another width is never written to it. */
+  term: TerminalWriteTarget & RepaintSizeSource & { resize?(cols: number, rows: number): void };
   now(): number;
   measureSize?(): TerminalSize | null;
   /** Capture and restore a bottom-relative viewport bookmark around replay's
@@ -53,6 +59,10 @@ export class TerminalViewSession {
   /** Frames that arrived while the emulator and the PTY disagreed on size,
    * in arrival order, waiting for the echo that brings them back together. */
   private heldFrames: PtyFrame[] = [];
+  private heldBytes = 0;
+  /** A held frame was produced for a width the fixed grid does not have, so
+   * the matching size is followed by a snapshot instead of those frames. */
+  private heldNeedsSnapshot = false;
   /** Whether a frame has been written, after which a size change follows by
    * snapshot instead of reflowing what is on screen. */
   private painted = false;
@@ -208,7 +218,7 @@ export class TerminalViewSession {
     this.viewer?.dispose();
     this.viewer = null;
     if (resetPrompt) this.sizePrompt.reset();
-    this.heldFrames = [];
+    this.clearHeldFrames();
     if (this.socket) {
       this.socket.close();
       this.socket = null;
@@ -277,12 +287,17 @@ export class TerminalViewSession {
       // Once the screen has content, a size change is taken as a snapshot at
       // the new size: reflowing the phone's copy pushes rows into scrollback
       // that a program repainting on resize then prints again.
-      if (this.painted && (this.hooks.term.cols !== size.cols || this.hooks.term.rows !== size.rows)) {
+      const term = this.resizableTerm();
+      if (!term) {
+        this.flushHeldFrames();
+        return;
+      }
+      if (this.painted && (term.cols !== size.cols || term.rows !== size.rows)) {
         this.followSize = { cols: size.cols, rows: size.rows };
         socket.refreshSnapshot();
         return;
       }
-      applyEchoedPtySize(this.hooks.term, size);
+      applyEchoedPtySize(term, size);
       this.flushHeldFrames();
     });
     this.statusDispose = socket.subscribe((status) => {
@@ -341,8 +356,34 @@ export class TerminalViewSession {
     this.outputBytes += frame.data.byteLength;
     // A replay rebuilds the screen from nothing, so it supersedes whatever
     // was waiting; a live frame must not overtake the frames ahead of it.
-    if (frame.replay) this.heldFrames = [];
-    if (this.heldFrames.length > 0 || !this.paint(frame)) this.heldFrames.push(frame);
+    if (frame.replay) this.clearHeldFrames();
+    if (this.heldFrames.length > 0 || this.heldNeedsSnapshot || !this.paint(frame)) this.hold(frame);
+  }
+
+  /** The fixed grid's layout changed size: frames held for that size can go. */
+  surfaceResized(): void {
+    this.flushHeldFrames();
+  }
+
+  private hold(frame: PtyFrame): void {
+    if (!this.hooks.term.resize) {
+      const pty = this.socket?.ptySize() ?? null;
+      const wrongWidth = pty !== null && pty.cols !== this.hooks.term.cols;
+      if (this.heldNeedsSnapshot || wrongWidth || this.heldBytes + frame.data.byteLength > this.replayCap) {
+        this.heldFrames = [];
+        this.heldBytes = 0;
+        this.heldNeedsSnapshot = true;
+        return;
+      }
+    }
+    this.heldFrames.push(frame);
+    this.heldBytes += frame.data.byteLength;
+  }
+
+  private clearHeldFrames(): void {
+    this.heldFrames = [];
+    this.heldBytes = 0;
+    this.heldNeedsSnapshot = false;
   }
 
   /** Writes only at the PTY's echoed size. A frame refused here is held, not
@@ -357,7 +398,8 @@ export class TerminalViewSession {
     const echoed = this.socket?.ptySize() ?? null;
     if (frame.replay && follow && echoed && follow.cols === echoed.cols && follow.rows === echoed.rows) {
       this.followSize = null;
-      applyEchoedPtySize(this.hooks.term, follow);
+      const term = this.resizableTerm();
+      if (term) applyEchoedPtySize(term, follow);
     }
     return applyEchoedPtySizeThenWrite(this.hooks.term, this.socket?.ptySize() ?? null, () => {
       this.painted = true;
@@ -375,8 +417,31 @@ export class TerminalViewSession {
   }
 
   private flushHeldFrames(): void {
+    if (this.heldNeedsSnapshot) {
+      if (!this.sizesMatch()) return;
+      this.clearHeldFrames();
+      this.socket?.refreshSnapshot();
+      return;
+    }
     while (this.heldFrames.length > 0 && this.paint(this.heldFrames[0])) {
+      this.heldBytes -= this.heldFrames[0].data.byteLength;
       this.heldFrames.shift();
     }
+  }
+
+  private resizableTerm(): ResizableTerminal | null {
+    const term = this.hooks.term;
+    const resize = term.resize;
+    if (!resize) return null;
+    return {
+      get cols() { return term.cols; },
+      get rows() { return term.rows; },
+      resize: (cols, rows) => resize.call(term, cols, rows),
+    };
+  }
+
+  private sizesMatch(): boolean {
+    const pty = this.socket?.ptySize() ?? null;
+    return !pty || (pty.cols === this.hooks.term.cols && pty.rows === this.hooks.term.rows);
   }
 }

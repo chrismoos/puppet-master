@@ -30,7 +30,7 @@ export function applyEchoedPtySize(
  * redraw.
  */
 export function applyEchoedPtySizeThenWrite(
-  term: ResizableTerminal,
+  term: TerminalSize,
   size: TerminalSize | null | undefined,
   write: () => void,
 ): boolean {

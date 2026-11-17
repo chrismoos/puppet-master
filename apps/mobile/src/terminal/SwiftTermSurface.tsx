@@ -47,7 +47,6 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
     const nativeRef = useRef<NativeTerminalRef | null>(null);
     const messageRef = useRef(onMessage);
     messageRef.current = onMessage;
-    const sizeRef = useRef({ cols: 80, rows: 24 });
     const localSizeRef = useRef({ cols: 80, rows: 24 });
     const sizeReceivedRef = useRef(false);
     const headerProviderRef = useRef<(() => Record<string, string>) | null>(null);
@@ -58,9 +57,8 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
 
     if (!sessionRef.current) {
       const term = {
-        get cols() { return sizeRef.current.cols; },
-        get rows() { return sizeRef.current.rows; },
-        resize(cols: number, rows: number) { sizeRef.current = { cols, rows }; },
+        get cols() { return localSizeRef.current.cols; },
+        get rows() { return localSizeRef.current.rows; },
         write(data: Uint8Array, callback?: () => void) {
           const encoded = bytesToBase64(data);
           writeChainRef.current = writeChainRef.current
@@ -173,10 +171,9 @@ export const SwiftTermSurface = forwardRef<SwiftTermSurfaceHandle, SwiftTermSurf
             sizeResolveRef.current?.({ cols, rows });
             sizeResolveRef.current = null;
           }
-          if (sessionRef.current?.shouldFit()) {
-            sizeRef.current = { cols, rows };
-            sessionRef.current.sendResize(cols, rows);
-          }
+          const session = sessionRef.current;
+          if (session?.shouldFit()) session.sendResize(cols, rows);
+          session?.surfaceResized();
         }}
         onScroll={(event) => {
           messageRef.current({ type: "following", following: event.nativeEvent.position >= 0.999 });
