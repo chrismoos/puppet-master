@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [Web] Clicking a terminal URL excludes closing parentheses that surround the link while preserving parentheses in the URL.
+
 - [Daemon] New remote agent terminals open without a five-second history timeout during startup.
 
 ## 0.11.0 — 2026-11-16

@@ -47,7 +47,19 @@ export function extractTerminalLinks(text: string): TerminalLinkTextMatch[] {
   const links: TerminalLinkTextMatch[] = [];
   const expression = /(?:https?:\/\/[^\s<>"'`\u0000-\u001f\u007f]+|pm:(?:item\/\d+(?:\/\d+)?|session\/\d+))/giu;
   for (const match of text.matchAll(expression)) {
-    const value = match[0].replace(/[.,;:!?]+$/, "");
+    let balance = 0;
+    for (const character of match[0]) {
+      if (character === "(") balance += 1;
+      else if (character === ")") balance -= 1;
+    }
+    let end = match[0].length;
+    while (end > 0) {
+      const last = match[0][end - 1]!;
+      if (last === ")" && balance < 0) balance += 1;
+      else if (!/[.,;:!?]/.test(last)) break;
+      end -= 1;
+    }
+    const value = match[0].slice(0, end);
     if (!value) continue;
     const start = match.index;
     links.push({ text: value, start, end: start + value.length });
