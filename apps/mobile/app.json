@@ -2,7 +2,7 @@
   "expo": {
     "name": "Puppet Master",
     "slug": "puppet-master",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "scheme": "puppet-master",
     "icon": "./assets/icon.png",
     "orientation": "default",
