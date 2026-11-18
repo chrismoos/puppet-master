@@ -17,7 +17,6 @@ sha2 = { workspace = true }
 rand = { workspace = true }
 hpke = { version = "0.12", features = ["x25519", "std"] }
 pm-protocol = { workspace = true }
-hex = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

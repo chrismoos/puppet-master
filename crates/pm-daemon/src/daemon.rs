@@ -6803,7 +6803,6 @@ impl Daemon {
     /// cannot override any of them, so the handler never forwards
     /// caller-supplied values for those.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub async fn supervisor_spawn(
         &self,
         supervisor_id: u64,
