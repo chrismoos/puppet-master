@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.1 — 2026-11-17
 
 - [Daemon] Agent lifecycle hooks on a worker keep working after the pm binary is updated or rebuilt in place while the worker runs.
 
