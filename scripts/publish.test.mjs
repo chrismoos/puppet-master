@@ -8,6 +8,11 @@ import {
   IMAGE_PLATFORMS,
   TARGETS,
   branchMayRelease,
+  changelogAfterMerge,
+  changelogPreview,
+  headChangelog,
+  localDate,
+  releaseHeading,
   compareVersions,
   imageBinaryPath,
   imageBuildArgs,
@@ -51,8 +56,9 @@ test("a bump moves exactly one component and clears the ones below it", () => {
 test("the command line is read the same with and without a channel", () => {
   assert.deepEqual(parseArgs(["promote", "0.9.21-dev.1"]), {
     command: "promote", commandArg: "0.9.21-dev.1", channel: null, bump: null,
-    dryRun: false, skipTests: false, skipWorkerImages: false,
+    dryRun: false, skipTests: false, skipWorkerImages: false, yes: false,
   });
+  assert.ok(parseArgs(["promote", "0.9.21-dev.1", "--yes"]).yes);
   assert.equal(parseArgs(["patch"]).bump, "patch");
   assert.equal(parseArgs([]).bump, null, "a bare publish leaves the bump to the script");
   assert.equal(parseArgs(["keygen"]).bump, null);
@@ -507,4 +513,87 @@ test("the worker image builds with the builder publish chose", () => {
   const args = imageBuildArgs({ version: "1.2.3", gitRev: "abc1234", push: true, builder: "pm-release-kernel-emulation" });
   assert.equal(args[args.indexOf("--builder") + 1], "pm-release-kernel-emulation");
   assert.equal(imageBuildArgs({ version: "1.2.3", gitRev: "abc1234", push: true })[3], "pm-release");
+});
+
+const CHANGELOG_TITLE = "# Changelog\n\n";
+const OLDER = "## 0.11.0 — 2026-11-16\n\n- [Web] An older fix.\n";
+
+test("a stable release heads the Unreleased entries with its version and date", () => {
+  const text = `${CHANGELOG_TITLE}## Unreleased\n\n- [Web] A fix.\n\n- [iOS] Another.\n  Migration: do a thing.\n\n${OLDER}`;
+  assert.equal(
+    headChangelog(text, "0.11.1", "2026-11-17"),
+    `${CHANGELOG_TITLE}## 0.11.1 — 2026-11-17\n\n- [Web] A fix.\n\n- [iOS] Another.\n  Migration: do a thing.\n\n${OLDER}`,
+  );
+});
+
+test("a release with nothing new, or already headed, leaves the changelog alone", () => {
+  assert.equal(headChangelog(`${CHANGELOG_TITLE}## Unreleased\n\n${OLDER}`, "0.11.1", "2026-11-17"), null);
+  assert.equal(headChangelog(`${CHANGELOG_TITLE}${OLDER}`, "0.11.1", "2026-11-17"), null);
+  const headed = `${CHANGELOG_TITLE}## 0.11.1 — 2026-11-17\n\n- [Web] A fix.\n\n${OLDER}`;
+  assert.equal(headChangelog(headed, "0.11.1", "2026-11-18"), null);
+});
+
+test("the heading carries the local calendar date", () => {
+  assert.equal(releaseHeading("0.12.0", "2026-01-05"), "## 0.12.0 — 2026-01-05");
+  assert.equal(localDate(new Date(2026, 0, 5, 23, 59)), "2026-01-05");
+});
+
+test("merging a release back keeps entries master gained after the cut under Unreleased", () => {
+  const release = `${CHANGELOG_TITLE}## 0.11.1 — 2026-11-17\n\n- [Web] Shipped.\n\n${OLDER}`;
+  const master = `${CHANGELOG_TITLE}## Unreleased\n\n- [CLI] Landed after the cut.\n\n- [Web] Shipped.\n\n${OLDER}`;
+  assert.equal(
+    changelogAfterMerge(master, release, "0.11.1"),
+    `${CHANGELOG_TITLE}## Unreleased\n\n- [CLI] Landed after the cut.\n\n## 0.11.1 — 2026-11-17\n\n- [Web] Shipped.\n\n${OLDER}`,
+  );
+});
+
+test("merging a release back with nothing new on master leaves no empty Unreleased section", () => {
+  const release = `${CHANGELOG_TITLE}## 0.11.1 — 2026-11-17\n\n- [Web] Shipped.\n\n${OLDER}`;
+  const master = `${CHANGELOG_TITLE}## Unreleased\n\n- [Web] Shipped.\n\n${OLDER}`;
+  assert.equal(changelogAfterMerge(master, release, "0.11.1"), release);
+});
+
+test("master that already heads the version keeps its own changelog", () => {
+  const release = `${CHANGELOG_TITLE}## 0.11.1 — 2026-11-18\n\n- [Web] Shipped.\n\n${OLDER}`;
+  const master = `${CHANGELOG_TITLE}## 0.11.1 — 2026-11-17\n\n- [Web] Shipped.\n\n${OLDER}`;
+  assert.equal(changelogAfterMerge(master, release, "0.11.1"), master);
+});
+
+test("a release that headed nothing leaves master's changelog as it is", () => {
+  const master = `${CHANGELOG_TITLE}## Unreleased\n\n- [Web] Pending.\n\n${OLDER}`;
+  assert.equal(changelogAfterMerge(master, `${CHANGELOG_TITLE}${OLDER}`, "0.11.1"), master);
+});
+
+test("a release section is added when master has no Unreleased heading", () => {
+  const release = `${CHANGELOG_TITLE}## 0.11.1 — 2026-11-17\n\n- [Web] Shipped.\n\n${OLDER}`;
+  assert.equal(changelogAfterMerge(`${CHANGELOG_TITLE}${OLDER}`, release, "0.11.1"), release);
+});
+
+test("a changelog whose last section is Unreleased still ends in one newline", () => {
+  const release = `${CHANGELOG_TITLE}## 0.1.0 — 2026-01-01\n\n- First.\n`;
+  const master = `${CHANGELOG_TITLE}## Unreleased\n\n- First.\n\n- Second.\n`;
+  assert.equal(
+    changelogAfterMerge(master, release, "0.1.0"),
+    `${CHANGELOG_TITLE}## Unreleased\n\n- Second.\n\n## 0.1.0 — 2026-01-01\n\n- First.\n`,
+  );
+});
+
+test("the review shows the section the release will commit", () => {
+  const text = `${CHANGELOG_TITLE}## Unreleased\n\n- [Web] A fix.\n\n- [iOS] Another.\n  Migration: do a thing.\n\n${OLDER}`;
+  assert.equal(
+    changelogPreview(text, "0.11.1", "2026-11-17"),
+    "CHANGELOG.md will read:\n\n## 0.11.1 — 2026-11-17\n\n- [Web] A fix.\n\n- [iOS] Another.\n  Migration: do a thing.",
+  );
+});
+
+test("the review says when the changelog is left as it is", () => {
+  assert.equal(
+    changelogPreview(`${CHANGELOG_TITLE}## Unreleased\n\n${OLDER}`, "0.11.1", "2026-11-17"),
+    "CHANGELOG.md has no Unreleased entries, so it is left as it is.",
+  );
+  assert.equal(
+    changelogPreview(`${CHANGELOG_TITLE}## 0.11.1 — 2026-11-16\n\n- [Web] A fix.\n\n${OLDER}`, "0.11.1", "2026-11-17"),
+    "CHANGELOG.md already has a section for 0.11.1, kept as it is:\n\n## 0.11.1 — 2026-11-16\n\n- [Web] A fix.",
+  );
+  assert.equal(changelogPreview(null, "0.11.1", "2026-11-17"), "CHANGELOG.md is missing, so the release changes no changelog.");
 });

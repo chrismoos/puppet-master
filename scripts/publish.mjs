@@ -3,7 +3,7 @@
 // upload, tag.
 //
 //   ./scripts/publish.mjs [patch|minor|major] [--channel NAME] [--dry-run]
-//                         [--skip-tests] [--skip-worker-images]
+//                         [--skip-tests] [--skip-worker-images] [--yes]
 //   ./scripts/publish.mjs promote <pre-release>  cut the stable it leads to
 //   ./scripts/publish.mjs keygen                 create the release key
 //
@@ -24,6 +24,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as signEd25519 } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { isatty } from "node:tty";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -94,11 +95,12 @@ export function parseArgs(args) {
     dryRun: args.includes("--dry-run"),
     skipTests: args.includes("--skip-tests"),
     skipWorkerImages: args.includes("--skip-worker-images"),
+    yes: args.includes("--yes"),
   };
 }
 
 const args = process.argv.slice(2);
-const { command, commandArg, channel, bump, dryRun, skipTests } = parseArgs(args);
+const { command, commandArg, channel, bump, dryRun, skipTests, yes } = parseArgs(args);
 // Releases the artifacts without the worker image. The release itself is
 // complete either way: `pm worker --sandbox` resolves the image at the
 // launcher's own version, so a version published without one leaves
@@ -843,8 +845,14 @@ function releaseKey() {
 // Reads a line without echoing it, so a passphrase does not end up in
 // the scrollback of whatever terminal published the release.
 function promptSecret(prompt) {
+  return readLine(prompt, { echo: false });
+}
+
+const STDIN_RETRY_MS = 20;
+
+function readLine(prompt, { echo }) {
   process.stderr.write(prompt);
-  const hadEcho = spawnSync("stty", ["-echo"], { stdio: ["inherit", "ignore", "ignore"] }).status === 0;
+  const hadEcho = !echo && spawnSync("stty", ["-echo"], { stdio: ["inherit", "ignore", "ignore"] }).status === 0;
   try {
     const buffer = Buffer.alloc(4096);
     let length = 0;
@@ -852,7 +860,12 @@ function promptSecret(prompt) {
       let read;
       try {
         read = readSync(0, buffer, length, 1, null);
-      } catch {
+      } catch (error) {
+        // A non-blocking stdin reports EAGAIN until the line is typed.
+        if (error.code === "EAGAIN") {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, STDIN_RETRY_MS);
+          continue;
+        }
         break;
       }
       if (read === 0 || buffer[length] === 0x0a) break;
@@ -861,7 +874,7 @@ function promptSecret(prompt) {
     return buffer.subarray(0, length).toString("utf8").replace(/\r$/, "");
   } finally {
     if (hadEcho) spawnSync("stty", ["echo"], { stdio: ["inherit", "ignore", "ignore"] });
-    process.stderr.write("\n");
+    if (!echo) process.stderr.write("\n");
   }
 }
 
@@ -916,6 +929,8 @@ let committed = false;
 // to return to.
 let createdBranch = null;
 let returnTo = null;
+// One date for the review prompt and the heading it shows, even when the gates run past midnight.
+const releaseDate = localDate();
 
 function requireTools() {
   for (const tool of ["git", "cargo", "make", "docker", "rclone", "curl"]) {
@@ -992,6 +1007,124 @@ function buildAndPublish({ version, channelName, promotedFrom }) {
   }
 }
 
+// --- changelog -------------------------------------------------------
+
+const CHANGELOG = "CHANGELOG.md";
+const UNRELEASED_HEADING = "## Unreleased";
+
+export function releaseHeading(version, date) {
+  return `## ${version} — ${date}`;
+}
+
+// The calendar date where the release is cut, which is the date its heading records.
+export function localDate(now = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+// Where a section starts and ends, and its entries as the blank-line separated paragraphs under its heading.
+function changelogSection(text, matches) {
+  const lines = text.split("\n");
+  const start = lines.findIndex(matches);
+  if (start === -1) return null;
+  let end = lines.findIndex((line, index) => index > start && line.startsWith("## "));
+  if (end === -1) end = lines.length;
+  const entries = lines
+    .slice(start + 1, end)
+    .join("\n")
+    .split(/\n\s*\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return { lines, start, end, heading: lines[start], entries };
+}
+
+const isUnreleased = (line) => line.trim() === UNRELEASED_HEADING;
+const headsVersion = (version) => (line) => line.startsWith(`## ${version} `) || line.trim() === `## ${version}`;
+
+// Renames the Unreleased section to the release's heading. Returns null when
+// there is nothing to head: no Unreleased entries, or a section for this
+// version already.
+export function headChangelog(text, version, date) {
+  if (changelogSection(text, headsVersion(version))) return null;
+  const unreleased = changelogSection(text, isUnreleased);
+  if (!unreleased || unreleased.entries.length === 0) return null;
+  const { lines, start } = unreleased;
+  return [...lines.slice(0, start), releaseHeading(version, date), ...lines.slice(start + 1)].join("\n");
+}
+
+// Master's changelog once a release branch merges back. Entries the release
+// shipped move under its heading, and anything master gained after the
+// release was cut stays under Unreleased. Master already carrying a section
+// for the version is left exactly as it is.
+export function changelogAfterMerge(masterText, releaseText, version) {
+  if (changelogSection(masterText, headsVersion(version))) return masterText;
+  const released = changelogSection(releaseText, headsVersion(version));
+  if (!released) return masterText;
+  const shipped = new Set(released.entries);
+  const releasedBlock = [released.heading, "", ...released.entries.flatMap((entry) => [entry, ""])];
+
+  const unreleased = changelogSection(masterText, isUnreleased);
+  const lines = masterText.split("\n");
+  let start;
+  let end;
+  let pending = [];
+  if (unreleased) {
+    ({ start, end } = unreleased);
+    pending = unreleased.entries.filter((entry) => !shipped.has(entry));
+  } else {
+    start = lines.findIndex((line) => line.startsWith("## "));
+    if (start === -1) start = lines.length;
+    end = start;
+  }
+  const pendingBlock = pending.length
+    ? [UNRELEASED_HEADING, "", ...pending.flatMap((entry) => [entry, ""])]
+    : [];
+  const rest = lines.slice(end);
+  const block = [...pendingBlock, ...releasedBlock];
+  if (rest.length === 0 || (rest.length === 1 && rest[0] === "")) {
+    while (block.at(-1) === "") block.pop();
+    return [...lines.slice(0, start), ...block, ""].join("\n");
+  }
+  return [...lines.slice(0, start), ...block, ...rest].join("\n");
+}
+
+// The changelog section a stable release will commit, as the review prompt shows it.
+export function changelogPreview(text, version, date) {
+  if (text === null) return `${CHANGELOG} is missing, so the release changes no changelog.`;
+  const existing = changelogSection(text, headsVersion(version));
+  if (existing) return [`${CHANGELOG} already has a section for ${version}, kept as it is:`, "", ...sectionBody(existing)].join("\n");
+  const headed = headChangelog(text, version, date);
+  if (headed === null) return `${CHANGELOG} has no Unreleased entries, so it is left as it is.`;
+  return [`${CHANGELOG} will read:`, "", ...sectionBody(changelogSection(headed, headsVersion(version)))].join("\n");
+}
+
+function sectionBody(section) {
+  return [section.heading, "", ...section.entries.flatMap((entry, index) => (index === 0 ? [entry] : ["", entry]))];
+}
+
+// Shows what a stable release will commit and waits for a yes before any gate
+// or build runs. Without a terminal to ask on, only --yes lets it continue.
+function confirmRelease(version, changelogText) {
+  process.stderr.write(`\npublish: about to release ${version}\n\n${changelogPreview(changelogText, version, releaseDate)}\n\n`);
+  if (yes) return;
+  if (!isatty(0)) {
+    die("no terminal to confirm the release on; review the changelog above and pass --yes (PUBLISH_FLAGS=--yes)");
+  }
+  const answer = readLine(`release ${version} with this changelog? [y/N] `, { echo: true }).trim().toLowerCase();
+  if (answer !== "y" && answer !== "yes") die(`stopped before releasing ${version}; nothing was changed`);
+}
+
+function headChangelogFile(version) {
+  const path = join(ROOT, CHANGELOG);
+  if (!existsSync(path)) return;
+  const headed = headChangelog(readFileSync(path, "utf8"), version, releaseDate);
+  if (headed === null) {
+    process.stderr.write(`publish: ${CHANGELOG} has no Unreleased entries to head as ${version}; leaving it as it is\n`);
+    return;
+  }
+  writeFileSync(path, headed);
+}
+
 function tagRelease(version) {
   run("git", ["tag", "-a", `v${version}`, "-m", `Release ${version}.`]);
 }
@@ -1015,19 +1148,21 @@ async function publish() {
   requireProtocolBump(previousTag);
   requireBucket();
   requireRegistry();
-  requireGreen();
 
   const version =
     channel === null
       ? nextVersion(currentVersion(), bump)
       : nextChannelVersion(currentVersion(), bump, channel, allTags());
   requireVersionUnpublished(version);
+  if (channel === null) confirmRelease(version, fileAt("HEAD", CHANGELOG));
+  requireGreen();
   process.stderr.write(
     `publish: releasing ${version}${channel === null ? "" : ` on the ${channel} channel`}` +
       `${dryRun ? " (dry run)" : ""}\n`,
   );
 
   writeVersion(version);
+  if (channel === null) headChangelogFile(version);
   bumped = true;
   if (!dryRun) {
     run("git", ["commit", "-am", `Release ${version}.`]);
@@ -1048,34 +1183,48 @@ async function publish() {
 }
 
 // Merges a release branch into master so master's Cargo.toml stays ahead of
-// every published version. Only the version files may conflict, and they
-// resolve to whichever version is higher; anything else is left to a person.
+// every published version. Only the version files and the changelog may
+// conflict. The versions resolve to whichever is higher and the changelog is
+// rebuilt by changelogAfterMerge. Anything else is left to a person.
 function mergeBackToMaster(branch) {
   run("git", ["checkout", "master"]);
-  const merged = spawnSync("git", ["merge", "--no-ff", "-m", `Merge ${branch} into master.`, branch], {
+  const masterChangelog = fileAt("HEAD", CHANGELOG);
+  const releaseChangelog = fileAt(branch, CHANGELOG);
+  const version = capture("git", ["show", `${branch}:Cargo.toml`]).match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+  spawnSync("git", ["merge", "--no-ff", "--no-commit", "-m", `Merge ${branch} into master.`, branch], {
     cwd: ROOT,
     encoding: "utf8",
   });
-  if (merged.status === 0) {
-    process.stderr.write(`publish: merged ${branch} into master; push master too\n`);
-    return;
+  if (tryCapture("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"]) === null) {
+    die(`${branch} did not merge into master. The release is published; merge ${branch} into master by hand.`);
   }
   const conflicted = capture("git", ["diff", "--name-only", "--diff-filter=U"]).split("\n").filter(Boolean);
-  if (conflicted.some((file) => file !== "Cargo.toml" && file !== "Cargo.lock")) {
+  if (conflicted.some((file) => !["Cargo.toml", "Cargo.lock", CHANGELOG].includes(file))) {
     run("git", ["merge", "--abort"], { capture: true });
     die(
       `${branch} does not merge cleanly into master (${conflicted.join(", ")}). ` +
         `The release is published; merge ${branch} into master by hand.`,
     );
   }
-  const ours = capture("git", ["show", "master:Cargo.toml"]).match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-  const theirs = capture("git", ["show", `${branch}:Cargo.toml`]).match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-  if (!ours || !theirs) die("cannot read the versions being merged");
-  run("git", ["checkout", "--ours", "Cargo.toml", "Cargo.lock"], { capture: true });
-  writeVersion(compareVersions(ours, theirs) >= 0 ? ours : theirs);
-  run("git", ["add", "Cargo.toml", "Cargo.lock"]);
+  if (conflicted.includes("Cargo.toml") || conflicted.includes("Cargo.lock")) {
+    const ours = capture("git", ["show", "master:Cargo.toml"]).match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+    if (!ours || !version) die("cannot read the versions being merged");
+    run("git", ["checkout", "--ours", "Cargo.toml", "Cargo.lock"], { capture: true });
+    writeVersion(compareVersions(ours, version) >= 0 ? ours : version);
+    run("git", ["add", "Cargo.toml", "Cargo.lock"]);
+  }
+  if (masterChangelog !== null && releaseChangelog !== null && version) {
+    writeFileSync(join(ROOT, CHANGELOG), changelogAfterMerge(masterChangelog, releaseChangelog, version));
+    run("git", ["add", CHANGELOG]);
+  }
   run("git", ["commit", "--no-edit"], { capture: true });
   process.stderr.write(`publish: merged ${branch} into master; push master too\n`);
+}
+
+// A file's exact contents at a revision, or null when it is not there.
+function fileAt(rev, path) {
+  const result = spawnSync("git", ["show", `${rev}:${path}`], { cwd: ROOT, encoding: "utf8" });
+  return result.status === 0 ? result.stdout : null;
 }
 
 // Cuts the stable a pre-release leads to, from that pre-release's own
@@ -1099,6 +1248,7 @@ async function promote(from) {
   requireVersionUnpublished(stable);
   requireBucket();
   requireRegistry();
+  confirmRelease(stable, fileAt(`v${from}`, CHANGELOG));
 
   const branch = releaseBranchFor(stable);
   const tagCommit = capture("git", ["rev-parse", `v${from}^{commit}`]);
@@ -1121,6 +1271,7 @@ async function promote(from) {
 
   process.stderr.write(`publish: promoting ${from} to ${stable}${dryRun ? " (dry run)" : ""}\n`);
   writeVersion(stable);
+  headChangelogFile(stable);
   bumped = true;
   if (!dryRun) {
     run("git", ["commit", "-am", `Release ${stable}.`]);
@@ -1146,7 +1297,7 @@ function rollback({ bumped: wasBumped, committed: wasCommitted }) {
     if (wasCommitted) {
       run("git", ["reset", "--hard", "HEAD~1"], { capture: true });
     } else {
-      run("git", ["checkout", "--", "Cargo.toml", "Cargo.lock"], { capture: true });
+      run("git", ["checkout", "--", "Cargo.toml", "Cargo.lock", CHANGELOG], { capture: true });
     }
   }
   if (returnTo !== null && currentBranch() !== returnTo) {

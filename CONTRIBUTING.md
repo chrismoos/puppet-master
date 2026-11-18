@@ -209,6 +209,19 @@ FROM=0.10.0-dev.3` rebuilds that commit as `0.10.0` on the `release/0.10`
 branch, publishes it as stable, and merges the branch back into master. A
 hotfix to a stable line is a plain `make publish` on its `release/X.Y` branch.
 
+A stable release, whether published or promoted, renames `## Unreleased` in
+`CHANGELOG.md` to the version and the day's date, such as `## 0.10.0 —
+2026-11-17`, in its release commit. Channel builds leave the changelog alone.
+When a release branch merges back, entries master gained after the release was
+cut stay under `## Unreleased`. A changelog that already has a section for the
+version is left as it is.
+
+Before any gate or build runs, a stable release shows the version and the
+changelog section it will commit and asks `release X.Y.Z with this changelog?
+[y/N]`. Anything but yes stops it with nothing changed. A run with no terminal
+stops there too unless it passes `--yes`, for example `make promote
+FROM=0.10.0-dev.3 PUBLISH_FLAGS=--yes`.
+
 Published versions are never removed: a controller may run any of them and its
 workers fetch it by exact version. A channel release always ships its worker
 image for the same reason.
